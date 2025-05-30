@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "850327601337",
+    "project_id": "mongobox-79a1f",
+    "storage_bucket": "mongobox-79a1f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:850327601337:android:74f9de7afc3e9997e89b68",
+        "android_client_info": {
+          "package_name": "com.example.mongobox"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCS7wPPXayxgyymfytZckX7MQWb5uMUq4I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
