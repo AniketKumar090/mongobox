@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join MongoBox Queue</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.2/firebase-app-compat.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.2/firebase-auth-compat.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.2/firebase-firestore-compat.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header {
+            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px 20px;
+        }
+
+        .screen {
+            display: none;
+        }
+
+        .screen.active {
+            display: block;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 14px;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-wrapper input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: #f7fafc;
+        }
+
+        .input-wrapper input:focus {
+            outline: none;
+            border-color: #e53e3e;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(229, 62, 62, 0.1);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(229, 62, 62, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f7fafc;
+            color: #4a5568;
+            border: 2px solid #e2e8f0;
+        }
+
+        .btn-secondary:hover {
+            background: #edf2f7;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e2e8f0;
+            border-top: 4px solid #e53e3e;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        .success {
+            background: #c6f6d5;
+            color: #22543d;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .success.active {
+            display: block;
+        }
+
+        .search-container {
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        .search-input input {
+            flex: 1;
+        }
+
+        .search-btn {
+            padding: 15px 20px;
+            background: #e53e3e;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .search-btn:hover {
+            background: #c53030;
+        }
+
+        .search-results {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        .song-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .song-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+
+        .song-thumbnail {
+            width: 60px;
+            height: 60px;
+            border-radius: 8px;
+            object-fit: cover;
+            margin-right: 15px;
+        }
+
+        .song-info {
+            flex: 1;
+        }
+
+        .song-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #2d3748;
+            font-size: 14px;
+            line-height: 1.3;
+        }
+
+        .song-artist {
+            color: #718096;
+            font-size: 12px;
+        }
+
+        .add-btn {
+            padding: 8px 16px;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .add-btn:hover {
+            background: #38a169;
+        }
+
+        .add-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+        }
+
+        .queue-status {
+            text-align: center;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .queue-count {
+            font-size: 24px;
+            font-weight: 700;
+            color: #e53e3e;
+            margin-bottom: 5px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #718096;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        #recaptcha-container {
+            margin: 20px 0;
+        }
+
+        .phone-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        .country-code {
+            width: 80px;
+            padding: 15px 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            background: #f7fafc;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                margin: 10px;
+                border-radius: 15px;
+            }
+            
+            .content {
+                padding: 20px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎵 MongoBox</h1>
+            <p>Join the music queue and add your favorites!</p>
+        </div>
+
+        <div class="content">
+            <!-- Login Screen -->
+            <div id="loginScreen" class="screen active">
+                <div class="error" id="loginError"></div>
+                
+                <div class="input-group">
+                    <label for="phoneNumber">Phone Number</label>
+                    <div class="phone-input">
+                        <div class="country-code">+91</div>
+                        <input type="tel" id="phoneNumber" placeholder="Enter your phone number" maxlength="10">
+                    </div>
+                </div>
+
+                <div id="recaptcha-container"></div>
+
+                <button class="btn btn-primary" onclick="sendVerificationCode()" id="sendCodeBtn" disabled>
+                    Send Verification Code
+                </button>
+
+              
+                <div class="loading" id="loginLoading">
+                    <div class="spinner"></div>
+                    <p>Sending verification code...</p>
+                </div>
+            </div>
+
+            <!-- Verification Screen -->
+            <div id="verifyScreen" class="screen">
+                <div class="error" id="verifyError"></div>
+                <div class="success" id="verifySuccess"></div>
+
+                <p style="text-align: center; margin-bottom: 20px; color: #718096;">
+                    Enter the 6-digit code sent to your phone
+                </p>
+
+                <div class="input-group">
+                    <label for="verificationCode">Verification Code</label>
+                    <input type="text" id="verificationCode" placeholder="Enter 6-digit code" maxlength="6">
+                </div>
+
+                <button class="btn btn-primary" onclick="verifyCode()" id="verifyBtn">
+                    Verify & Continue
+                </button>
+
+                <button class="btn btn-secondary" onclick="goBack()" style="margin-top: 10px;">
+                    Back
+                </button>
+
+                <div class="loading" id="verifyLoading">
+                    <div class="spinner"></div>
+                    <p>Verifying code...</p>
+                </div>
+            </div>
+
+            <!-- Main Screen -->
+            <div id="mainScreen" class="screen">
+                <div class="success" id="mainSuccess"></div>
+                <div class="error" id="mainError"></div>
+
+                <div class="queue-status">
+                    <div class="queue-count" id="queueCount">0</div>
+                    <p>Songs in queue</p>
+                </div>
+
+                <div class="search-container">
+                    <div class="search-input">
+                        <input type="text" id="searchInput" placeholder="Search for songs...">
+                        <button class="search-btn" onclick="searchSongs()">🔍</button>
+                    </div>
+                </div>
+
+                <div class="search-results" id="searchResults">
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 15px;">🎵</div>
+                        <p>Search for songs to add to the queue!</p>
+                    </div>
+                </div>
+
+                <div class="loading" id="searchLoading">
+                    <div class="spinner"></div>
+                    <p>Searching for songs...</p>
+                </div>
+
+                <button class="btn btn-secondary" onclick="signOut()" style="margin-top: 20px;">
+                    Sign Out
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase configuration - Replace with your actual config
+        const firebaseConfig = {
+            apiKey: "AIzaSyCTMwHxyQVJb_0l39uMKIqka-pGYszGexw",
+            authDomain: "mongobox-79a1f.firebaseapp.com",
+            projectId: "mongobox-79a1f",
+            storageBucket: "mongobox-79a1f.firebasestorage.app",
+            messagingSenderId: "850327601337", // Replace with your actual sender ID
+            appId: "1:850327601337:web:97b8ca86cfda6b37e89b68" // Replace with your actual app ID
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        let confirmationResult;
+        let queueHostUid;
+
+        // Get host UID from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        queueHostUid = urlParams.get('uid');
+
+        // Initialize reCAPTCHA
+        window.onload = function() {
+            initializeRecaptcha();
+        };
+
+        function initializeRecaptcha() {
+            try {
+                if (!window.recaptchaVerifier) {
+                    window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+                        'size': 'normal',
+                        'callback': function(response) {
+                            console.log('reCAPTCHA solved');
+                            document.getElementById('sendCodeBtn').disabled = false;
+                        },
+                        'expired-callback': function() {
+                            console.log('reCAPTCHA expired');
+                            document.getElementById('sendCodeBtn').disabled = true;
+                        }
+                    });
+                    
+                    window.recaptchaVerifier.render().then(function(widgetId) {
+                        console.log('reCAPTCHA rendered successfully');
+                        window.recaptchaWidgetId = widgetId;
+                    }).catch(function(error) {
+                        console.error('Error rendering reCAPTCHA:', error);
+                        showError('loginError', 'reCAPTCHA failed to load. Please refresh the page.');
+                    });
+                }
+            } catch (error) {
+                console.error('Error initializing reCAPTCHA:', error);
+                showError('loginError', 'reCAPTCHA initialization failed. Please refresh the page.');
+            }
+        }
+
+        // Check authentication state
+        auth.onAuthStateChanged((user) => {
+            if (user) {
+                showScreen('mainScreen');
+                listenToQueue();
+            }
+        });
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function showError(elementId, message) {
+            const errorEl = document.getElementById(elementId);
+            errorEl.textContent = message;
+            errorEl.classList.add('active');
+            setTimeout(() => errorEl.classList.remove('active'), 5000);
+        }
+
+        function showSuccess(elementId, message) {
+            const successEl = document.getElementById(elementId);
+            successEl.textContent = message;
+            successEl.classList.add('active');
+            setTimeout(() => successEl.classList.remove('active'), 3000);
+        }
+
+        function showLoading(elementId, show = true) {
+            const loadingEl = document.getElementById(elementId);
+            if (show) {
+                loadingEl.classList.add('active');
+            } else {
+                loadingEl.classList.remove('active');
+            }
+        }
+
+        async function sendVerificationCode() {
+            const phoneNumber = document.getElementById('phoneNumber').value.trim();
+            
+            if (!phoneNumber || phoneNumber.length !== 10) {
+                showError('loginError', 'Please enter a valid 10-digit phone number');
+                return;
+            }
+
+            // Check if phone number contains only digits
+            if (!/^\d{10}$/.test(phoneNumber)) {
+                showError('loginError', 'Phone number should contain only digits');
+                return;
+            }
+
+            const fullPhoneNumber = '+91' + phoneNumber;
+            
+            try {
+                showLoading('loginLoading');
+                document.getElementById('sendCodeBtn').disabled = true;
+
+                // Check if reCAPTCHA is solved
+                if (!window.recaptchaVerifier) {
+                    throw new Error('reCAPTCHA not initialized');
+                }
+
+                console.log('Attempting to send verification code to:', fullPhoneNumber);
+                
+                confirmationResult = await auth.signInWithPhoneNumber(fullPhoneNumber, window.recaptchaVerifier);
+                console.log('Verification code sent successfully');
+                
+                showScreen('verifyScreen');
+                showSuccess('verifySuccess', 'Verification code sent successfully!');
+                
+            } catch (error) {
+                console.error('Detailed error sending verification code:', error);
+                
+                let errorMessage = 'Failed to send verification code. ';
+                
+                if (error.code === 'auth/invalid-phone-number') {
+                    errorMessage += 'Invalid phone number format.';
+                } else if (error.code === 'auth/too-many-requests') {
+                    errorMessage += 'Too many requests. Please try again later.';
+                } else if (error.code === 'auth/operation-not-allowed') {
+                    errorMessage += 'Phone authentication is not enabled.';
+                } else if (error.code === 'auth/captcha-check-failed') {
+                    errorMessage += 'reCAPTCHA verification failed. Please refresh and try again.';
+                } else if (error.message && error.message.includes('reCAPTCHA')) {
+                    errorMessage += 'Please complete the reCAPTCHA verification.';
+                } else {
+                    errorMessage += 'Please check your internet connection and try again.';
+                }
+                
+                showError('loginError', errorMessage);
+                
+                // Reset reCAPTCHA on error
+                if (window.recaptchaVerifier) {
+                    try {
+                        window.recaptchaVerifier.clear();
+                        setTimeout(initializeRecaptcha, 1000);
+                    } catch (e) {
+                        console.error('Error clearing reCAPTCHA:', e);
+                    }
+                }
+                
+            } finally {
+                showLoading('loginLoading', false);
+                document.getElementById('sendCodeBtn').disabled = false;
+            }
+        }
+
+        async function verifyCode() {
+            const code = document.getElementById('verificationCode').value.trim();
+            
+            if (!code || code.length !== 6) {
+                showError('verifyError', 'Please enter a valid 6-digit verification code');
+                return;
+            }
+
+            try {
+                showLoading('verifyLoading');
+                document.getElementById('verifyBtn').disabled = true;
+
+                const result = await confirmationResult.confirm(code);
+                console.log('User signed in successfully:', result.user);
+                
+                showScreen('mainScreen');
+                listenToQueue();
+                
+            } catch (error) {
+                console.error('Error verifying code:', error);
+                showError('verifyError', 'Invalid verification code. Please try again.');
+            } finally {
+                showLoading('verifyLoading', false);
+                document.getElementById('verifyBtn').disabled = false;
+            }
+        }
+
+        function goBack() {
+            showScreen('loginScreen');
+            // Reset verification code input
+            document.getElementById('verificationCode').value = '';
+            
+            // Reset and reinitialize reCAPTCHA
+            if (window.recaptchaVerifier) {
+                try {
+                    window.recaptchaVerifier.clear();
+                } catch (e) {
+                    console.error('Error clearing reCAPTCHA:', e);
+                }
+            }
+            
+            // Reinitialize after a short delay
+            setTimeout(initializeRecaptcha, 500);
+        }
+
+        function listenToQueue() {
+            if (!queueHostUid) {
+                showError('mainError', 'Invalid queue link. Please scan the QR code again.');
+                return;
+            }
+
+            // Listen to queue changes
+            db.collection('queues').doc('currentQueue').onSnapshot((doc) => {
+                if (doc.exists) {
+                    const songs = doc.data().songs || [];
+                    document.getElementById('queueCount').textContent = songs.length;
+                } else {
+                    document.getElementById('queueCount').textContent = '0';
+                }
+            });
+        }
+
+        async function searchSongs() {
+            const query = document.getElementById('searchInput').value.trim();
+            
+            if (!query) {
+                showError('mainError', 'Please enter a search term');
+                return;
+            }
+
+            try {
+                showLoading('searchLoading');
+                
+                const apiKey = 'AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
+                const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(query)}&type=video&key=${apiKey}`;
+                
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                displaySearchResults(data.items || []);
+                
+            } catch (error) {
+                console.error('Error searching songs:', error);
+                showError('mainError', 'Failed to search songs. Please check your internet connection.');
+            } finally {
+                showLoading('searchLoading', false);
+            }
+        }
+
+        function displaySearchResults(results) {
+            const resultsContainer = document.getElementById('searchResults');
+            
+            if (results.length === 0) {
+                resultsContainer.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 15px;">😕</div>
+                        <p>No songs found. Try a different search term.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            resultsContainer.innerHTML = results.map(item => `
+                <div class="song-item">
+                    <img src="${item.snippet.thumbnails.default.url}" alt="Thumbnail" class="song-thumbnail">
+                    <div class="song-info">
+                        <div class="song-title">${item.snippet.title}</div>
+                        <div class="song-artist">${item.snippet.channelTitle}</div>
+                    </div>
+                    <button class="add-btn" onclick="addToQueue('${item.id.videoId}', '${item.snippet.title.replace(/'/g, "\\'")}', '${item.snippet.channelTitle.replace(/'/g, "\\'")}', '${item.snippet.thumbnails.default.url}')">
+                        Add
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        async function addToQueue(videoId, title, artist, thumbnail) {
+            if (!auth.currentUser || !queueHostUid) {
+                showError('mainError', 'Authentication error. Please try again.');
+                return;
+            }
+
+            const song = {
+                id: videoId,
+                title: title,
+                artist: artist,
+                thumbnail: thumbnail
+            };
+
+            try {
+                // Check if song already exists in queue
+                const queueDoc = await db.collection('queues').doc('currentQueue').get();
+                const existingSongs = queueDoc.exists ? (queueDoc.data().songs || []) : [];
+                
+                const songExists = existingSongs.some(existingSong => existingSong.id === videoId);
+                
+                if (songExists) {
+                    showError('mainError', 'This song is already in the queue!');
+                    return;
+                }
+
+                // Add to queue
+                await db.collection('queues').doc('currentQueue').set({
+                    songs: firebase.firestore.FieldValue.arrayUnion(song)
+                }, { merge: true });
+
+                showSuccess('mainSuccess', `Added "${title}" to queue!`);
+                
+                // Disable the add button for this song
+                event.target.disabled = true;
+                event.target.textContent = 'Added';
+                
+            } catch (error) {
+                console.error('Error adding to queue:', error);
+                showError('mainError', 'Failed to add song to queue. Please try again.');
+            }
+        }
+
+        function signOut() {
+            auth.signOut().then(() => {
+                showScreen('loginScreen');
+                document.getElementById('phoneNumber').value = '';
+                document.getElementById('verificationCode').value = '';
+                document.getElementById('searchInput').value = '';
+                document.getElementById('searchResults').innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 15px;">🎵</div>
+                        <p>Search for songs to add to the queue!</p>
+                    </div>
+                `;
+            });
+        }
+
+        // Allow enter key for search
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchSongs();
+            }
+        });
+
+        // Allow enter key for phone number
+        document.getElementById('phoneNumber').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendVerificationCode();
+            }
+        });
+
+        // Allow enter key for verification code
+        document.getElementById('verificationCode').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verifyCode();
+            }
+        });
+    </script>
+</body>
+</html>

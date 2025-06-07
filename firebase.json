@@ -1,1 +1,55 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"mongobox-79a1f","appId":"1:850327601337:android:74f9de7afc3e9997e89b68","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"mongobox-79a1f","appId":"1:850327601337:ios:4e045273a24e3f15e89b68","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"macos":{"default":{"projectId":"mongobox-79a1f","appId":"1:850327601337:ios:4e045273a24e3f15e89b68","uploadDebugSymbols":false,"fileOutput":"macos/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"mongobox-79a1f","configurations":{"android":"1:850327601337:android:74f9de7afc3e9997e89b68","ios":"1:850327601337:ios:4e045273a24e3f15e89b68","macos":"1:850327601337:ios:4e045273a24e3f15e89b68","web":"1:850327601337:web:97b8ca86cfda6b37e89b68","windows":"1:850327601337:web:14ab79cc7e4dddb6e89b68"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "mongobox-79a1f",
+          "appId": "1:850327601337:android:74f9de7afc3e9997e89b68",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "mongobox-79a1f",
+          "appId": "1:850327601337:ios:4e045273a24e3f15e89b68",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "macos": {
+        "default": {
+          "projectId": "mongobox-79a1f",
+          "appId": "1:850327601337:ios:4e045273a24e3f15e89b68",
+          "uploadDebugSymbols": false,
+          "fileOutput": "macos/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "mongobox-79a1f",
+          "configurations": {
+            "android": "1:850327601337:android:74f9de7afc3e9997e89b68",
+            "ios": "1:850327601337:ios:4e045273a24e3f15e89b68",
+            "macos": "1:850327601337:ios:4e045273a24e3f15e89b68",
+            "web": "1:850327601337:web:97b8ca86cfda6b37e89b68",
+            "windows": "1:850327601337:web:14ab79cc7e4dddb6e89b68"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/join-queue.html",
+        "destination": "/join-queue.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
