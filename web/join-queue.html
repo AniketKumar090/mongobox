@@ -733,45 +733,45 @@
         }
 
         async function addToQueue(videoId, title, artist, thumbnail) {
-            if (!auth.currentUser || !queueHostUid) {
-                showError('mainError', 'Authentication error. Please try again.');
-                return;
+          if (!auth.currentUser || !queueHostUid) {
+            showError('mainError', 'Authentication error. Please try again.');
+            return;
+          }
+
+          const song = {
+            id: videoId,
+            title: title,
+            artist: artist,
+            thumbnail: thumbnail
+          };
+
+          try {
+            // Try to add using arrayUnion
+            await db.collection('queues').doc('currentQueue').update({
+              songs: firebase.firestore.FieldValue.arrayUnion(song)
+            });
+
+            showSuccess('mainSuccess', `Added "${title}" to queue!`);
+            event.target.disabled = true;
+            event.target.textContent = 'Added';
+
+          } catch (error) {
+            // Handle document not found by creating it
+            if (error.code === 'not-found') {
+              await db.collection('queues').doc('currentQueue').set({
+                songs: [song]
+              });
+
+              showSuccess('mainSuccess', `Added "${title}" to queue!`);
+              event.target.disabled = true;
+              event.target.textContent = 'Added';
+
+            } else {
+              // Log and show error for all other cases
+              console.error('Error adding to queue:', error);
+              //showError('mainError', 'Failed to add song to queue. Please try again.');
             }
-
-            const song = {
-                id: videoId,
-                title: title,
-                artist: artist,
-                thumbnail: thumbnail
-            };
-
-            try {
-                // Check if song already exists in queue
-                const queueDoc = await db.collection('queues').doc('currentQueue').get();
-                const existingSongs = queueDoc.exists ? (queueDoc.data().songs || []) : [];
-                
-                const songExists = existingSongs.some(existingSong => existingSong.id === videoId);
-                
-                if (songExists) {
-                    showError('mainError', 'This song is already in the queue!');
-                    return;
-                }
-
-                // Add to queue
-                await db.collection('queues').doc('currentQueue').set({
-                    songs: firebase.firestore.FieldValue.arrayUnion(song)
-                }, { merge: true });
-
-                showSuccess('mainSuccess', `Added "${title}" to queue!`);
-                
-                // Disable the add button for this song
-                event.target.disabled = true;
-                event.target.textContent = 'Added';
-                
-            } catch (error) {
-                console.error('Error adding to queue:', error);
-                showError('mainError', 'Failed to add song to queue. Please try again.');
-            }
+          }
         }
 
         function signOut() {

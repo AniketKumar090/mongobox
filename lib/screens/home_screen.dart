@@ -66,18 +66,17 @@ class _HomeScreenState extends State<HomeScreen> {
         // Validate and sanitize the song data
         final id = song['id']?.toString() ?? '';
         final title = song['title']?.toString() ?? 'Unknown Title';
-        final channel = song['artist']?.toString() ?? 'Unknown Artist';
-        final thumbnail = song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60';  
-        if (id.isEmpty || title.isEmpty || channel.isEmpty || thumbnail.isEmpty) {
-          print("Malformed song object: $song");
-        }
+        final artist = (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist'; // Fallback from 'channel' to 'artist'
+        final thumbnail = song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60'; 
+
         return {
           'id': id,
           'title': title,
-          'channel': channel,
+          'artist': artist, // Use 'artist'
           'thumbnail': thumbnail,
         };
       }).toList();
+
       setState(() {
         queue = sanitizedQueue;
       });
@@ -199,10 +198,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final sanitizedSong = {
         'id': song['id']?.toString() ?? '',
         'title': song['title']?.toString() ?? 'Unknown Title',
-        'channel': song['artist']?.toString() ?? 'Unknown Artist',
+        'artist': (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist', // Use 'artist'
         'thumbnail': song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60', 
       };
-
       queue.add(sanitizedSong);
       FirebaseFirestore.instance.collection('queues').doc('currentQueue').set({
         'songs': FieldValue.arrayUnion([sanitizedSong])
@@ -217,6 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   });
 }
+
   void playFromQueue(int index) {
     if (index < queue.length) {
       final song = queue[index];
@@ -535,7 +534,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text(
-                song['channel'], // Fallback handled in _listenToQueueChanges
+                song['artist'], // Fallback handled in _listenToQueueChanges
                 style: const TextStyle(fontSize: 10),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -756,9 +755,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void playNext() {
-    if (queue.isNotEmpty) {
-      final nextSong = queue.removeAt(0);
+  if (queue.isNotEmpty) {
+    final nextSong = queue.removeAt(0);
+    FirebaseFirestore.instance.collection('queues').doc('currentQueue').update({
+      'songs': FieldValue.arrayRemove([nextSong])
+    }).then((_) {
       playSong(nextSong['id']);
-    }
+    }).catchError((error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove song from queue: $error')),
+      );
+      // Optionally re-add the song to queue if removal fails
+    });
   }
+}
 }
