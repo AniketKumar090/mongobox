@@ -44,7 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ..height = '100%'
           ..src = 'about:blank'
           ..style.border = 'none'
-          ..allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
+          ..allow =
+              'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
           ..allowFullscreen = true
           ..id = 'youtube-player-$viewId';
         // Store reference to the iframe
@@ -55,34 +56,36 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _listenToQueueChanges() {
-  FirebaseFirestore.instance
-      .collection('queues')
-      .doc('currentQueue')
-      .snapshots()
-      .listen((snapshot) {
-    if (snapshot.exists) {
-      final songsData = snapshot.get('songs') as List<dynamic>? ?? [];
-      final sanitizedQueue = songsData.map((song) {
-        // Validate and sanitize the song data
-        final id = song['id']?.toString() ?? '';
-        final title = song['title']?.toString() ?? 'Unknown Title';
-        final artist = (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist'; // Fallback from 'channel' to 'artist'
-        final thumbnail = song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60'; 
+    FirebaseFirestore.instance
+        .collection('queues')
+        .doc('currentQueue')
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        final songsData = snapshot.get('songs') as List<dynamic>? ?? [];
+        final sanitizedQueue = songsData.map((song) {
+          // Validate and sanitize the song data
+          final id = song['id']?.toString() ?? '';
+          final title = song['title']?.toString() ?? 'Unknown Title';
+          final artist =
+              (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist';
+          final thumbnail = song['thumbnail']?.toString() ??
+              'https://via.placeholder.com/60x60';
 
-        return {
-          'id': id,
-          'title': title,
-          'artist': artist, // Use 'artist'
-          'thumbnail': thumbnail,
-        };
-      }).toList();
+          return {
+            'id': id,
+            'title': title,
+            'artist': artist,
+            'thumbnail': thumbnail,
+          };
+        }).toList();
 
-      setState(() {
-        queue = sanitizedQueue;
-      });
-    }
-  });
-}
+        setState(() {
+          queue = sanitizedQueue;
+        });
+      }
+    });
+  }
 
   Future<void> searchSongs(String query) async {
     try {
@@ -142,7 +145,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       // Method 2: Find by specific ID pattern
-      final iframe = html.document.querySelector('iframe[id*="youtube-player"]') as html.IFrameElement?;
+      final iframe = html.document.querySelector('iframe[id*="youtube-player"]')
+          as html.IFrameElement?;
       if (iframe != null) {
         iframe.src = 'about:blank';
         print('Stopped video via querySelector');
@@ -166,14 +170,17 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Method 1: Use stored reference
       if (_currentIframe != null) {
-        _currentIframe!.src = 'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
+        _currentIframe!.src =
+            'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
         print('Updated iframe via stored reference');
         return;
       }
       // Method 2: Find by specific ID pattern
-      final iframe = html.document.querySelector('iframe[id*="youtube-player"]') as html.IFrameElement?;
+      final iframe = html.document.querySelector('iframe[id*="youtube-player"]')
+          as html.IFrameElement?;
       if (iframe != null) {
-        iframe.src = 'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
+        iframe.src =
+            'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
         print('Updated iframe via querySelector');
         return;
       }
@@ -181,7 +188,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final iframes = html.document.querySelectorAll('iframe');
       for (final element in iframes) {
         if (element is html.IFrameElement) {
-          element.src = 'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
+          element.src =
+              'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
           print('Updated iframe via fallback method');
           break;
         }
@@ -192,29 +200,29 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void addToQueue(Map<String, dynamic> song) {
-  setState(() {
-    if (!queue.any((item) => item['id'] == song['id'])) {
-      // Validate and sanitize the song data
-      final sanitizedSong = {
-        'id': song['id']?.toString() ?? '',
-        'title': song['title']?.toString() ?? 'Unknown Title',
-        'artist': (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist', // Use 'artist'
-        'thumbnail': song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60', 
-      };
-      queue.add(sanitizedSong);
-      FirebaseFirestore.instance.collection('queues').doc('currentQueue').set({
-        'songs': FieldValue.arrayUnion([sanitizedSong])
-      }, SetOptions(merge: true));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added "${sanitizedSong['title']}" to queue')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Song already in queue')),
-      );
-    }
-  });
-}
+    setState(() {
+      if (!queue.any((item) => item['id'] == song['id'])) {
+        // Validate and sanitize the song data
+        final sanitizedSong = {
+          'id': song['id']?.toString() ?? '',
+          'title': song['title']?.toString() ?? 'Unknown Title',
+          'artist': (song['artist'] ?? song['channel'])?.toString() ?? 'Unknown Artist',
+          'thumbnail': song['thumbnail']?.toString() ?? 'https://via.placeholder.com/60x60',
+        };
+        queue.add(sanitizedSong);
+        FirebaseFirestore.instance.collection('queues').doc('currentQueue').set({
+          'songs': FieldValue.arrayUnion([sanitizedSong])
+        }, SetOptions(merge: true));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Added "${sanitizedSong['title']}" to queue')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Song already in queue')),
+        );
+      }
+    });
+  }
 
   void playFromQueue(int index) {
     if (index < queue.length) {
@@ -228,7 +236,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       if (index < queue.length) {
         final removedSong = queue.removeAt(index);
-        FirebaseFirestore.instance.collection('queues').doc('currentQueue').update({
+        FirebaseFirestore.instance
+            .collection('queues')
+            .doc('currentQueue')
+            .update({
           'songs': queue,
         });
 
@@ -245,7 +256,10 @@ class _HomeScreenState extends State<HomeScreen> {
       final item = queue.removeAt(oldIndex);
       queue.insert(newIndex, item);
 
-      FirebaseFirestore.instance.collection('queues').doc('currentQueue').update({
+      FirebaseFirestore.instance
+          .collection('queues')
+          .doc('currentQueue')
+          .update({
         'songs': queue,
       });
     });
@@ -254,7 +268,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void clearQueue() {
     setState(() {
       queue.clear();
-      FirebaseFirestore.instance.collection('queues').doc('currentQueue').update({
+      FirebaseFirestore.instance
+          .collection('queues')
+          .doc('currentQueue')
+          .update({
         'songs': [],
       });
 
@@ -293,7 +310,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _generateQRCode() {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
-      final qrLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html?uid=${currentUser.uid}';
+      final qrLink =
+          'https://mongobox-79a1f.firebaseapp.com/join-queue.html?uid=${currentUser.uid}';
       _showQRCodeDialog(context, qrLink);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -480,97 +498,102 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           Expanded(
-  child: queue.isEmpty
-      ? const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.queue_music,
-                size: 48,
-                color: Colors.grey,
-              ),
-              SizedBox(height: 8),
-              Text(
-                'No songs in queue',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-          ),
-        )
-      : ReorderableListView.builder(
-          padding: const EdgeInsets.all(8),
-          itemCount: queue.length,
-          onReorder: _onQueueReorder,
-          itemBuilder: (context, index) {
-            final song = queue[index];
-            return ListTile(
-              key: ValueKey('queue-${song['id']}-$index'),
-              dense: true,
-              leading: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: Image.network(
-                  song['thumbnail'], // Fallback handled in _listenToQueueChanges
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      width: 40,
-                      height: 40,
-                      color: Colors.grey[300],
-                      child: const Icon(Icons.music_note),
-                    );
-                  },
-                ),
-              ),
-              title: Text(
-                song['title'], // Fallback handled in _listenToQueueChanges
-                style: const TextStyle(fontSize: 12),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                song['artist'], // Fallback handled in _listenToQueueChanges
-                style: const TextStyle(fontSize: 10),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${index + 1}',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.play_arrow, size: 20),
-                    onPressed: () => playFromQueue(index),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Play Now',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.remove, size: 20),
-                    onPressed: () => removeFromQueue(index),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Remove from Queue',
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-),
+                            child: queue.isEmpty
+                                ? const Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.queue_music,
+                                          size: 48,
+                                          color: Colors.grey,
+                                        ),
+                                        SizedBox(height: 8),
+                                        Text(
+                                          'No songs in queue',
+                                          style: TextStyle(
+                                            color: Colors.grey,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : ReorderableListView.builder(
+                                    padding: const EdgeInsets.all(8),
+                                    itemCount: queue.length,
+                                    onReorder: _onQueueReorder,
+                                    itemBuilder: (context, index) {
+                                      final song = queue[index];
+                                      return ListTile(
+                                        key: ValueKey('queue-${song['id']}-$index'),
+                                        dense: true,
+                                        leading: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              '${index + 1}.',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            ClipRRect(
+                                              borderRadius: BorderRadius.circular(4),
+                                              child: Image.network(
+                                                song['thumbnail'],
+                                                width: 40,
+                                                height: 40,
+                                                fit: BoxFit.cover,
+                                                errorBuilder:
+                                                    (context, error, stackTrace) {
+                                                  return Container(
+                                                    width: 40,
+                                                    height: 40,
+                                                    color: Colors.grey[300],
+                                                    child: const Icon(Icons.music_note),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        title: Text(
+                                          song['title'],
+                                          style: const TextStyle(fontSize: 12),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        subtitle: Text(
+                                          song['artist'],
+                                          style: const TextStyle(fontSize: 10),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const SizedBox(width: 12),
+                                            IconButton(
+                                              icon: const Icon(Icons.play_arrow, size: 20),
+                                              onPressed: () => playFromQueue(index),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(),
+                                              tooltip: 'Play Now',
+                                            ),
+                                            IconButton(
+                                              icon: const Icon(Icons.close, size: 20, color: Colors.red),
+                                              onPressed: () => removeFromQueue(index),
+                                              tooltip: 'Remove from Queue',
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
                         ],
                       ),
                     ),
@@ -666,16 +689,22 @@ class _HomeScreenState extends State<HomeScreen> {
                               itemCount: searchResults.length,
                               itemBuilder: (context, index) {
                                 final result = searchResults[index];
-                                final isCurrentlyPlaying = currentVideoId == result['id'];
-                                final isInQueue = queue.any((item) => item['id'] == result['id']);
+                                final isCurrentlyPlaying =
+                                    currentVideoId == result['id'];
+                                final isInQueue = queue
+                                    .any((item) => item['id'] == result['id']);
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   decoration: BoxDecoration(
-                                    color: isCurrentlyPlaying ? Colors.red[50] : Colors.white,
+                                    color: isCurrentlyPlaying
+                                        ? Colors.red[50]
+                                        : Colors.white,
                                     borderRadius: BorderRadius.circular(8),
                                     border: isCurrentlyPlaying
-                                        ? Border.all(color: Colors.red[300]!, width: 2)
-                                        : Border.all(color: Colors.grey[200]!, width: 1),
+                                        ? Border.all(
+                                            color: Colors.red[300]!, width: 2)
+                                        : Border.all(
+                                            color: Colors.grey[200]!, width: 1),
                                   ),
                                   child: ListTile(
                                     contentPadding: const EdgeInsets.all(12),
@@ -686,7 +715,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                         width: 60,
                                         height: 60,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (context, error, stackTrace) {
+                                        errorBuilder:
+                                            (context, error, stackTrace) {
                                           return Container(
                                             width: 60,
                                             height: 60,
@@ -700,7 +730,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       result['title'],
                                       style: TextStyle(
                                         fontWeight: FontWeight.w600,
-                                        color: isCurrentlyPlaying ? Colors.red[700] : Colors.black87,
+                                        color: isCurrentlyPlaying
+                                            ? Colors.red[700]
+                                            : Colors.black87,
                                       ),
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
@@ -719,20 +751,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         if (isInQueue)
-                                          Icon(Icons.queue_music, color: Colors.orange[600], size: 20),
+                                          Icon(Icons.queue_music,
+                                              color: Colors.orange[600], size: 20),
                                         const SizedBox(width: 8),
                                         IconButton(
                                           icon: Icon(
                                             Icons.add_to_queue,
-                                            color: isInQueue ? Colors.grey : Colors.blue[600],
+                                            color: isInQueue
+                                                ? Colors.grey
+                                                : Colors.blue[600],
                                           ),
-                                          onPressed: isInQueue ? null : () => addToQueue(result),
+                                          onPressed: isInQueue
+                                              ? null
+                                              : () => addToQueue(result),
                                           tooltip: 'Add to Queue',
                                         ),
                                         IconButton(
                                           icon: Icon(
-                                            isCurrentlyPlaying ? Icons.volume_up : Icons.play_arrow,
-                                            color: isCurrentlyPlaying ? Colors.red[600] : Colors.green[600],
+                                            isCurrentlyPlaying
+                                                ? Icons.volume_up
+                                                : Icons.play_arrow,
+                                            color: isCurrentlyPlaying
+                                                ? Colors.red[600]
+                                                : Colors.green[600],
                                           ),
                                           onPressed: () => playSong(result['id']),
                                           tooltip: 'Play Now',
@@ -755,18 +796,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void playNext() {
-  if (queue.isNotEmpty) {
-    final nextSong = queue.removeAt(0);
-    FirebaseFirestore.instance.collection('queues').doc('currentQueue').update({
-      'songs': FieldValue.arrayRemove([nextSong])
-    }).then((_) {
-      playSong(nextSong['id']);
-    }).catchError((error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to remove song from queue: $error')),
-      );
-      // Optionally re-add the song to queue if removal fails
-    });
+    if (queue.isNotEmpty) {
+      final nextSong = queue.removeAt(0);
+      FirebaseFirestore.instance
+          .collection('queues')
+          .doc('currentQueue')
+          .update({
+            'songs': FieldValue.arrayRemove([nextSong])
+          })
+          .then((_) {
+            playSong(nextSong['id']);
+          })
+          .catchError((error) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content: Text('Failed to remove song from queue: $error')),
+            );
+            // Optionally re-add the song to queue if removal fails
+          });
+    }
   }
-}
 }
