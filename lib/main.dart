@@ -1,15 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'screens/home_screen.dart';
-import 'screens/login_screen.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'screens/web/home_screen_web.dart' if (dart.library.io) 'screens/home_screen_stub.dart' as jukebox;
+import 'screens/mobile_lyric_app.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
   runApp(const MyApp());
 }
 
@@ -22,6 +17,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MongoBox',
       theme: ThemeData(
+        useMaterial3: true,
         primarySwatch: Colors.blue,
         fontFamily: 'Inter',
         textTheme: const TextTheme(
@@ -29,19 +25,13 @@ class MyApp extends StatelessWidget {
           bodyLarge: TextStyle(color: Colors.black87),
         ),
       ),
-      home: StreamBuilder<User?>(
-        stream: FirebaseAuth.instance.authStateChanges(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasData) {
-            return const HomeScreen();
-          } else {
-            return const LoginScreen();
-          }
-        },
+      darkTheme: kIsWeb ? null : ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        fontFamily: 'Inter',
       ),
+      themeMode: kIsWeb ? ThemeMode.light : ThemeMode.system,
+      home: kIsWeb ? const jukebox.HomeScreen() : const MobileLyricApp(),
     );
   }
 }

@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lyric Play uses the microphone to listen for lyrics you speak.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Lyric Play uses speech recognition to turn your spoken lyrics into text.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MongoBox uses the camera to scan the host's QR code to join a party.</string>
 </dict>
 </plist>
