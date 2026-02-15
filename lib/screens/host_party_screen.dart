@@ -1,14 +1,12 @@
-// Host a party: local queue, now playing, QR + share link.
-
+// lib/screens/host_party_screen.dart
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import '../services/shared_queue_service.dart';
 import '../services/youtube_mobile_service.dart';
-import '../services/local_queue_service.dart';
 
-/// Link to the no-login guest form where users can enter name/age/gender and suggest songs.
-const _appLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
+const String _appLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
 
 class HostPartyScreen extends StatefulWidget {
   const HostPartyScreen({super.key});
@@ -18,8 +16,7 @@ class HostPartyScreen extends StatefulWidget {
 }
 
 class _HostPartyScreenState extends State<HostPartyScreen> {
-  List<Map<String, dynamic>> queue = [];
-  LocalQueueService? _queueService;
+  List<Song> queue = [];
   YoutubePlayerController? _playerController;
   final YoutubeMobileService _youtube = YoutubeMobileService();
   final _searchController = TextEditingController();
@@ -29,24 +26,14 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
   @override
   void initState() {
     super.initState();
-    LocalQueueService.create().then((service) {
+    SharedQueueService().streamQueue().listen((newQueue) {
       if (mounted) {
         setState(() {
-          _queueService = service;
-          queue = service.getQueue();
+          queue = newQueue;
           _playFirstIfNeeded();
         });
       }
     });
-  }
-
-  void _refreshQueue() {
-    if (_queueService != null && mounted) {
-      setState(() {
-        queue = _queueService!.getQueue();
-        _playFirstIfNeeded();
-      });
-    }
   }
 
   void _playFirstIfNeeded() {
@@ -55,12 +42,11 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
       setState(() => _playerController = null);
       return;
     }
-    final firstId = queue.first['id'] as String? ?? '';
-    if (firstId.isEmpty) return;
-    if (_playerController?.metadata.videoId == firstId) return;
+    final first = queue.first;
+    if (_playerController?.metadata.videoId == first.id) return;
     _playerController?.dispose();
     _playerController = YoutubePlayerController(
-      initialVideoId: firstId,
+      initialVideoId: first.id,
       flags: const YoutubePlayerFlags(autoPlay: true, mute: false),
     );
     setState(() {});
@@ -78,40 +64,30 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
   }
 
   Future<void> _addToQueue(Map<String, dynamic> song) async {
-    if (_queueService == null) return;
-    if (queue.any((s) => s['id'] == song['id'])) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Already in queue')),
-      );
+    if (queue.any((s) => s.id == song['id'])) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already in queue')));
       return;
     }
-    await _queueService!.addSong(song);
-    _refreshQueue();
+    await SharedQueueService().addSong(
+      Song(key: '', id: song['id'], title: song['title'], artist: song['artist'], thumbnail: song['thumbnail']),
+    );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added "${song['title']}"')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
     }
   }
 
   Future<void> _playNext() async {
-    if (_queueService == null || queue.isEmpty) return;
-    await _queueService!.removeFirst();
-    _refreshQueue();
+    if (queue.isNotEmpty) {
+      await SharedQueueService().remove(queue.first.key);
+    }
   }
 
   Future<void> _clearQueue() async {
-    if (_queueService == null) return;
-    await _queueService!.clear();
+    await SharedQueueService().clear();
     _playerController?.dispose();
     if (mounted) {
-      setState(() {
-        _playerController = null;
-        queue = [];
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Queue cleared')),
-      );
+      setState(() => _playerController = null);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Queue cleared')));
     }
   }
 
@@ -125,42 +101,25 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                'Share MongoBox',
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
+              Text('Share MongoBox', style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 16),
-              QrImageView(
-                data: _appLink,
-                version: QrVersions.auto,
-                size: 200,
-              ),
+              QrImageView(data: _appLink, version: QrVersions.auto, size: 200),
               const SizedBox(height: 16),
-              Text(
-                'Scan to open the app • Queue is stored on this device',
-                style: Theme.of(ctx).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
+              Text('Scan to suggest songs • No sign-in needed', style: Theme.of(ctx).textTheme.bodySmall, textAlign: TextAlign.center),
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   FilledButton.icon(
                     onPressed: () {
-                      Share.share(
-                        'Try MongoBox: $_appLink',
-                        subject: 'MongoBox',
-                      );
+                      Share.share('Try MongoBox: $_appLink', subject: 'MongoBox');
                       Navigator.of(ctx).pop();
                     },
                     icon: const Icon(Icons.share),
                     label: const Text('Share link'),
                   ),
                   const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Close'),
-                  ),
+                  TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
                 ],
               ),
             ],
@@ -179,46 +138,29 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Host party'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.qr_code_2),
-            onPressed: _showHostPartySheet,
-            tooltip: 'Host a party',
-          ),
-        ],
+        actions: [IconButton(icon: const Icon(Icons.qr_code_2), onPressed: _showHostPartySheet, tooltip: 'Host a party')],
       ),
       body: Column(
         children: [
           if (_playerController != null)
             AspectRatio(
               aspectRatio: 16 / 9,
-              child: YoutubePlayer(
-                controller: _playerController!,
-                showVideoProgressIndicator: true,
-              ),
+              child: YoutubePlayer(controller: _playerController!, showVideoProgressIndicator: true),
             )
           else
             Container(
               height: 180,
-              color: colorScheme.surfaceContainerHighest,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
               alignment: Alignment.center,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.music_video, size: 48, color: colorScheme.outline),
+                  Icon(Icons.music_video, size: 48, color: Theme.of(context).colorScheme.outline),
                   const SizedBox(height: 8),
-                  Text(
-                    'Queue is empty',
-                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
-                  Text(
-                    'Add songs or share the party link',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                  Text('Queue is empty', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                 ],
               ),
             ),
@@ -226,21 +168,9 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
             padding: const EdgeInsets.all(12.0),
             child: Row(
               children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: queue.isEmpty ? null : _playNext,
-                    icon: const Icon(Icons.skip_next),
-                    label: const Text('Next'),
-                  ),
-                ),
+                Expanded(child: FilledButton.icon(onPressed: queue.isEmpty ? null : _playNext, icon: const Icon(Icons.skip_next), label: const Text('Next'))),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: queue.isEmpty ? null : _clearQueue,
-                    icon: const Icon(Icons.clear_all),
-                    label: const Text('Clear queue'),
-                  ),
-                ),
+                Expanded(child: OutlinedButton.icon(onPressed: queue.isEmpty ? null : _clearQueue, icon: const Icon(Icons.clear_all), label: const Text('Clear queue'))),
               ],
             ),
           ),
@@ -255,27 +185,11 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
                       return ListTile(
                         leading: ClipRRect(
                           borderRadius: BorderRadius.circular(4),
-                          child: Image.network(
-                            s['thumbnail'] as String? ?? '',
-                            width: 48,
-                            height: 48,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Icon(Icons.music_note),
-                          ),
+                          child: Image.network(s.thumbnail, width: 48, height: 48, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Icon(Icons.music_note)),
                         ),
-                        title: Text(
-                          s['title'] as String? ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          s['artist'] as String? ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: i == 0
-                            ? Chip(label: Text('Now playing', style: TextStyle(fontSize: 11)))
-                            : null,
+                        title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(s.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        trailing: i == 0 ? Chip(label: const Text('Now playing', style: TextStyle(fontSize: 11))) : null,
                       );
                     },
                   ),
@@ -299,13 +213,7 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
                 const SizedBox(width: 8),
                 IconButton.filled(
                   onPressed: _searching ? null : _searchSongs,
-                  icon: _searching
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.search),
+                  icon: _searching ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
                 ),
               ],
             ),
@@ -328,30 +236,13 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Expanded(
-                                child: Image.network(
-                                  s['thumbnail'] as String? ?? '',
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => const Icon(Icons.music_note, size: 40),
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.all(6.0),
-                                child: Text(
-                                  s['title'] as String? ?? '',
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.labelSmall,
-                                ),
-                              ),
+                              Expanded(child: Image.network(s['thumbnail'], fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.music_note, size: 40))),
+                              Padding(padding: const EdgeInsets.all(6.0), child: Text(s['title'], maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelSmall)),
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
                                 child: FilledButton.tonal(
                                   onPressed: () => _addToQueue(s),
-                                  style: FilledButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 4),
-                                    minimumSize: Size.zero,
-                                  ),
+                                  style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 4), minimumSize: Size.zero),
                                   child: const Text('Add'),
                                 ),
                               ),

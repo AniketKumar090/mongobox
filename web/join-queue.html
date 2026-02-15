@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MongoBox • Join Queue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --primary: #d32f2f;
@@ -11,9 +14,10 @@
       --on-surface: #e0e0e0;
       --card: #1e1e1e;
       --success: #4caf50;
+      --border: #333;
     }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      margin: 0;
       font-family: 'Inter', sans-serif;
       background: linear-gradient(135deg, #2c3e50, #4a235a);
       color: var(--on-surface);
@@ -21,7 +25,17 @@
       max-width: 600px;
       margin: 0 auto;
     }
-    h1 { text-align: center; margin: 24px 0; font-weight: 700; }
+    h1 {
+      text-align: center;
+      margin: 24px 0 8px;
+      font-weight: 700;
+      font-size: 1.5rem;
+    }
+    p.subtitle {
+      text-align: center;
+      opacity: 0.9;
+      margin-bottom: 24px;
+    }
     .search-box {
       display: flex;
       gap: 8px;
@@ -31,9 +45,10 @@
       flex: 1;
       padding: 12px 16px;
       border-radius: 8px;
-      border: none;
-      background: rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.08);
       color: white;
+      font-size: 16px;
     }
     button {
       background: var(--primary);
@@ -42,6 +57,8 @@
       border-radius: 8px;
       padding: 12px 20px;
       font-weight: 600;
+      font-size: 16px;
+      cursor: pointer;
     }
     .song-item {
       display: flex;
@@ -50,20 +67,39 @@
       background: var(--card);
       border-radius: 8px;
       margin-bottom: 8px;
+      align-items: center;
     }
-    .thumbnail { width: 48px; height: 48px; background: #333; border-radius: 4px; }
-    .song-info { flex: 1; }
+    .thumbnail {
+      width: 48px;
+      height: 48px;
+      background: #333;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .song-info strong { display: block; font-weight: 600; }
+    .song-info small { display: block; font-size: 14px; opacity: 0.7; }
     .add-btn {
       background: var(--success);
       padding: 6px 12px;
       font-size: 12px;
+      border-radius: 4px;
+      white-space: nowrap;
     }
-    .section-title { margin-top: 32px; font-weight: 600; }
+    .section-title {
+      margin-top: 32px;
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+    .empty {
+      text-align: center;
+      padding: 32px 16px;
+      opacity: 0.7;
+    }
   </style>
 </head>
 <body>
   <h1>🎵 MongoBox</h1>
-  <p style="text-align:center; opacity:0.9">Join the music queue — search and suggest songs. No sign-in.</p>
+  <p class="subtitle">Join the music queue — search and suggest songs. No sign-in.</p>
 
   <div class="search-box">
     <input type="text" id="searchInput" placeholder="Search songs (any language)..." />
@@ -76,7 +112,6 @@
   <div id="suggestions"></div>
 
   <script>
-    // Mock search (replace with real YouTube Data API later)
     function searchSongs() {
       const q = document.getElementById('searchInput').value.trim();
       if (!q) return;
@@ -85,16 +120,16 @@
         <div class="song-item">
           <div class="thumbnail"></div>
           <div class="song-info">
-            <div><strong>${q} (Demo)</strong></div>
-            <div style="font-size:14px; opacity:0.7">Artist Name</div>
+            <strong>${q} (Demo)</strong>
+            <small>Artist Name</small>
           </div>
           <button class="add-btn" onclick="addToQueue('demo1')">Add</button>
         </div>
         <div class="song-item">
           <div class="thumbnail"></div>
           <div class="song-info">
-            <div><strong>Another ${q}</strong></div>
-            <div style="font-size:14px; opacity:0.7">Band X</div>
+            <strong>Another ${q}</strong>
+            <small>Band X</small>
           </div>
           <button class="add-btn" onclick="addToQueue('demo2')">Add</button>
         </div>
@@ -104,8 +139,8 @@
     function addToQueue(id) {
       let queue = JSON.parse(localStorage.getItem('mongobox_suggestions') || '[]');
       const song = { id, title: "Demo Song", artist: "Unknown", addedAt: Date.now() };
-      queue.unshift(song); // add to top
-      queue = queue.slice(0, 20); // cap at 20
+      queue.unshift(song);
+      queue = queue.slice(0, 20);
       localStorage.setItem('mongobox_suggestions', JSON.stringify(queue));
       renderSuggestions();
     }
@@ -113,13 +148,20 @@
     function renderSuggestions() {
       const list = document.getElementById('suggestions');
       const queue = JSON.parse(localStorage.getItem('mongobox_suggestions') || '[]');
-      list.innerHTML = queue.length
-        ? queue.map(s => `<div class="song-item">
-            <div class="thumbnail"></div>
-            <div class="song-info"><div>${s.title}</div><div style="opacity:0.7">${s.artist}</div></div>
-            <button class="add-btn" disabled>Added</button>
-          </div>`).join('')
-        : '<p style="text-align:center; padding:20px; opacity:0.7">No suggestions yet. Search and add songs!</p>';
+      if (queue.length === 0) {
+        list.innerHTML = '<div class="empty">No suggestions yet. Search and add songs!</div>';
+        return;
+      }
+      list.innerHTML = queue.map(s => `
+        <div class="song-item">
+          <div class="thumbnail"></div>
+          <div class="song-info">
+            <strong>${s.title}</strong>
+            <small>${s.artist}</small>
+          </div>
+          <button class="add-btn" disabled>Added</button>
+        </div>
+      `).join('');
     }
 
     renderSuggestions();

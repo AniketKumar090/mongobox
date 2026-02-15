@@ -1,5 +1,4 @@
-// Stub for mobile: web jukebox is not used on mobile; MobileLyricApp is the home.
-
+// lib/screens/home_screen_stub.dart
 import 'package:flutter/material.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -7,31 +6,23 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+    return MaterialApp(
+      home: Scaffold(
+        body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.laptop_mac, size: 64, color: Colors.grey[400]),
-              const SizedBox(height: 16),
-              Text(
-                'MongoBox Jukebox is available on web.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.grey[700],
-                ),
+              const Icon(Icons.music_note, size: 64, color: Colors.red),
+              const SizedBox(height: 24),
+              const Text(
+                'MongoBox Jukebox',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Use the Lyric Play app here.',
+              const SizedBox(height: 16),
+              const Text(
+                'Available on web only.\nOpen in a browser to join the queue.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
             ],
           ),

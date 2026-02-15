@@ -1,6 +1,6 @@
 # Deep links: Join party link opens the app
 
-When a guest taps the host's join link (**https://mongobox-79a1f.firebaseapp.com/join-queue.html?uid=...**):
+When a guest taps the host's join link (**https://aniketkumar090.github.io/mongobox/join-queue.html?uid=...**):
 
 - **If they have the MongoBox app installed** → the app can open and show the "Join party" screen (search + add to queue).
 - **If they don't have the app** → the link opens in the browser and shows the existing `join-queue.html` page (same flow as today).

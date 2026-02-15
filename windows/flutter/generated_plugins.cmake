@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  firebase_core
   flutter_inappwebview_windows
   share_plus
   speech_to_text_windows
