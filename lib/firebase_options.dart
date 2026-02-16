@@ -4,16 +4,6 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
-/// Default [FirebaseOptions] for use with your Firebase apps.
-///
-/// Example:
-/// ```dart
-/// import 'firebase_options.dart';
-/// // ...
-/// await Firebase.initializeApp(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
@@ -48,6 +38,8 @@ class DefaultFirebaseOptions {
     authDomain: 'mongobox-79a1f.firebaseapp.com',
     storageBucket: 'mongobox-79a1f.firebasestorage.app',
     measurementId: 'G-7LV14L81DL',
+    // 👇 ADD THIS
+    databaseURL: 'https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
@@ -56,6 +48,8 @@ class DefaultFirebaseOptions {
     messagingSenderId: '850327601337',
     projectId: 'mongobox-79a1f',
     storageBucket: 'mongobox-79a1f.firebasestorage.app',
+    // 👇 ADD THIS
+    databaseURL: 'https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -65,6 +59,8 @@ class DefaultFirebaseOptions {
     projectId: 'mongobox-79a1f',
     storageBucket: 'mongobox-79a1f.firebasestorage.app',
     iosBundleId: 'com.example.mongobox',
+    // 👇 ADD THIS
+    databaseURL: 'https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -74,6 +70,8 @@ class DefaultFirebaseOptions {
     projectId: 'mongobox-79a1f',
     storageBucket: 'mongobox-79a1f.firebasestorage.app',
     iosBundleId: 'com.example.mongobox',
+    // 👇 ADD THIS
+    databaseURL: 'https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
@@ -84,5 +82,7 @@ class DefaultFirebaseOptions {
     authDomain: 'mongobox-79a1f.firebaseapp.com',
     storageBucket: 'mongobox-79a1f.firebasestorage.app',
     measurementId: 'G-HEESTFBG8Z',
+    // 👇 ADD THIS
+    databaseURL: 'https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
 }

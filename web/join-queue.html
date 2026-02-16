@@ -1,170 +1,67 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MongoBox • Join Queue</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --primary: #d32f2f;
-      --surface: #121212;
-      --on-surface: #e0e0e0;
-      --card: #1e1e1e;
-      --success: #4caf50;
-      --border: #333;
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Inter', sans-serif;
-      background: linear-gradient(135deg, #2c3e50, #4a235a);
-      color: var(--on-surface);
-      padding: 16px;
-      max-width: 600px;
-      margin: 0 auto;
-    }
-    h1 {
-      text-align: center;
-      margin: 24px 0 8px;
-      font-weight: 700;
-      font-size: 1.5rem;
-    }
-    p.subtitle {
-      text-align: center;
-      opacity: 0.9;
-      margin-bottom: 24px;
-    }
-    .search-box {
-      display: flex;
-      gap: 8px;
-      margin: 20px 0;
-    }
-    input {
-      flex: 1;
-      padding: 12px 16px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.08);
-      color: white;
-      font-size: 16px;
-    }
-    button {
-      background: var(--primary);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      padding: 12px 20px;
-      font-weight: 600;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    .song-item {
-      display: flex;
-      gap: 12px;
-      padding: 12px;
-      background: var(--card);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      align-items: center;
-    }
-    .thumbnail {
-      width: 48px;
-      height: 48px;
-      background: #333;
-      border-radius: 4px;
-      flex-shrink: 0;
-    }
-    .song-info strong { display: block; font-weight: 600; }
-    .song-info small { display: block; font-size: 14px; opacity: 0.7; }
-    .add-btn {
-      background: var(--success);
-      padding: 6px 12px;
-      font-size: 12px;
-      border-radius: 4px;
-      white-space: nowrap;
-    }
-    .section-title {
-      margin-top: 32px;
-      font-weight: 600;
-      font-size: 1.1rem;
-    }
-    .empty {
-      text-align: center;
-      padding: 32px 16px;
-      opacity: 0.7;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f8f9fa; }
+    h1 { color: #d32f2f; text-align: center; }
+    input[type="text"] { width: 70%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 10px 15px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .results { margin-top: 20px; }
+    .song { padding: 10px; border-bottom: 1px solid #eee; }
+    #status { color: green; margin-top: 10px; }
   </style>
 </head>
 <body>
   <h1>🎵 MongoBox</h1>
-  <p class="subtitle">Join the music queue — search and suggest songs. No sign-in.</p>
+  <p style="text-align:center">Join the music queue — search and suggest songs. No sign-in.</p>
 
-  <div class="search-box">
-    <input type="text" id="searchInput" placeholder="Search songs (any language)..." />
-    <button onclick="searchSongs()">Search</button>
+  <div>
+    <input type="text" id="query" placeholder="Search songs..." />
+    <button onclick="search()">Search</button>
   </div>
 
-  <div id="results"></div>
+  <div class="results" id="results"></div>
+  <div id="status"></div>
 
-  <div class="section-title">Your Suggestions</div>
-  <div id="suggestions"></div>
-
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script>
-    function searchSongs() {
-      const q = document.getElementById('searchInput').value.trim();
-      if (!q) return;
-      const results = document.getElementById('results');
-      results.innerHTML = `
-        <div class="song-item">
-          <div class="thumbnail"></div>
-          <div class="song-info">
-            <strong>${q} (Demo)</strong>
-            <small>Artist Name</small>
+    // Wait for Flutter to initialize Firebase
+    window.addEventListener('load', function() {
+      // Use the Firebase instance from Flutter
+      const db = firebase.database();
+      
+      window.search = async function() {
+        const q = document.getElementById('query').value.trim();
+        if (!q) return;
+        const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=5&q=${encodeURIComponent(q)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY`);
+        const data = await res.json();
+        const html = data.items.map(item => `
+          <div class="song">
+            <img src="${item.snippet.thumbnails.default.url}" width="48" height="48" style="vertical-align:middle; margin-right:10px;">
+            <strong>${item.snippet.title}</strong><br>
+            <small>${item.snippet.channelTitle}</small><br>
+            <button onclick='addToQueue("${item.id.videoId}", "${item.snippet.title.replace(/"/g, '\\"')}", "${item.snippet.channelTitle.replace(/"/g, '\\"')}")'>Add to Queue</button>
           </div>
-          <button class="add-btn" onclick="addToQueue('demo1')">Add</button>
-        </div>
-        <div class="song-item">
-          <div class="thumbnail"></div>
-          <div class="song-info">
-            <strong>Another ${q}</strong>
-            <small>Band X</small>
-          </div>
-          <button class="add-btn" onclick="addToQueue('demo2')">Add</button>
-        </div>
-      `;
-    }
+        `).join('');
+        document.getElementById('results').innerHTML = html;
+      };
 
-    function addToQueue(id) {
-      let queue = JSON.parse(localStorage.getItem('mongobox_suggestions') || '[]');
-      const song = { id, title: "Demo Song", artist: "Unknown", addedAt: Date.now() };
-      queue.unshift(song);
-      queue = queue.slice(0, 20);
-      localStorage.setItem('mongobox_suggestions', JSON.stringify(queue));
-      renderSuggestions();
-    }
-
-    function renderSuggestions() {
-      const list = document.getElementById('suggestions');
-      const queue = JSON.parse(localStorage.getItem('mongobox_suggestions') || '[]');
-      if (queue.length === 0) {
-        list.innerHTML = '<div class="empty">No suggestions yet. Search and add songs!</div>';
-        return;
-      }
-      list.innerHTML = queue.map(s => `
-        <div class="song-item">
-          <div class="thumbnail"></div>
-          <div class="song-info">
-            <strong>${s.title}</strong>
-            <small>${s.artist}</small>
-          </div>
-          <button class="add-btn" disabled>Added</button>
-        </div>
-      `).join('');
-    }
-
-    renderSuggestions();
+      window.addToQueue = function(id, title, artist) {
+        db.ref('queue').push({
+          id: id,
+          title: title,
+          artist: artist,
+          thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`
+        });
+        document.getElementById('status').innerText = '✅ Added to queue!';
+        setTimeout(() => document.getElementById('status').innerText = '', 2000);
+      };
+    });
   </script>
 </body>
 </html>

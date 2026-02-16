@@ -16,6 +16,7 @@ class HostPartyScreen extends StatefulWidget {
 }
 
 class _HostPartyScreenState extends State<HostPartyScreen> {
+  final SharedQueueService _queueService = SharedQueueService(); // ✅ Single instance
   List<Song> queue = [];
   YoutubePlayerController? _playerController;
   final YoutubeMobileService _youtube = YoutubeMobileService();
@@ -26,12 +27,10 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
   @override
   void initState() {
     super.initState();
-    SharedQueueService().streamQueue().listen((newQueue) {
+    _queueService.streamQueue().listen((newQueue) {
       if (mounted) {
-        setState(() {
-          queue = newQueue;
-          _playFirstIfNeeded();
-        });
+        setState(() => queue = newQueue);
+        _playFirstIfNeeded();
       }
     });
   }
@@ -39,7 +38,7 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
   void _playFirstIfNeeded() {
     if (queue.isEmpty) {
       _playerController?.dispose();
-      setState(() => _playerController = null);
+      _playerController = null;
       return;
     }
     final first = queue.first;
@@ -49,7 +48,6 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
       initialVideoId: first.id,
       flags: const YoutubePlayerFlags(autoPlay: true, mute: false),
     );
-    setState(() {});
   }
 
   Future<void> _searchSongs() async {
@@ -68,7 +66,7 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already in queue')));
       return;
     }
-    await SharedQueueService().addSong(
+    await _queueService.addSong(
       Song(key: '', id: song['id'], title: song['title'], artist: song['artist'], thumbnail: song['thumbnail']),
     );
     if (mounted) {
@@ -78,12 +76,12 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
 
   Future<void> _playNext() async {
     if (queue.isNotEmpty) {
-      await SharedQueueService().remove(queue.first.key);
+      await _queueService.remove(queue.first.key);
     }
   }
 
   Future<void> _clearQueue() async {
-    await SharedQueueService().clear();
+    await _queueService.clear();
     _playerController?.dispose();
     if (mounted) {
       setState(() => _playerController = null);
@@ -146,10 +144,7 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
       body: Column(
         children: [
           if (_playerController != null)
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: YoutubePlayer(controller: _playerController!, showVideoProgressIndicator: true),
-            )
+            AspectRatio(aspectRatio: 16 / 9, child: YoutubePlayer(controller: _playerController!, showVideoProgressIndicator: true))
           else
             Container(
               height: 180,

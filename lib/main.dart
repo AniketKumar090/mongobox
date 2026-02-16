@@ -4,10 +4,18 @@ import 'screens/web/home_screen_web.dart' if (dart.library.io) 'screens/home_scr
 import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  
+  if (Firebase.apps.isEmpty) {
+   await Firebase.initializeApp(
+ name: "MongoBox",
+ options: DefaultFirebaseOptions.currentPlatform);
+    print('✅ Firebase initialized fresh');
+  } else {
+    print('✅ Using existing Firebase app (apps count: ${Firebase.apps.length})');
+  }
+  
   runApp(MyApp());
 }
 
