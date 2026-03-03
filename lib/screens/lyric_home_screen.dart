@@ -312,7 +312,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                       children: [
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: _isLoading ? null : _onSearch,
+                            onPressed: _isLoading ? null : () {
+                              print('🔍 [DEBUG] Find & play button pressed (Lyric Home Screen)');
+                              _onSearch();
+                            },
                             icon: _isLoading
                                 ? const SizedBox(
                                     width: 20,

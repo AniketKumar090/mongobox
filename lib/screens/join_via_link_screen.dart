@@ -1,3 +1,4 @@
+// lib/screens/join_via_link_screen.dart
 // Join a party via pasted link or QR scan. No user info or verification.
 
 import 'package:flutter/material.dart';
@@ -28,15 +29,78 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
   }
 
   Future<void> _openLink(String url) async {
+    print('🔗 ========================================');
+    print('🔗 GUEST: Opening link: $url');
+    
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
+    if (uri == null) {
+      print('❌ GUEST: Invalid URL');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid link')),
+        );
+      }
+      return;
+    }
+    
+    // Try to extract partyId and continue in-app
+    final partyId = _extractPartyId(url);
+    print('🎪 GUEST: Extracted partyId: $partyId');
+    
+    if (partyId != null && partyId.isNotEmpty) {
+      print('✅ GUEST: Valid party ID found, joining in-app');
+      print('🔗 ========================================');
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => JoinPartyScreen(onBack: widget.onBack, partyId: partyId),
+          ),
+        );
+      }
+      return;
+    }
+    
+    print('⚠️ GUEST: No party ID found, opening externally');
+    print('🔗 ========================================');
+    
+    // Fallback: open externally
     setState(() => _opening = true);
     try {
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
-    } catch (_) {}
+    } catch (e) {
+      print('❌ GUEST: Error launching URL: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error opening link: $e')),
+        );
+      }
+    }
     if (mounted) setState(() => _opening = false);
+  }
+
+  /// Extract partyId from URL
+  String? _extractPartyId(String url) {
+    try {
+      // Handle both full URLs and partial URLs
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://$url';
+      }
+      
+      final uri = Uri.parse(url);
+      final partyId = uri.queryParameters['partyId'];
+      
+      print('🔍 URL parsing:');
+      print('  - Full URL: $url');
+      print('  - Query params: ${uri.queryParameters}');
+      print('  - Extracted partyId: $partyId');
+      
+      return partyId;
+    } catch (e) {
+      print('❌ Error extracting partyId: $e');
+      return null;
+    }
   }
 
   void _continueInApp() {
@@ -83,7 +147,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Paste the party link or scan the host’s QR code',
+              "Paste the party link or scan the host's QR code",
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -93,7 +157,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
               controller: _linkController,
               decoration: InputDecoration(
                 labelText: 'Party link',
-                hintText: 'https://…',
+                hintText: 'https://mongobox-79a1f.firebaseapp.com/join-queue.html?partyId=...',
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.open_in_browser),
@@ -103,7 +167,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,
-              onSubmitted: (_) => _onLinkSubmitted,
+              onSubmitted: (_) => _onLinkSubmitted(),
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
@@ -153,9 +217,20 @@ class _ScanQRScreenState extends State<_ScanQRScreen> {
     if (barcodes.isEmpty) return;
     final code = barcodes.first.rawValue;
     if (code == null || code.isEmpty) return;
+    
+    print('📷 ========================================');
+    print('📷 QR Code scanned: $code');
+    print('📷 ========================================');
+    
     final uri = Uri.tryParse(code);
-    if (uri == null || (!uri.hasScheme && !code.startsWith('http'))) return;
+    if (uri == null || (!uri.hasScheme && !code.startsWith('http'))) {
+      print('⚠️ Invalid QR code format');
+      return;
+    }
+    
     final url = uri.hasScheme ? code : 'https://$code';
+    print('✅ Processing URL: $url');
+    
     _handled = true;
     widget.onScanned(url);
   }

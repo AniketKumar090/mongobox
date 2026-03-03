@@ -5,63 +5,441 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MongoBox • Join Queue</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f8f9fa; }
-    h1 { color: #d32f2f; text-align: center; }
-    input[type="text"] { width: 70%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
-    button { padding: 10px 15px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      padding: 20px; 
+      max-width: 600px; 
+      margin: 0 auto; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    h1 { 
+      color: #d32f2f; 
+      text-align: center; 
+      margin-bottom: 10px;
+      font-size: 32px;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    #party-info { 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px; 
+      border-radius: 8px; 
+      margin-bottom: 20px; 
+      text-align: center; 
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    #party-info .party-id {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      opacity: 0.9;
+      margin-top: 5px;
+    }
+    .search-box {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    input[type="text"] { 
+      flex: 1;
+      padding: 12px 15px; 
+      border: 2px solid #e0e0e0; 
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border 0.3s;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button { 
+      padding: 12px 24px; 
+      background: #d32f2f; 
+      color: white; 
+      border: none; 
+      border-radius: 8px; 
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 16px;
+      transition: all 0.3s;
+      box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3);
+    }
+    button:hover { 
+      background: #b71c1c;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(211, 47, 47, 0.4);
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
     .results { margin-top: 20px; }
-    .song { padding: 10px; border-bottom: 1px solid #eee; }
-    #status { color: green; margin-top: 10px; }
+    .song { 
+      padding: 15px; 
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: background 0.2s;
+    }
+    .song:hover {
+      background: #f8f9fa;
+    }
+    .song:last-child {
+      border-bottom: none;
+    }
+    .song img {
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .song-info {
+      flex: 1;
+    }
+    .song-title {
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 4px;
+    }
+    .song-artist {
+      font-size: 13px;
+      color: #666;
+    }
+    .song button {
+      padding: 8px 16px;
+      font-size: 14px;
+      min-width: 80px;
+    }
+    .song button.added {
+      background: #4caf50;
+      pointer-events: none;
+    }
+    #status { 
+      color: white;
+      margin-top: 15px; 
+      padding: 12px; 
+      background: #4caf50; 
+      border-radius: 8px;
+      display: none;
+      text-align: center;
+      font-weight: 500;
+      animation: slideIn 0.3s;
+    }
+    #error { 
+      color: white;
+      margin-top: 15px; 
+      padding: 12px; 
+      background: #d32f2f; 
+      border-radius: 8px;
+      display: none;
+      text-align: center;
+      font-weight: 500;
+      animation: slideIn 0.3s;
+    }
+    .loading { 
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+    .loading::after {
+      content: '...';
+      animation: dots 1.5s infinite;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .empty-state svg {
+      width: 80px;
+      height: 80px;
+      margin-bottom: 20px;
+      opacity: 0.5;
+    }
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+    .debug-log {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      max-height: 200px;
+      overflow-y: auto;
+      display: none; /* Hide in production, show for debugging */
+    }
+    .debug-log.show {
+      display: block;
+    }
+    .log-entry {
+      margin: 4px 0;
+      padding: 4px;
+    }
+    .log-success { color: #4caf50; }
+    .log-error { color: #d32f2f; }
+    .log-info { color: #2196f3; }
   </style>
 </head>
 <body>
-  <h1>🎵 MongoBox</h1>
-  <p style="text-align:center">Join the music queue — search and suggest songs. No sign-in.</p>
+  <div class="container">
+    <h1>🎵 MongoBox</h1>
+    <p class="subtitle">Join the party • Add songs • No app needed</p>
 
-  <div>
-    <input type="text" id="query" placeholder="Search songs..." />
-    <button onclick="search()">Search</button>
+    <div id="party-info" style="display:none;">
+      🎪 Connected to party
+      <div class="party-id"><span id="party-id"></span></div>
+    </div>
+
+    <div id="error"></div>
+    <div id="status"></div>
+
+    <div class="search-box">
+      <input type="text" id="query" placeholder="Search songs..." onkeypress="if(event.key==='Enter') search()" />
+      <button onclick="search()" id="search-btn">Search</button>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty-state">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <div>Search for songs to add to the queue</div>
+      </div>
+    </div>
+
+    <!-- Debug log (uncomment to see detailed logs) -->
+    <div class="debug-log" id="debug-log"></div>
   </div>
 
-  <div class="results" id="results"></div>
-  <div id="status"></div>
-
-  <!-- Firebase SDK -->
+  <!-- Firebase SDK v9+ (modern version) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script>
-    // Wait for Flutter to initialize Firebase
-    window.addEventListener('load', function() {
-      // Use the Firebase instance from Flutter
-      const db = firebase.database();
+    // Debug logging system
+    const debugLog = [];
+    function addLog(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = `[${timestamp}] ${message}`;
+      debugLog.push({ message: logEntry, type });
+      console.log(logEntry);
       
-      window.search = async function() {
-        const q = document.getElementById('query').value.trim();
-        if (!q) return;
-        const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=5&q=${encodeURIComponent(q)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY`);
+      // Update debug display
+      const logDiv = document.getElementById('debug-log');
+      if (logDiv) {
+        const entry = document.createElement('div');
+        entry.className = `log-entry log-${type}`;
+        entry.textContent = logEntry;
+        logDiv.appendChild(entry);
+        logDiv.scrollTop = logDiv.scrollHeight;
+      }
+    }
+
+    addLog('🌐 MongoBox Web Guest - Starting...', 'info');
+    
+    // Extract partyId from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const partyId = urlParams.get('partyId') || 'default_party';
+    addLog(`👥 GUEST: Extracted Party ID: ${partyId}`, 'success');
+    addLog(`🔗 GUEST: Full URL: ${window.location.href}`, 'info');
+    
+    // Display party info
+    if (partyId && partyId !== 'default_party') {
+      document.getElementById('party-info').style.display = 'block';
+      document.getElementById('party-id').innerText = partyId;
+      addLog('✅ GUEST: Party info displayed', 'success');
+    } else {
+      addLog('⚠️ GUEST: No party ID in URL, using default', 'error');
+    }
+    
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCTMwHxyQVJb_0l39uMKIqka-pGYszGexw",
+      authDomain: "mongobox-79a1f.firebaseapp.com",
+      projectId: "mongobox-79a1f",
+      storageBucket: "mongobox-79a1f.firebasestorage.app",
+      messagingSenderId: "850327601337",
+      appId: "1:850327601337:web:97b8ca86cfda6b37e89b68",
+      databaseURL: "https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app"
+    };
+    
+    // Initialize Firebase
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+        addLog('✅ GUEST: Firebase initialized', 'success');
+      } else {
+        addLog('✅ GUEST: Firebase already initialized', 'success');
+      }
+    } catch (error) {
+      addLog(`❌ GUEST: Firebase init error: ${error.message}`, 'error');
+      showError('Firebase initialization failed: ' + error.message);
+    }
+    
+    const db = firebase.database();
+    addLog(`📍 GUEST: Firebase path: parties/${partyId}/queue`, 'info');
+    
+    function showStatus(message) {
+      const el = document.getElementById('status');
+      el.innerText = '✅ ' + message;
+      el.style.display = 'block';
+      addLog(message, 'success');
+      setTimeout(() => el.style.display = 'none', 3000);
+    }
+    
+    function showError(message) {
+      const el = document.getElementById('error');
+      el.innerText = '❌ ' + message;
+      el.style.display = 'block';
+      addLog(message, 'error');
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+    
+    window.search = async function() {
+      const q = document.getElementById('query').value.trim();
+      if (!q) {
+        showError('Please enter a search query');
+        return;
+      }
+      
+      const searchBtn = document.getElementById('search-btn');
+      searchBtn.disabled = true;
+      searchBtn.textContent = 'Searching...';
+      
+      addLog(`🔍 GUEST: Searching for: "${q}"`, 'info');
+      
+      try {
+        const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(q)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY`);
         const data = await res.json();
+        
+        if (!data.items || data.items.length === 0) {
+          addLog(`⚠️ GUEST: No songs found for "${q}"`, 'error');
+          showError('No songs found for: ' + q);
+          document.getElementById('results').innerHTML = '<div class="empty-state"><div>No songs found. Try a different search.</div></div>';
+          return;
+        }
+        
+        addLog(`✅ GUEST: Found ${data.items.length} songs`, 'success');
+        
         const html = data.items.map(item => `
           <div class="song">
-            <img src="${item.snippet.thumbnails.default.url}" width="48" height="48" style="vertical-align:middle; margin-right:10px;">
-            <strong>${item.snippet.title}</strong><br>
-            <small>${item.snippet.channelTitle}</small><br>
-            <button onclick='addToQueue("${item.id.videoId}", "${item.snippet.title.replace(/"/g, '\\"')}", "${item.snippet.channelTitle.replace(/"/g, '\\"')}")'>Add to Queue</button>
+            <img src="${item.snippet.thumbnails.default.url}" width="60" height="60" alt="">
+            <div class="song-info">
+              <div class="song-title">${item.snippet.title}</div>
+              <div class="song-artist">${item.snippet.channelTitle}</div>
+            </div>
+            <button onclick='addToQueue("${item.id.videoId}", "${item.snippet.title.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}", "${item.snippet.channelTitle.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}", this)'>Add</button>
           </div>
         `).join('');
+        
         document.getElementById('results').innerHTML = html;
-      };
+      } catch (error) {
+        addLog(`❌ GUEST: Search error: ${error.message}`, 'error');
+        showError('Search failed: ' + error.message);
+      } finally {
+        searchBtn.disabled = false;
+        searchBtn.textContent = 'Search';
+      }
+    };
 
-      window.addToQueue = function(id, title, artist) {
-        db.ref('queue').push({
-          id: id,
-          title: title,
-          artist: artist,
-          thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`
-        });
-        document.getElementById('status').innerText = '✅ Added to queue!';
-        setTimeout(() => document.getElementById('status').innerText = '', 2000);
+    window.addToQueue = function(id, title, artist, buttonElement) {
+      const queuePath = `parties/${partyId}/queue`;
+      
+      addLog('➕ ========================================', 'info');
+      addLog(`➕ GUEST: Adding song to queue`, 'info');
+      addLog(`➕ Party ID: ${partyId}`, 'info');
+      addLog(`➕ Firebase Path: ${queuePath}`, 'info');
+      addLog(`➕ Video ID: ${id}`, 'info');
+      addLog(`➕ Title: ${title}`, 'info');
+      addLog(`➕ Artist: ${artist}`, 'info');
+      
+      // Disable button immediately
+      buttonElement.disabled = true;
+      buttonElement.textContent = 'Adding...';
+      
+      const songData = {
+        id: id,
+        title: title,
+        artist: artist,
+        thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`,
+        addedAt: new Date().toISOString()
       };
+      
+      addLog(`➕ Song data: ${JSON.stringify(songData)}`, 'info');
+      
+      db.ref(queuePath).push(songData)
+        .then((ref) => {
+          addLog(`✅ GUEST: Song added successfully!`, 'success');
+          addLog(`✅ Firebase key: ${ref.key}`, 'success');
+          addLog('➕ ========================================', 'info');
+          
+          showStatus(`Added "${title}" to queue!`);
+          buttonElement.textContent = '✓ Added';
+          buttonElement.classList.add('added');
+        })
+        .catch((error) => {
+          addLog(`❌ GUEST: Error adding song: ${error.message}`, 'error');
+          addLog(`❌ Error code: ${error.code}`, 'error');
+          addLog('➕ ========================================', 'error');
+          
+          showError('Failed to add song: ' + error.message);
+          buttonElement.disabled = false;
+          buttonElement.textContent = 'Retry';
+        });
+    };
+    
+    // Test Firebase connection on load
+    window.addEventListener('load', function() {
+      addLog('🔗 GUEST: Testing Firebase connection...', 'info');
+      
+      db.ref(`parties/${partyId}`).once('value')
+        .then((snapshot) => {
+          const data = snapshot.val();
+          addLog('✅ GUEST: Firebase connection working!', 'success');
+          addLog(`📦 GUEST: Party data exists: ${data ? 'YES' : 'NO'}`, 'info');
+          if (data && data.queue) {
+            addLog(`🎵 GUEST: Current queue has ${Object.keys(data.queue).length} songs`, 'info');
+          }
+        })
+        .catch((error) => {
+          addLog(`❌ GUEST: Firebase connection error: ${error.message}`, 'error');
+          showError('Cannot connect to database. Check your internet connection.');
+        });
+      
+      // Auto-focus search input
+      document.getElementById('query').focus();
     });
+
+    // Optional: Uncomment to show debug log
+    // document.getElementById('debug-log').classList.add('show');
   </script>
 </body>
 </html>

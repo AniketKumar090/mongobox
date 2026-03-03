@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'dart:async';
 import '../services/shared_queue_service.dart';
 import '../services/youtube_mobile_service.dart';
 
@@ -16,23 +17,47 @@ class HostPartyScreen extends StatefulWidget {
 }
 
 class _HostPartyScreenState extends State<HostPartyScreen> {
-  final SharedQueueService _queueService = SharedQueueService(); // ✅ Single instance
+  late SharedQueueService _queueService;
+  late String _partyId;
   List<Song> queue = [];
   YoutubePlayerController? _playerController;
   final YoutubeMobileService _youtube = YoutubeMobileService();
   final _searchController = TextEditingController();
   List<Map<String, dynamic>> _searchResults = [];
   bool _searching = false;
+  StreamSubscription<List<Song>>? _queueSubscription;
 
   @override
   void initState() {
     super.initState();
-    _queueService.streamQueue().listen((newQueue) {
-      if (mounted) {
-        setState(() => queue = newQueue);
-        _playFirstIfNeeded();
-      }
-    });
+    
+    // Generate unique party ID - SIMPLIFIED for easier debugging
+    _partyId = 'party_${DateTime.now().millisecondsSinceEpoch}';
+    print('🎪 ========================================');
+    print('🎪 HOST STARTING PARTY');
+    print('🎪 Party ID: $_partyId');
+    print('🎪 Firebase Path: parties/$_partyId/queue');
+    print('🎪 ========================================');
+    
+    // Create queue service with party ID
+    _queueService = SharedQueueService(partyId: _partyId);
+    
+    // Listen to queue stream and properly store subscription
+    _queueSubscription = _queueService.streamQueue().listen(
+      (newQueue) {
+        print('🎵 HOST: Queue updated - ${newQueue.length} songs');
+        if (newQueue.isNotEmpty) {
+          print('🎵 HOST: First song: ${newQueue.first.title}');
+        }
+        if (mounted) {
+          setState(() => queue = newQueue);
+          _playFirstIfNeeded();
+        }
+      },
+      onError: (error) {
+        print('❌ HOST: Queue stream error: $error');
+      },
+    );
   }
 
   void _playFirstIfNeeded() {
@@ -66,6 +91,7 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already in queue')));
       return;
     }
+    print('➕ HOST: Adding song: ${song['title']} to party: $_partyId');
     await _queueService.addSong(
       Song(key: '', id: song['id'], title: song['title'], artist: song['artist'], thumbnail: song['thumbnail']),
     );
@@ -90,6 +116,15 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
   }
 
   void _showHostPartySheet() {
+    // Create shareable link with party ID
+    final partyLink = '$_appLink?partyId=$_partyId';
+    
+    print('🔗 ========================================');
+    print('🔗 SHARING PARTY LINK');
+    print('🔗 Link: $partyLink');
+    print('🔗 Party ID: $_partyId');
+    print('🔗 ========================================');
+    
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -99,18 +134,57 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Share MongoBox', style: Theme.of(ctx).textTheme.titleLarge),
+              Text('🎪 Share MongoBox', style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    Text('Party ID', style: Theme.of(ctx).textTheme.labelSmall),
+                    SelectableText(
+                      _partyId, 
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        color: Theme.of(ctx).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Share this link with guests',
+                      style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 16),
-              QrImageView(data: _appLink, version: QrVersions.auto, size: 200),
+              QrImageView(data: partyLink, version: QrVersions.auto, size: 200),
               const SizedBox(height: 16),
-              Text('Scan to suggest songs • No sign-in needed', style: Theme.of(ctx).textTheme.bodySmall, textAlign: TextAlign.center),
+              SelectableText(
+                partyLink,
+                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                  fontFamily: 'monospace',
+                  color: Theme.of(ctx).colorScheme.primary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text('Scan to suggest songs • No sign-in needed', 
+                style: Theme.of(ctx).textTheme.bodySmall, 
+                textAlign: TextAlign.center
+              ),
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   FilledButton.icon(
                     onPressed: () {
-                      Share.share('Try MongoBox: $_appLink', subject: 'MongoBox');
+                      Share.share('🎵 Join my MongoBox party!\n\n$partyLink', subject: 'MongoBox Party');
                       Navigator.of(ctx).pop();
                     },
                     icon: const Icon(Icons.share),
@@ -129,17 +203,41 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
 
   @override
   void dispose() {
+    print('🎪 HOST: Disposing party $_partyId');
+    _queueSubscription?.cancel();
     _searchController.dispose();
     _playerController?.dispose();
     super.dispose();
+  }
+
+  Future<void> _manualRefresh() async {
+    print('🔄 Manual refresh triggered');
+    await _queueService.diagnosticCheck();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Diagnostic check complete - see console'), duration: Duration(seconds: 3)),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Host party'),
-        actions: [IconButton(icon: const Icon(Icons.qr_code_2), onPressed: _showHostPartySheet, tooltip: 'Host a party')],
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Host party'),
+            Text(
+              'ID: $_partyId',
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.normal),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _manualRefresh, tooltip: 'Test connection'),
+          IconButton(icon: const Icon(Icons.qr_code_2), onPressed: _showHostPartySheet, tooltip: 'Host a party'),
+        ],
       ),
       body: Column(
         children: [
@@ -207,7 +305,10 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
                 ),
                 const SizedBox(width: 8),
                 IconButton.filled(
-                  onPressed: _searching ? null : _searchSongs,
+                  onPressed: _searching ? null : () {
+                    print('🔍 [DEBUG] Find & play button pressed');
+                    _searchSongs();
+                  },
                   icon: _searching ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
                 ),
               ],

@@ -21,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _searchController = TextEditingController();
   final String _iframeElement = 'youtube-player-iframe';
   html.IFrameElement? _currentIframe;
+  late String _partyId;
 
   // Use the SAME link as mobile
   static const String _appLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
@@ -28,10 +29,26 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Extract partyId from URL (if this page was opened via QR code)
+    final queryParams = html.window.location.search ?? '';
+    final regex = RegExp(r'partyId=([^&]*)');
+    final match = regex.firstMatch(queryParams);
+    
+    if (match != null && match.group(1)!.isNotEmpty) {
+      // Guest joining via QR code
+      _partyId = match.group(1) ?? 'default_party';
+      print('👥 Web guest joining party: $_partyId');
+    } else {
+      // Host creating new party
+      _partyId = 'party_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
+      print('🎪 Web host creating party: $_partyId');
+    }
+    
     _registerIframeElement();
 
-    // Listen to shared queue
-    SharedQueueService().streamQueue().listen((newQueue) {
+    // Listen to shared queue with party ID
+    SharedQueueService(partyId: _partyId).streamQueue().listen((newQueue) {
       if (mounted) {
         setState(() => queue = newQueue);
       }
@@ -106,18 +123,18 @@ class _HomeScreenState extends State<HomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already in queue')));
       return;
     }
-    await SharedQueueService().addSong(
+    await SharedQueueService(partyId: _partyId).addSong(
       Song(key: '', id: song['id'], title: song['title'], artist: song['artist'], thumbnail: song['thumbnail']),
     );
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
   }
 
   Future<void> removeFromQueue(String key) async {
-    await SharedQueueService().remove(key);
+    await SharedQueueService(partyId: _partyId).remove(key);
   }
 
   Future<void> clearQueue() async {
-    await SharedQueueService().clear();
+    await SharedQueueService(partyId: _partyId).clear();
   }
 
   void _showQRCodeDialog(BuildContext context, String qrData) {
@@ -125,10 +142,21 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Share MongoBox"),
-        content: SizedBox(
-          width: 250,
-          height: 250,
-          child: Center(child: QrImageView(data: qrData, version: QrVersions.auto, size: 200)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Party ID: $_partyId', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: 250,
+                height: 250,
+                child: Center(child: QrImageView(data: qrData, version: QrVersions.auto, size: 200)),
+              ),
+              const SizedBox(height: 12),
+              Text('Link: $qrData', style: const TextStyle(fontSize: 10, color: Colors.grey), textAlign: TextAlign.center),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text("Close")),
@@ -138,7 +166,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _generateQRCode() {
-    _showQRCodeDialog(context, _appLink);
+    // Create shareable link with party ID
+    final partyLink = '$_appLink?partyId=$_partyId';
+    print('🎪 Web host QR link: $partyLink');
+    _showQRCodeDialog(context, partyLink);
   }
 
   @override

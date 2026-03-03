@@ -34,33 +34,44 @@ class YoutubeMobileService {
   /// Search YouTube by query (any language). Returns list of songs for suggestions/queue.
   /// Same API as web; works for Hindi, English, Spanish, etc.
   Future<List<Map<String, dynamic>>> searchSongs(String query) async {
-    if (query.trim().isEmpty) return [];
+    print('🔍 [DEBUG] Original query: "$query"');
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) {
+      print('❌ [DEBUG] Query is empty after trim');
+      return [];
+    }
 
+    // Use the same API key as the web version
+    const webApiKey = 'AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
     final uri = Uri.parse(
-      'https://www.googleapis.com/youtube/v3/search'
-      '?part=snippet&maxResults=10&type=video&key=$youtubeApiKey'
-      '&q=${Uri.encodeQueryComponent(query.trim())}',
+      'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${Uri.encodeQueryComponent(trimmedQuery)}&type=video&key=$webApiKey',
     );
+    print('🔍 [DEBUG] YouTube search URL: $uri');
     final response = await _client.get(uri);
+    print('🔍 [DEBUG] Response status: ${response.statusCode}');
+    print('🔍 [DEBUG] Response body: ${response.body}');
 
-    if (response.statusCode != 200) return [];
+    if (response.statusCode != 200) {
+      print('❌ [DEBUG] Non-200 response: ${response.statusCode}');
+      return [];
+    }
 
     final data = json.decode(response.body) as Map<String, dynamic>?;
     final items = data?['items'] as List<dynamic>?;
-    if (items == null) return [];
+    if (items == null || items.isEmpty) {
+      print('❌ [DEBUG] No items found in response');
+      return [];
+    }
 
-    return items.map((item) {
-      final i = item as Map<String, dynamic>?;
-      final id = i?['id'] as Map<String, dynamic>?;
-      final snippet = i?['snippet'] as Map<String, dynamic>?;
-      final thumbnails = snippet?['thumbnails'] as Map<String, dynamic>?;
-      final def = thumbnails?['default'] as Map<String, dynamic>?;
+    final results = items.map((item) {
       return {
-        'id': id?['videoId'] as String? ?? '',
-        'title': snippet?['title'] as String? ?? 'Unknown',
-        'thumbnail': def?['url'] as String? ?? 'https://via.placeholder.com/60x60',
-        'channel': snippet?['channelTitle'] as String? ?? 'Unknown',
+        'id': item['id']['videoId'],
+        'title': item['snippet']['title'],
+        'thumbnail': item['snippet']['thumbnails']['default']['url'],
+        'artist': item['snippet']['channelTitle'],
       };
-    }).where((m) => (m['id'] as String).isNotEmpty).toList();
+    }).toList();
+    print('✅ [DEBUG] Results found: ${results.length}');
+    return results;
   }
 }
