@@ -27,6 +27,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   LocalSuggestionsService? _suggestions;
   List<String> _recentLines = [];
   List<RecentTrack> _recentTracks = [];
+  List<RecentSearch> _recentSearches = [];
 
   final SpeechToText _speech = SpeechToText();
 
@@ -41,9 +42,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     if (!mounted) return;
     setState(() {
       _suggestions = service;
-      _recentLines = service.getRecentLines();
-      _recentTracks = service.getRecentTracks();
+      _syncRecentFromService();
     });
+  }
+
+  void _syncRecentFromService() {
+    _recentLines = _suggestions?.getRecentLines() ?? [];
+    _recentTracks = _suggestions?.getRecentTracks() ?? [];
+    _recentSearches = _suggestions?.getRecentSearches() ?? [];
   }
 
   @override
@@ -54,15 +60,20 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   }
 
   void _playResult(PlaybackResult result) {
-    _ytController?.dispose();
-    _ytController = YoutubePlayerController(
-      initialVideoId: result.videoId,
-      flags: YoutubePlayerFlags(
-        autoPlay: true,
-        startAt: result.startTimeSeconds,
-        mute: false,
-      ),
-    );
+    if (_ytController == null) {
+      _ytController = YoutubePlayerController(
+        initialVideoId: result.videoId,
+        flags: YoutubePlayerFlags(
+          autoPlay: true,
+          startAt: result.startTimeSeconds,
+          mute: false,
+        ),
+      );
+    } else {
+      // Reuse the existing webview-backed controller to avoid dispose/use-after-dispose races on iOS.
+      _ytController!.load(result.videoId, startAt: result.startTimeSeconds);
+    }
+
     setState(() {
       _nowPlaying = result;
     });
@@ -71,11 +82,17 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       trackName: result.trackName,
       artistName: result.artistName,
       lyricSnippet: _lyricController.text.trim(),
+    ));
+    _suggestions?.addRecentSearch(RecentSearch(
+      query: _lyricController.text.trim(),
+      success: true,
+      searchedAtMs: DateTime.now().millisecondsSinceEpoch,
+      trackName: result.trackName,
+      artistName: result.artistName,
     )).then((_) {
       if (mounted) {
         setState(() {
-          _recentLines = _suggestions?.getRecentLines() ?? [];
-          _recentTracks = _suggestions?.getRecentTracks() ?? [];
+          _syncRecentFromService();
         });
       }
     });
@@ -115,14 +132,24 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   }
 
   Future<void> _onSearch() async {
+    if (_isLoading) return;
+
     final query = _lyricController.text.trim();
     if (query.isEmpty) return;
 
     setState(() => _isLoading = true);
     try {
-      final result = await _playbackService.resolveAndSearch(query);
+      final options = await _playbackService.resolveCandidates(query, limit: 5);
       if (!mounted) return;
-      if (result == null) {
+      if (options.isEmpty) {
+        await _suggestions?.addRecentSearch(RecentSearch(
+          query: query,
+          success: false,
+          searchedAtMs: DateTime.now().millisecondsSinceEpoch,
+        ));
+        if (mounted) {
+          setState(_syncRecentFromService);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No song found for this line. Try another.'),
@@ -130,7 +157,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         );
         return;
       }
-      _playResult(result);
+
+      final selected = await _pickCandidateFromOptions(options);
+      if (!mounted || selected == null) return;
+      _playResult(selected.result);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -155,6 +185,74 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
           onBack: () => Navigator.of(context).pop(),
         ),
       ),
+    );
+  }
+
+  String _formatRecentTime(int epochMs) {
+    if (epochMs <= 0) return 'just now';
+    final dt = DateTime.fromMillisecondsSinceEpoch(epochMs);
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${dt.day}/${dt.month}';
+  }
+
+  Future<PlaybackOption?> _pickCandidateFromOptions(List<PlaybackOption> options) async {
+    if (options.length == 1) return options.first;
+
+    return showModalBottomSheet<PlaybackOption>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  children: [
+                    Text(
+                      'Choose your song',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final option = options[i];
+                    final result = option.result;
+                    final confidencePct = (option.confidence * 100).clamp(0, 100).round();
+                    return ListTile(
+                      dense: true,
+                      leading: CircleAvatar(
+                        radius: 14,
+                        child: Text('${i + 1}', style: theme.textTheme.labelSmall),
+                      ),
+                      title: Text(result.trackName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(
+                        '${result.artistName} • ${result.startTimeSeconds}s • ${option.source} • $confidencePct%',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => Navigator.of(ctx).pop(option),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -342,7 +440,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                         ),
                       ],
                     ),
-                    if (_recentLines.isNotEmpty) ...[
+                  if (_recentLines.isNotEmpty) ...[
                       const SizedBox(height: 24),
                       Text(
                         'Recent lines',
@@ -369,6 +467,54 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                           );
                         }).toList(),
                       ),
+                    ],
+                    if (_recentSearches.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Text(
+                            'Recent searches',
+                            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                                  color: colorScheme.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () async {
+                              await _suggestions?.clearRecentSearches();
+                              if (!mounted) return;
+                              setState(_syncRecentFromService);
+                            },
+                            child: const Text('Clear'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ..._recentSearches.take(6).map((s) => ListTile(
+                        dense: true,
+                        leading: Icon(
+                          s.success ? Icons.check_circle_outline : Icons.search_off,
+                          size: 20,
+                          color: s.success ? colorScheme.primary : colorScheme.error,
+                        ),
+                        title: Text(
+                          s.query,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          s.success
+                              ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
+                              : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () {
+                          _lyricController.text = s.query;
+                          _lyricController.selection = TextSelection.collapsed(offset: s.query.length);
+                        },
+                      )),
                     ],
                     if (_recentTracks.isNotEmpty) ...[
                       const SizedBox(height: 16),
