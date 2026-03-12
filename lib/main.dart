@@ -5,18 +5,18 @@ import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/env_config.dart';
-import 'services/youtube_mobile_service.dart';
-import 'services/youtube_service.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Load environment variables from .env file
-  await EnvConfig.load();
+  // Load environment variables from .env file (best effort)
+  try {
+    await EnvConfig.load();
+  } catch (e) {
+    print('⚠️  Could not load .env file: $e');
+  }
   
-  // Initialize YouTube API key from .env
-  initializeYoutubeApiKey();
-  YouTubeService.initialize();
-  
+  // Initialize Firebase
   if (Firebase.apps.isEmpty) {
    await Firebase.initializeApp(
  name: "MongoBox",

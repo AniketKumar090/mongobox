@@ -6,15 +6,27 @@ import 'env_config.dart';
 
 /// Use API key from .env file for consistency across the app.
 late String youtubeApiKey;
+bool _youtubeInitialized = false;
 
 void initializeYoutubeApiKey() {
+  if (_youtubeInitialized) return;
   try {
     youtubeApiKey = EnvConfig.youtubeApiKey;
+    _youtubeInitialized = true;
     print('✅ YouTube API key initialized');
   } catch (e) {
     print('⚠️  YouTube API key not available. API calls will fail until key is set.');
     youtubeApiKey = '';
+    _youtubeInitialized = true;
   }
+}
+
+// Lazy initialization - only init when first used
+String _getApiKey() {
+  if (!_youtubeInitialized) {
+    initializeYoutubeApiKey();
+  }
+  return youtubeApiKey;
 }
 
 class YoutubeMobileService {
@@ -61,7 +73,7 @@ class YoutubeMobileService {
     if (cached != null) return cached;
 
     final uri = Uri.parse(
-      'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q=${Uri.encodeQueryComponent(trimmedQuery)}&type=video&key=$youtubeApiKey',
+      'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q=${Uri.encodeQueryComponent(trimmedQuery)}&type=video&key=${_getApiKey()}',
     );
 
     try {
@@ -132,7 +144,7 @@ class YoutubeMobileService {
 
     final uri = Uri.parse(
       'https://www.googleapis.com/youtube/v3/videos'
-      '?part=contentDetails&id=${Uri.encodeQueryComponent(ids.join(','))}&key=$youtubeApiKey',
+      '?part=contentDetails&id=${Uri.encodeQueryComponent(ids.join(','))}&key=${_getApiKey()}',
     );
 
     try {
