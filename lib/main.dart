@@ -4,8 +4,18 @@ import 'screens/web/home_screen_web.dart' if (dart.library.io) 'screens/home_scr
 import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'services/env_config.dart';
+import 'services/youtube_mobile_service.dart';
+import 'services/youtube_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Load environment variables from .env file
+  await EnvConfig.load();
+  
+  // Initialize YouTube API key from .env
+  initializeYoutubeApiKey();
+  YouTubeService.initialize();
   
   if (Firebase.apps.isEmpty) {
    await Firebase.initializeApp(

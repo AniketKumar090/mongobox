@@ -6,6 +6,7 @@ import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'dart:async';
 import '../services/shared_queue_service.dart';
 import '../services/youtube_mobile_service.dart';
+import 'package:http/http.dart' as http;
 
 const String _appLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
 
@@ -79,11 +80,114 @@ class _HostPartyScreenState extends State<HostPartyScreen> {
     final q = _searchController.text.trim();
     if (q.isEmpty) return;
     setState(() => _searching = true);
-    final results = await _youtube.searchSongs(q);
-    if (mounted) setState(() {
-      _searchResults = results;
-      _searching = false;
-    });
+    
+    try {
+      final results = await _youtube.searchSongs(q);
+      if (mounted) setState(() {
+        _searchResults = results;
+        _searching = false;
+      });
+    } catch (e) {
+      // Check if it's a quota exceeded error
+      if (e.toString().contains('quota exceeded') || 
+          e.toString().contains('403') || 
+          e.toString().contains('quotaExceeded')) {
+        if (mounted) {
+          setState(() => _searching = false);
+          _showQuotaExceededDialog();
+        }
+      } else {
+        if (mounted) {
+          setState(() => _searching = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  DateTime _getNextQuotaResetTime() {
+    // YouTube quota resets at midnight Pacific Time (PT)
+    final now = DateTime.now();
+    final pacificOffset = Duration(hours: -8); // UTC-8 (Standard Time)
+    
+    final pacificNow = now.add(pacificOffset);
+    var resetTime = DateTime(pacificNow.year, pacificNow.month, pacificNow.day, 0, 0, 0);
+    
+    // If already past midnight PT today, next reset is tomorrow
+    if (pacificNow.isAfter(resetTime)) {
+      resetTime = resetTime.add(Duration(days: 1));
+    }
+    
+    return resetTime.subtract(pacificOffset);
+  }
+
+  void _showQuotaExceededDialog() {
+    final resetTime = _getNextQuotaResetTime();
+    final now = DateTime.now();
+    final duration = resetTime.difference(now);
+    
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes % 60;
+    final seconds = duration.inSeconds % 60;
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.schedule, color: Colors.red),
+        title: const Text('YouTube API Quota Exceeded'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'You\'ve used up today\'s YouTube API quota. The search feature is temporarily unavailable.',
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '⏰ Time Until Reset:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '$hours hour${hours != 1 ? 's' : ''} ${minutes.toString().padLeft(2, '0')} min ${seconds.toString().padLeft(2, '0')} sec',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.deepOrange),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Reset: ${resetTime.toString().split('.')[0]} (PT)',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '💡 Tip: Try again after the quota resets at midnight Pacific Time.',
+              style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _addToQueue(Map<String, dynamic> song) async {

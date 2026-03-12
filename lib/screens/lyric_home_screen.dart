@@ -5,6 +5,8 @@ import 'package:speech_to_text/speech_to_text.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../services/playback_service_mobile.dart';
 import '../services/local_suggestions_service.dart';
+import '../services/youtube_quota_monitor.dart';
+import '../services/lightweight_search_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 
@@ -18,11 +20,14 @@ class LyricHomeScreen extends StatefulWidget {
 class _LyricHomeScreenState extends State<LyricHomeScreen> {
   final _lyricController = TextEditingController();
   final _playbackService = PlaybackServiceMobile();
+  final _quotaMonitor = YouTubeQuotaMonitor();
+  final _lightweightService = LightweightSearchService();
 
   YoutubePlayerController? _ytController;
   PlaybackResult? _nowPlaying;
   bool _isLoading = false;
   bool _isListening = false;
+  bool _isQuotaSavingMode = false;
 
   LocalSuggestionsService? _suggestions;
   List<String> _recentLines = [];
@@ -50,6 +55,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     _recentLines = _suggestions?.getRecentLines() ?? [];
     _recentTracks = _suggestions?.getRecentTracks() ?? [];
     _recentSearches = _suggestions?.getRecentSearches() ?? [];
+    _lightweightService.seedFromRecentTracks(_recentTracks);
   }
 
   @override
@@ -77,11 +83,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     setState(() {
       _nowPlaying = result;
     });
+    _lightweightService.cachePlaybackResult(result, _lyricController.text.trim());
     _suggestions?.addRecentLine(_lyricController.text.trim());
     _suggestions?.addRecentTrack(RecentTrack(
       trackName: result.trackName,
       artistName: result.artistName,
       lyricSnippet: _lyricController.text.trim(),
+      videoId: result.videoId,
+      startTimeSeconds: result.startTimeSeconds,
     ));
     _suggestions?.addRecentSearch(RecentSearch(
       query: _lyricController.text.trim(),
@@ -131,6 +140,88 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     if (mounted) setState(() => _isListening = false);
   }
 
+  void _showQuotaExceededDialog() {
+    final status = _quotaMonitor.getStatus();
+    final timeUntilReset = status.nextResetTime.difference(DateTime.now());
+    final hours = timeUntilReset.inHours;
+    final minutes = timeUntilReset.inMinutes % 60;
+    
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber, color: Theme.of(context).colorScheme.error),
+              const SizedBox(width: 8),
+              const Text('YouTube API Quota Exceeded'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'The daily YouTube API search limit has been reached. Please try again later.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.schedule, color: Theme.of(context).colorScheme.error),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Time until reset:',
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '$hours hours $minutes minutes',
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'Resets at: ${status.nextResetTime.hour.toString().padLeft(2, '0')}:${status.nextResetTime.minute.toString().padLeft(2, '0')}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Usage: ${status.percentageUsed.toStringAsFixed(1)}% of daily quota',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Got it'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _onSearch() async {
     if (_isLoading) return;
 
@@ -139,7 +230,29 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final options = await _playbackService.resolveCandidates(query, limit: 5);
+      List<PlaybackOption> options;
+      
+      if (_isQuotaSavingMode) {
+        // Use lightweight service for quota-saving mode
+        final lightweightResults = await _lightweightService.searchSingleLineLyrics(
+          query,
+          cacheOnly: true,
+        );
+        options = lightweightResults.map((result) => PlaybackOption(
+          result: PlaybackResult(
+            videoId: result.videoId,
+            startTimeSeconds: result.startTimeSeconds,
+            trackName: result.trackName,
+            artistName: result.artistName,
+          ),
+          confidence: result.confidence,
+          source: result.source,
+        )).toList();
+      } else {
+        // Use normal service
+        options = await _playbackService.resolveCandidates(query, limit: 5);
+      }
+      
       if (!mounted) return;
       if (options.isEmpty) {
         await _suggestions?.addRecentSearch(RecentSearch(
@@ -150,10 +263,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         if (mounted) {
           setState(_syncRecentFromService);
         }
+        
+        // Show different message for quota-saving mode
+        final message = _isQuotaSavingMode 
+          ? 'No song found in cache. Try normal mode or different lyrics.'
+          : 'No song found for this line. Try another.';
+          
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No song found for this line. Try another.'),
-          ),
+          SnackBar(content: Text(message)),
         );
         return;
       }
@@ -163,9 +280,16 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       _playResult(selected.result);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        // Check if this is a 403 quota exceeded error
+        if (e.toString().contains('403') || e.toString().contains('quota exceeded')) {
+          _showQuotaExceededDialog();
+          // Auto-switch to quota-saving mode when quota is exceeded
+          setState(() => _isQuotaSavingMode = true);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e')),
+          );
+        }
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -404,6 +528,65 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                       ),
                     ),
                     onSubmitted: (_) => _onSearch(),
+                  ),
+                  const SizedBox(height: 12),
+                  // Quota-saving mode toggle
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _isQuotaSavingMode 
+                        ? colorScheme.primaryContainer.withValues(alpha: 0.3)
+                        : colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _isQuotaSavingMode 
+                          ? colorScheme.primary.withValues(alpha: 0.5)
+                          : colorScheme.outline.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _isQuotaSavingMode ? Icons.eco : Icons.cloud,
+                          color: _isQuotaSavingMode 
+                            ? colorScheme.primary 
+                            : colorScheme.onSurfaceVariant,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Quota-Saving Mode',
+                                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: _isQuotaSavingMode 
+                                    ? colorScheme.primary 
+                                    : colorScheme.onSurface,
+                                ),
+                              ),
+                              Text(
+                                _isQuotaSavingMode 
+                                  ? 'Uses cached results • Saves API quota'
+                                  : 'Full search • Higher accuracy',
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Switch(
+                          value: _isQuotaSavingMode,
+                          onChanged: (value) {
+                            setState(() => _isQuotaSavingMode = value);
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                     const SizedBox(height: 12),
                     Row(

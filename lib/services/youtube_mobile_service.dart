@@ -2,9 +2,14 @@
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'env_config.dart';
 
-/// Reuse the same key as web jukebox for consistency.
-const String youtubeApiKey = 'AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
+/// Use API key from .env file for consistency across the app.
+late String youtubeApiKey;
+
+void initializeYoutubeApiKey() {
+  youtubeApiKey = EnvConfig.youtubeApiKey;
+}
 
 class YoutubeMobileService {
   final http.Client _client = http.Client();
@@ -55,6 +60,10 @@ class YoutubeMobileService {
 
     try {
       final response = await _client.get(uri).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 403) {
+        // Quota exceeded - throw exception to show user-friendly error
+        throw Exception('YouTube API quota exceeded: ${response.body}');
+      }
       if (response.statusCode != 200) {
         _searchCache[cacheKey] = const [];
         return const [];

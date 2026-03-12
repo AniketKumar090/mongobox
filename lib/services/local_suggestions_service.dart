@@ -15,16 +15,22 @@ class RecentTrack {
     required this.trackName,
     required this.artistName,
     required this.lyricSnippet,
+    this.videoId,
+    this.startTimeSeconds,
   });
 
   final String trackName;
   final String artistName;
   final String lyricSnippet;
+  final String? videoId;
+  final int? startTimeSeconds;
 
   Map<String, dynamic> toJson() => {
         'trackName': trackName,
         'artistName': artistName,
         'lyricSnippet': lyricSnippet,
+        'videoId': videoId,
+        'startTimeSeconds': startTimeSeconds,
       };
 
   static RecentTrack? fromJson(Map<String, dynamic>? m) {
@@ -37,6 +43,8 @@ class RecentTrack {
       trackName: track,
       artistName: artist,
       lyricSnippet: snippet ?? '',
+      videoId: m['videoId'] as String?,
+      startTimeSeconds: (m['startTimeSeconds'] as num?)?.toInt(),
     );
   }
 }
