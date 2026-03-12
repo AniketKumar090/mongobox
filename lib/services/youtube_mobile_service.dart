@@ -8,7 +8,13 @@ import 'env_config.dart';
 late String youtubeApiKey;
 
 void initializeYoutubeApiKey() {
-  youtubeApiKey = EnvConfig.youtubeApiKey;
+  try {
+    youtubeApiKey = EnvConfig.youtubeApiKey;
+    print('✅ YouTube API key initialized');
+  } catch (e) {
+    print('⚠️  YouTube API key not available. API calls will fail until key is set.');
+    youtubeApiKey = '';
+  }
 }
 
 class YoutubeMobileService {

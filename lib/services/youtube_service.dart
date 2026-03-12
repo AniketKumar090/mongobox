@@ -7,7 +7,13 @@ class YouTubeService {
   static const _baseUrl = 'https://www.googleapis.com/youtube/v3';
 
   static void initialize() {
-    _apiKey = EnvConfig.youtubeApiKey;
+    try {
+      _apiKey = EnvConfig.youtubeApiKey;
+      print('✅ YouTube Service initialized');
+    } catch (e) {
+      print('⚠️  YouTube Service: API key not available');
+      _apiKey = '';
+    }
   }
 
   Future<List<Map<String, dynamic>>> searchSongs(String query) async {
