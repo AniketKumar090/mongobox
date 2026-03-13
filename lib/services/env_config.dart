@@ -2,6 +2,18 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class EnvConfig {
   static bool _initialized = false;
+
+  static String _clean(String? value) {
+    var v = (value ?? '').trim();
+    if (v.length >= 2) {
+      final first = v[0];
+      final last = v[v.length - 1];
+      if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+        v = v.substring(1, v.length - 1).trim();
+      }
+    }
+    return v;
+  }
   
   static Future<void> load() async {
     if (_initialized) return;
@@ -37,6 +49,29 @@ class EnvConfig {
     throw Exception(
       'YOUTUBE_API_KEY not found. '
       'Set in .env file locally or as YOUTUBE_API_KEY environment variable'
+    );
+  }
+
+  static String get anthropicApiKey {
+    // Try .env file first
+    try {
+      final envFileKey = _clean(dotenv.env['ANTHROPIC_API_KEY']);
+      if (envFileKey.isNotEmpty) {
+        return envFileKey;
+      }
+    } catch (e) {
+      print('⚠️  Error reading ANTHROPIC_API_KEY from .env: $e');
+    }
+
+    // Try compile-time environment (e.g. `--dart-define=ANTHROPIC_API_KEY=...`)
+    final envVarKey = _clean(const String.fromEnvironment('ANTHROPIC_API_KEY'));
+    if (envVarKey.isNotEmpty) {
+      return envVarKey;
+    }
+
+    throw Exception(
+      'ANTHROPIC_API_KEY not found. '
+      'Set in .env locally or pass via --dart-define=ANTHROPIC_API_KEY=...'
     );
   }
 }

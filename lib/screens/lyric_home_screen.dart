@@ -9,6 +9,7 @@ import '../services/youtube_quota_monitor.dart';
 import '../services/lightweight_search_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
+import '../screens/ generate_song_screen.dart'; // ← NEW
 
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
@@ -76,7 +77,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         ),
       );
     } else {
-      // Reuse the existing webview-backed controller to avoid dispose/use-after-dispose races on iOS.
       _ytController!.load(result.videoId, startAt: result.startTimeSeconds);
     }
 
@@ -126,7 +126,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       onResult: (result) {
         if (mounted && result.finalResult) {
           _lyricController.text = result.recognizedWords;
-          _lyricController.selection = TextSelection.collapsed(offset: _lyricController.text.length);
+          _lyricController.selection =
+              TextSelection.collapsed(offset: _lyricController.text.length);
         }
       },
       listenFor: const Duration(seconds: 15),
@@ -145,7 +146,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     final timeUntilReset = status.nextResetTime.difference(DateTime.now());
     final hours = timeUntilReset.inHours;
     final minutes = timeUntilReset.inMinutes % 60;
-    
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -169,7 +170,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.3),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .errorContainer
+                      .withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -177,13 +181,15 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.schedule, color: Theme.of(context).colorScheme.error),
+                        Icon(Icons.schedule,
+                            color: Theme.of(context).colorScheme.error),
                         const SizedBox(width: 8),
                         Text(
                           'Time until reset:',
-                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -191,9 +197,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                     Text(
                       '$hours hours $minutes minutes',
                       style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.error,
-                        fontWeight: FontWeight.bold,
-                      ),
+                            color: Theme.of(context).colorScheme.error,
+                            fontWeight: FontWeight.bold,
+                          ),
                     ),
                     Text(
                       'Resets at: ${status.nextResetTime.hour.toString().padLeft(2, '0')}:${status.nextResetTime.minute.toString().padLeft(2, '0')}',
@@ -206,8 +212,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
               Text(
                 'Usage: ${status.percentageUsed.toStringAsFixed(1)}% of daily quota',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ],
           ),
@@ -231,28 +237,28 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     setState(() => _isLoading = true);
     try {
       List<PlaybackOption> options;
-      
+
       if (_isQuotaSavingMode) {
-        // Use lightweight service for quota-saving mode
         final lightweightResults = await _lightweightService.searchSingleLineLyrics(
           query,
           cacheOnly: true,
         );
-        options = lightweightResults.map((result) => PlaybackOption(
-          result: PlaybackResult(
-            videoId: result.videoId,
-            startTimeSeconds: result.startTimeSeconds,
-            trackName: result.trackName,
-            artistName: result.artistName,
-          ),
-          confidence: result.confidence,
-          source: result.source,
-        )).toList();
+        options = lightweightResults
+            .map((result) => PlaybackOption(
+                  result: PlaybackResult(
+                    videoId: result.videoId,
+                    startTimeSeconds: result.startTimeSeconds,
+                    trackName: result.trackName,
+                    artistName: result.artistName,
+                  ),
+                  confidence: result.confidence,
+                  source: result.source,
+                ))
+            .toList();
       } else {
-        // Use normal service
         options = await _playbackService.resolveCandidates(query, limit: 5);
       }
-      
+
       if (!mounted) return;
       if (options.isEmpty) {
         await _suggestions?.addRecentSearch(RecentSearch(
@@ -260,18 +266,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
           success: false,
           searchedAtMs: DateTime.now().millisecondsSinceEpoch,
         ));
-        if (mounted) {
-          setState(_syncRecentFromService);
-        }
-        
-        // Show different message for quota-saving mode
-        final message = _isQuotaSavingMode 
-          ? 'No song found in cache. Try normal mode or different lyrics.'
-          : 'No song found for this line. Try another.';
-          
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        if (mounted) setState(_syncRecentFromService);
+
+        final message = _isQuotaSavingMode
+            ? 'No song found in cache. Try normal mode or different lyrics.'
+            : 'No song found for this line. Try another.';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
         return;
       }
 
@@ -280,15 +281,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       _playResult(selected.result);
     } catch (e) {
       if (mounted) {
-        // Check if this is a 403 quota exceeded error
-        if (e.toString().contains('403') || e.toString().contains('quota exceeded')) {
+        if (e.toString().contains('403') ||
+            e.toString().contains('quota exceeded')) {
           _showQuotaExceededDialog();
-          // Auto-switch to quota-saving mode when quota is exceeded
           setState(() => _isQuotaSavingMode = true);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e')),
-          );
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Error: $e')));
         }
       }
     } finally {
@@ -312,6 +311,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     );
   }
 
+  // ── NEW ──────────────────────────────────────────────────────────────────────
+  void _openGenerateSong() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const GenerateSongScreen()),
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   String _formatRecentTime(int epochMs) {
     if (epochMs <= 0) return 'just now';
     final dt = DateTime.fromMillisecondsSinceEpoch(epochMs);
@@ -323,7 +330,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     return '${dt.day}/${dt.month}';
   }
 
-  Future<PlaybackOption?> _pickCandidateFromOptions(List<PlaybackOption> options) async {
+  Future<PlaybackOption?> _pickCandidateFromOptions(
+      List<PlaybackOption> options) async {
     if (options.length == 1) return options.first;
 
     return showModalBottomSheet<PlaybackOption>(
@@ -341,7 +349,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                   children: [
                     Text(
                       'Choose your song',
-                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
@@ -354,14 +363,17 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                   itemBuilder: (_, i) {
                     final option = options[i];
                     final result = option.result;
-                    final confidencePct = (option.confidence * 100).clamp(0, 100).round();
+                    final confidencePct =
+                        (option.confidence * 100).clamp(0, 100).round();
                     return ListTile(
                       dense: true,
                       leading: CircleAvatar(
                         radius: 14,
-                        child: Text('${i + 1}', style: theme.textTheme.labelSmall),
+                        child: Text('${i + 1}',
+                            style: theme.textTheme.labelSmall),
                       ),
-                      title: Text(result.trackName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      title: Text(result.trackName,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
                       subtitle: Text(
                         '${result.artistName} • ${result.startTimeSeconds}s • ${option.source} • $confidencePct%',
                         maxLines: 1,
@@ -413,21 +425,31 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const SizedBox(height: 8),
+
+                  // Host party card
                   InkWell(
                     onTap: _openHostParty,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.5),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primaryContainer
+                            .withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.3),
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.party_mode, color: Theme.of(context).colorScheme.primary),
+                          Icon(Icons.party_mode,
+                              color: Theme.of(context).colorScheme.primary),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
@@ -436,41 +458,65 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                               children: [
                                 Text(
                                   'Host a party',
-                                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(
                                         fontWeight: FontWeight.bold,
-                                        color: Theme.of(context).colorScheme.onSurface,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
                                       ),
                                 ),
                                 Text(
                                   'Share a QR or link • Guests add songs to your queue',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
                                       ),
                                 ),
                               ],
                             ),
                           ),
-                          Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          Icon(Icons.chevron_right,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
                         ],
                       ),
                     ),
                   ),
+
                   const SizedBox(height: 12),
+
+                  // Join party card
                   InkWell(
                     onTap: _openJoinParty,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .secondaryContainer
+                            .withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Theme.of(context).colorScheme.secondary.withValues(alpha: 0.3),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .secondary
+                              .withValues(alpha: 0.3),
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.person_add, color: Theme.of(context).colorScheme.secondary),
+                          Icon(Icons.person_add,
+                              color: Theme.of(context).colorScheme.secondary),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
@@ -479,25 +525,123 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                               children: [
                                 Text(
                                   'Join a party',
-                                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(
                                         fontWeight: FontWeight.bold,
-                                        color: Theme.of(context).colorScheme.onSurface,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
                                       ),
                                 ),
                                 Text(
                                   'Enter your name and add songs to the queue',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
                                       ),
                                 ),
                               ],
                             ),
                           ),
-                          Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          Icon(Icons.chevron_right,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
                         ],
                       ),
                     ),
                   ),
+
+                  const SizedBox(height: 12),
+
+                  // ── AI GENERATE SONG BANNER ─────────────────────────────────
+                  InkWell(
+                    onTap: _openGenerateSong,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            colorScheme.primary,
+                            colorScheme.tertiary.withValues(alpha: 0.85),
+                          ],
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: colorScheme.primary.withValues(alpha: 0.35),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 18),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.auto_awesome,
+                                color: Colors.white,
+                                size: 26,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Generate My Song',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'AI writes original lyrics based on your taste',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.85),
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(
+                              Icons.arrow_forward_ios_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // ───────────────────────────────────────────────────────────
+
                   const SizedBox(height: 20),
                   Text(
                     'Enter a line of lyrics',
@@ -514,43 +658,49 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                     style: TextStyle(color: colorScheme.onSurface),
                     decoration: InputDecoration(
                       hintText: 'e.g. Hello from the other side',
-                      hintStyle: TextStyle(color: colorScheme.onSurface.withValues(alpha: 0.6)),
-                      prefixIcon: Icon(Icons.music_note_outlined, color: colorScheme.primary),
+                      hintStyle: TextStyle(
+                          color: colorScheme.onSurface.withValues(alpha: 0.6)),
+                      prefixIcon: Icon(Icons.music_note_outlined,
+                          color: colorScheme.primary),
                       filled: true,
                       fillColor: colorScheme.surfaceContainerHighest,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: colorScheme.outline),
+                        borderSide:
+                            BorderSide(color: colorScheme.outline),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: colorScheme.outline.withValues(alpha: 0.5)),
+                        borderSide: BorderSide(
+                            color: colorScheme.outline.withValues(alpha: 0.5)),
                       ),
                     ),
                     onSubmitted: (_) => _onSearch(),
                   ),
                   const SizedBox(height: 12),
+
                   // Quota-saving mode toggle
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: _isQuotaSavingMode 
-                        ? colorScheme.primaryContainer.withValues(alpha: 0.3)
-                        : colorScheme.surfaceContainerHighest,
+                      color: _isQuotaSavingMode
+                          ? colorScheme.primaryContainer.withValues(alpha: 0.3)
+                          : colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: _isQuotaSavingMode 
-                          ? colorScheme.primary.withValues(alpha: 0.5)
-                          : colorScheme.outline.withValues(alpha: 0.2),
+                        color: _isQuotaSavingMode
+                            ? colorScheme.primary.withValues(alpha: 0.5)
+                            : colorScheme.outline.withValues(alpha: 0.2),
                       ),
                     ),
                     child: Row(
                       children: [
                         Icon(
                           _isQuotaSavingMode ? Icons.eco : Icons.cloud,
-                          color: _isQuotaSavingMode 
-                            ? colorScheme.primary 
-                            : colorScheme.onSurfaceVariant,
+                          color: _isQuotaSavingMode
+                              ? colorScheme.primary
+                              : colorScheme.onSurfaceVariant,
                           size: 20,
                         ),
                         const SizedBox(width: 12),
@@ -561,182 +711,209 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                             children: [
                               Text(
                                 'Quota-Saving Mode',
-                                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: _isQuotaSavingMode 
-                                    ? colorScheme.primary 
-                                    : colorScheme.onSurface,
-                                ),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: _isQuotaSavingMode
+                                          ? colorScheme.primary
+                                          : colorScheme.onSurface,
+                                    ),
                               ),
                               Text(
-                                _isQuotaSavingMode 
-                                  ? 'Uses cached results • Saves API quota'
-                                  : 'Full search • Higher accuracy',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
+                                _isQuotaSavingMode
+                                    ? 'Uses cached results • Saves API quota'
+                                    : 'Full search • Higher accuracy',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                        color: colorScheme.onSurfaceVariant),
                               ),
                             ],
                           ),
                         ),
                         Switch(
                           value: _isQuotaSavingMode,
-                          onChanged: (value) {
-                            setState(() => _isQuotaSavingMode = value);
-                          },
+                          onChanged: (value) =>
+                              setState(() => _isQuotaSavingMode = value),
                         ),
                       ],
                     ),
                   ),
-                    const SizedBox(height: 12),
+
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _isLoading ? null : _onSearch,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Icon(Icons.search),
+                          label:
+                              Text(_isLoading ? 'Finding…' : 'Find & play'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton.filled(
+                        onPressed: _isLoading
+                            ? null
+                            : () {
+                                if (_isListening) {
+                                  _stopListening();
+                                } else {
+                                  _startListening();
+                                }
+                              },
+                        icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
+                        tooltip:
+                            _isListening ? 'Stop listening' : 'Speak lyrics',
+                      ),
+                    ],
+                  ),
+
+                  if (_recentLines.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    Text(
+                      'Recent lines',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: colorScheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _recentLines.take(10).map((line) {
+                        return ActionChip(
+                          label: Text(
+                            line.length > 40
+                                ? '${line.substring(0, 40)}…'
+                                : line,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                          onPressed: () {
+                            _lyricController.text = line;
+                            _lyricController.selection =
+                                TextSelection.collapsed(offset: line.length);
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ],
+
+                  if (_recentSearches.isNotEmpty) ...[
+                    const SizedBox(height: 16),
                     Row(
                       children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: _isLoading ? null : () {
-                              print('🔍 [DEBUG] Find & play button pressed (Lyric Home Screen)');
-                              _onSearch();
-                            },
-                            icon: _isLoading
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.search),
-                            label: Text(_isLoading ? 'Finding…' : 'Find & play'),
-                          ),
+                        Text(
+                          'Recent searches',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelLarge
+                              ?.copyWith(
+                                color: colorScheme.onSurface,
+                                fontWeight: FontWeight.w600,
+                              ),
                         ),
-                        const SizedBox(width: 12),
-                        IconButton.filled(
-                          onPressed: _isLoading
-                              ? null
-                              : () {
-                                  if (_isListening) {
-                                    _stopListening();
-                                  } else {
-                                    _startListening();
-                                  }
-                                },
-                          icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
-                          tooltip: _isListening ? 'Stop listening' : 'Speak lyrics',
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () async {
+                            await _suggestions?.clearRecentSearches();
+                            if (!mounted) return;
+                            setState(_syncRecentFromService);
+                          },
+                          child: const Text('Clear'),
                         ),
                       ],
                     ),
-                  if (_recentLines.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      Text(
-                        'Recent lines',
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              color: colorScheme.onSurface,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _recentLines.take(10).map((line) {
-                          return ActionChip(
-                            label: Text(
-                              line.length > 40 ? '${line.substring(0, 40)}…' : line,
-                              overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 8),
+                    ..._recentSearches.take(6).map((s) => ListTile(
+                          dense: true,
+                          leading: Icon(
+                            s.success
+                                ? Icons.check_circle_outline
+                                : Icons.search_off,
+                            size: 20,
+                            color: s.success
+                                ? colorScheme.primary
+                                : colorScheme.error,
+                          ),
+                          title: Text(s.query,
                               maxLines: 1,
-                            ),
-                            onPressed: () {
-                              _lyricController.text = line;
-                              _lyricController.selection = TextSelection.collapsed(offset: line.length);
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                    if (_recentSearches.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Text(
-                            'Recent searches',
-                            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                  color: colorScheme.onSurface,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                            s.success
+                                ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
+                                : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const Spacer(),
-                          TextButton(
-                            onPressed: () async {
-                              await _suggestions?.clearRecentSearches();
-                              if (!mounted) return;
-                              setState(_syncRecentFromService);
-                            },
-                            child: const Text('Clear'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ..._recentSearches.take(6).map((s) => ListTile(
-                        dense: true,
-                        leading: Icon(
-                          s.success ? Icons.check_circle_outline : Icons.search_off,
-                          size: 20,
-                          color: s.success ? colorScheme.primary : colorScheme.error,
-                        ),
-                        title: Text(
-                          s.query,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          s.success
-                              ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
-                              : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () {
-                          _lyricController.text = s.query;
-                          _lyricController.selection = TextSelection.collapsed(offset: s.query.length);
-                        },
-                      )),
-                    ],
-                    if (_recentTracks.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Recent tracks',
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              color: colorScheme.onSurface,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      ..._recentTracks.take(5).map((t) => ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.history),
-                        title: Text(t.trackName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(t.artistName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        onTap: () {
-                          _lyricController.text = t.lyricSnippet.isNotEmpty ? t.lyricSnippet : '${t.trackName} ${t.artistName}';
-                          _lyricController.selection = TextSelection.collapsed(offset: _lyricController.text.length);
-                        },
-                      )),
-                    ],
-                    if (_nowPlaying != null) ...[
-                      const SizedBox(height: 24),
-                      _NowPlayingStrip(result: _nowPlaying!),
-                    ],
-                    if (_ytController != null) ...[
-                      const SizedBox(height: 16),
-                      AspectRatio(
-                        aspectRatio: 16 / 9,
-                        child: YoutubePlayer(
-                          controller: _ytController!,
-                          showVideoProgressIndicator: true,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 32),
+                          onTap: () {
+                            _lyricController.text = s.query;
+                            _lyricController.selection =
+                                TextSelection.collapsed(
+                                    offset: s.query.length);
+                          },
+                        )),
                   ],
-                ),
+
+                  if (_recentTracks.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      'Recent tracks',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: colorScheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._recentTracks.take(5).map((t) => ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.history),
+                          title: Text(t.trackName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text(t.artistName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          onTap: () {
+                            _lyricController.text = t.lyricSnippet.isNotEmpty
+                                ? t.lyricSnippet
+                                : '${t.trackName} ${t.artistName}';
+                            _lyricController.selection =
+                                TextSelection.collapsed(
+                                    offset: _lyricController.text.length);
+                          },
+                        )),
+                  ],
+
+                  if (_nowPlaying != null) ...[
+                    const SizedBox(height: 24),
+                    _NowPlayingStrip(result: _nowPlaying!),
+                  ],
+                  if (_ytController != null) ...[
+                    const SizedBox(height: 16),
+                    AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: YoutubePlayer(
+                        controller: _ytController!,
+                        showVideoProgressIndicator: true,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 32),
+                ],
+              ),
             );
           },
         ),
@@ -760,10 +937,8 @@ class _NowPlayingStrip extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.music_note,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          Icon(Icons.music_note,
+              color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -779,7 +954,9 @@ class _NowPlayingStrip extends StatelessWidget {
                 Text(
                   result.artistName,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant,
                       ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

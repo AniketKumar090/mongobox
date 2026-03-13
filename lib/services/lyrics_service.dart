@@ -1,7 +1,9 @@
 // LRCLIB API client: search by lyric line, parse synced lyrics for timestamp.
+// + Claude AI: generate unique personal song lyrics from user's listening history.
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'env_config.dart';
 
 const _baseUrl = 'https://lrclib.net';
 const _defaultHeaders = {'User-Agent': 'MongoBox LyricPlay/1.0'};
@@ -40,10 +42,174 @@ class LyricPlayResult {
   final String? syncedLyrics;
 }
 
+/// Result from AI personal song generation.
+class PersonalSongResult {
+  const PersonalSongResult({
+    required this.songTitle,
+    required this.lyrics,
+    required this.inferredMood,
+    required this.inferredGenre,
+  });
+
+  final String songTitle;     // e.g. "Midnight Signal"
+  final String lyrics;        // full [Verse]/[Chorus]/[Bridge] text
+  final String inferredMood;  // e.g. "melancholic"
+  final String inferredGenre; // e.g. "Indie pop / Synth-pop"
+
+  String get fullText => '"$songTitle"\n\n$lyrics';
+}
+
 class LyricsService {
   final http.Client _client = http.Client();
   final Map<String, List<LyricsMatch>> _searchCache = {};
   final Map<int, LyricsMatch?> _idCache = {};
+
+  String _readAnthropicKey() {
+    // Centralized key loading + sanitization.
+    return EnvConfig.anthropicApiKey;
+  }
+
+  String _anthropicErrorFor(http.Response response) {
+    // Prefer the server-provided message, but keep it short and user-actionable.
+    try {
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final err = data['error'];
+      if (err is Map<String, dynamic>) {
+        final message = (err['message'] as String?)?.trim();
+        final type = (err['type'] as String?)?.trim();
+        if (message != null && message.isNotEmpty) {
+          return message;
+        }
+        if (type != null && type.isNotEmpty) {
+          return type;
+        }
+      }
+    } catch (_) {
+      // ignore parse failures; we fall back below
+    }
+    return 'Request failed (${response.statusCode}).';
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // AI PERSONAL SONG GENERATION
+  // Reads user's RecentTrack history → infers taste → writes original lyrics
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /// Generates a unique song based purely on the user's personal listening history.
+  ///
+  /// Usage:
+  /// ```dart
+  /// final suggestions = await LocalSuggestionsService.create();
+  /// final tracks = suggestions.getRecentTracks();
+  /// final song = await lyricsService.generatePersonalSong(tracks);
+  /// print(song?.songTitle);  // "Midnight Signal"
+  /// print(song?.lyrics);     // full structured lyrics
+  /// ```
+  Future<PersonalSongResult?> generatePersonalSong(
+    List<dynamic> recentTracks, {
+    int maxTracks = 20,
+  }) async {
+    final apiKey = _readAnthropicKey();
+
+    final trackLines = <String>[];
+    for (final t in recentTracks.take(maxTracks)) {
+      try {
+        final name = (t as dynamic).trackName as String? ?? '';
+        final artist = (t as dynamic).artistName as String? ?? '';
+        if (name.isNotEmpty) {
+          trackLines.add(artist.isNotEmpty ? '$name – $artist' : name);
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    if (trackLines.isEmpty) return null;
+
+    final prompt = '''
+You are a songwriter. Study the listening history below to understand this person's musical taste — their preferred genres, moods, lyrical themes, and energy levels.
+
+Listening history:
+${trackLines.map((t) => '• $t').join('\n')}
+
+Your task: Write a brand-new, completely original song that fits naturally into their taste.
+
+Rules:
+- Do NOT reference, mention, or quote any of the songs or artists above.
+- Write as if you are a new artist making music in the same world as what they love.
+- Structure: [Verse 1], [Chorus], [Verse 2], [Bridge], [Outro]
+- Make lyrics specific, emotional, and vivid — no generic filler lines.
+- Title should be 2–4 words, evocative, not cliché.
+
+Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
+{
+  "title": "Song Title Here",
+  "mood": "single word",
+  "genre": "Genre / Sub-genre",
+  "lyrics": "[Verse 1]\\nline\\nline\\n\\n[Chorus]\\nline\\nline\\n\\n[Verse 2]\\nline\\nline\\n\\n[Bridge]\\nline\\nline\\n\\n[Outro]\\nline\\nline"
+}''';
+
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('https://api.anthropic.com/v1/messages'),
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+            },
+            body: json.encode({
+              'model': 'claude-sonnet-4-20250514',
+              'max_tokens': 1024,
+              'messages': [
+                {'role': 'user', 'content': prompt},
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          throw Exception(
+            '[LyricQsk] Claude authentication failed. '
+            'Check ANTHROPIC_API_KEY in your .env (or --dart-define).',
+          );
+        }
+        throw Exception(
+          '[LyricQsk] Claude API error ${response.statusCode}: ${_anthropicErrorFor(response)}',
+        );
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+
+      final rawText = (data['content'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .where((b) => b['type'] == 'text')
+              .map((b) => b['text'] as String)
+              .join('') ??
+          '';
+
+      final cleanJson = rawText
+          .replaceAll(RegExp(r'```json\s*'), '')
+          .replaceAll(RegExp(r'```\s*'), '')
+          .trim();
+
+      final parsed = json.decode(cleanJson) as Map<String, dynamic>;
+
+      return PersonalSongResult(
+        songTitle: (parsed['title'] as String?) ?? 'Untitled',
+        lyrics: (parsed['lyrics'] as String?) ?? '',
+        inferredMood: (parsed['mood'] as String?) ?? '',
+        inferredGenre: (parsed['genre'] as String?) ?? '',
+      );
+    } on FormatException catch (e) {
+      throw Exception('[LyricQsk] Failed to parse Claude response: $e');
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // EXISTING LRCLIB METHODS — completely unchanged below
+  // ───────────────────────────────────────────────────────────────────────────
 
   /// Search LRCLIB by keyword (e.g. a line of lyrics). Returns up to 20 matches.
   Future<List<LyricsMatch>> search(String query) async {

@@ -12,6 +12,7 @@ void main() async {
   // Load environment variables from .env file (best effort)
   try {
     await EnvConfig.load();
+    print('🔑 KEY LOADED: ${EnvConfig.anthropicApiKey}');
   } catch (e) {
     print('⚠️  Could not load .env file: $e');
   }
