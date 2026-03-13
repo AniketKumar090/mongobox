@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="1120" viewBox="0 0 520 1120" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2c3e50"/>
+    </marker>
+    <style>
+      .node { fill:#ecf0f1; stroke:#2c3e50; stroke-width:1.5; rx:6; ry:6; }
+      .diamond { fill:#fdf6e3; stroke:#b8860b; stroke-width:1.6; }
+      .ellipse { fill:#e8f6ff; stroke:#2980b9; stroke-width:1.5; }
+      .text { font-size:12px; fill:#2c3e50; text-anchor:middle; dominant-baseline:middle; }
+      .line { stroke:#2c3e50; stroke-width:1.4; marker-end:url(#arrow); fill:none; }
+    </style>
+  </defs>
+
+  <!-- Start -->
+  <ellipse class="ellipse" cx="220" cy="50" rx="70" ry="24"/>
+  <text class="text" x="220" y="50">Open LyricQsk</text>
+
+  <!-- QR decision -->
+  <path class="diamond" d="M220 90 L290 120 L220 150 L150 120 Z"/>
+  <text class="text" x="220" y="120">Scan/enter party QR?</text>
+
+  <!-- Join party -->
+  <rect class="node" x="45" y="185" width="150" height="50"/>
+  <text class="text" x="120" y="210">Join party session</text>
+
+  <!-- Create party -->
+  <rect class="node" x="320" y="185" width="170" height="50"/>
+  <text class="text" x="405" y="210">Create party &amp; display QR</text>
+
+  <!-- Party dashboard -->
+  <rect class="node" x="145" y="270" width="200" height="60"/>
+  <text class="text" x="245" y="300">Party dashboard</text>
+
+  <!-- Add music decision -->
+  <path class="diamond" d="M245 340 L315 380 L245 420 L175 380 Z"/>
+  <text class="text" x="245" y="380">Add music?</text>
+
+  <!-- Lyric-line search -->
+  <rect class="node" x="15" y="445" width="150" height="50"/>
+  <text class="text" x="90" y="470">Lyric-line search</text>
+
+  <!-- Recent plays -->
+  <rect class="node" x="170" y="445" width="150" height="50"/>
+  <text class="text" x="245" y="470">Recent plays (quota-saving)</text>
+
+  <!-- Switch party -->
+  <rect class="node" x="325" y="445" width="150" height="50"/>
+  <text class="text" x="400" y="470">Switch party via QR/ID</text>
+
+  <!-- Add to queue -->
+  <rect class="node" x="160" y="535" width="170" height="50"/>
+  <text class="text" x="245" y="560">Add to shared queue</text>
+
+  <!-- Playback -->
+  <rect class="node" x="140" y="615" width="210" height="50"/>
+  <text class="text" x="245" y="640">Playback host streams track</text>
+
+  <!-- Metadata -->
+  <rect class="node" x="150" y="695" width="190" height="50"/>
+  <text class="text" x="245" y="720">Capture play metadata</text>
+
+  <!-- Generate lyrics decision -->
+  <path class="diamond" d="M245 755 L320 795 L245 835 L170 795 Z"/>
+  <text class="text" x="245" y="795">Generate custom lyrics?</text>
+
+  <!-- API call -->
+  <rect class="node" x="140" y="845" width="210" height="50"/>
+  <text class="text" x="245" y="870">Call free Suno-like lyric API</text>
+
+  <!-- Return lyrics -->
+  <rect class="node" x="150" y="915" width="190" height="50"/>
+  <text class="text" x="245" y="940">Return unique lyrics</text>
+
+  <!-- Display lyrics -->
+  <rect class="node" x="125" y="995" width="240" height="50"/>
+  <text class="text" x="245" y="1020">Display / share lyrics in party view</text>
+
+  <!-- Lines -->
+  <line class="line" x1="220" y1="74" x2="220" y2="90"/>
+  <line class="line" x1="220" y1="150" x2="120" y2="185"/>
+  <line class="line" x1="220" y1="150" x2="405" y2="185"/>
+  <line class="line" x1="120" y1="235" x2="195" y2="270"/>
+  <line class="line" x1="405" y1="235" x2="295" y2="270"/>
+  <line class="line" x1="245" y1="330" x2="245" y2="340"/>
+  <line class="line" x1="245" y1="420" x2="90" y2="445"/>
+  <line class="line" x1="245" y1="420" x2="245" y2="445"/>
+  <line class="line" x1="245" y1="420" x2="400" y2="445"/>
+  <line class="line" x1="90" y1="495" x2="245" y2="535"/>
+  <line class="line" x1="245" y1="495" x2="245" y2="535"/>
+  <polyline class="line" points="400,495 400,525 240,525 240,150"/>
+  <line class="line" x1="245" y1="585" x2="245" y2="615"/>
+  <line class="line" x1="245" y1="665" x2="245" y2="695"/>
+  <line class="line" x1="245" y1="745" x2="245" y2="755"/>
+  <line class="line" x1="245" y1="835" x2="245" y2="845"/>
+  <line class="line" x1="245" y1="895" x2="245" y2="915"/>
+  <line class="line" x1="245" y1="965" x2="245" y2="995"/>
+  <polyline class="line" points="245,1045 245,1075 245,1075 245,330"/>
+
+  <!-- No path for skipping lyrics generation -->
+  <polyline class="line" points="170,795 120,795 120,330 245,330" />
+</svg>

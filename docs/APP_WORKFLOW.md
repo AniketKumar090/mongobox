@@ -1,12 +1,12 @@
-# MongoBox App Workflow
+# LyricQsk App Workflow
 
-This document explains how MongoBox works end-to-end, including startup, feature flows, data flow, and where each part lives in code.
+This document explains how LyricQsk works end-to-end, including startup, feature flows, data flow, and where each part lives in code.
 
 ## 1. High-level architecture
 
-MongoBox is a Flutter app with two primary runtime modes:
+LyricQsk is a Flutter app with two primary runtime modes:
 
-- Mobile (`kIsWeb == false`): lyric-based playback + party host/guest flow.
+- Mobile (`kIsWeb == false`): lyric-based playback + party host/guest flow with lyrics generation.
 - Web (`kIsWeb == true`): shared queue host/guest UI in browser.
 
 Core external systems:
@@ -14,6 +14,7 @@ Core external systems:
 - Firebase Realtime Database: shared party queue (`parties/{partyId}/queue`).
 - YouTube Data API: song search metadata.
 - LRCLIB: lyric-line to song/timestamp resolution (mobile lyric play).
+- Suno-like Lyric API: custom lyric generation for tracks.
 - SharedPreferences: local recents/profile cache.
 
 ## 2. Entry and bootstrap flow
@@ -21,130 +22,154 @@ Core external systems:
 ### App startup
 
 1. `lib/main.dart`
-1. `WidgetsFlutterBinding.ensureInitialized()`
-1. Firebase app named `MongoBox` is initialized (if not already initialized)
-1. `MyApp` is launched
+2. `WidgetsFlutterBinding.ensureInitialized()`
+3. Firebase app named `MongoBox` is initialized (if not already initialized)
+4. `MyApp` is launched
 
-### Runtime target selection
+### QR/Party decision
 
 In `MyApp.home`:
 
+- User scans or enters party QR/ID:
+  - Routes to `JoinPartyScreen` (guest mode)
+- User creates new party:
+  - Routes to `HostPartyScreen` (host mode)
 - Web: `HomeScreen` (from `lib/screens/web/home_screen_web.dart` via conditional import)
-- Mobile: `MobileLyricApp` -> `LyricHomeScreen`
+- Mobile: `MobileLyricApp` -> `LyricHomeScreen` or host/join screens based on intent
 
 ## 3. Core runtime flows
 
 ```mermaid
 flowchart TD
-    A[App Launch] --> B{Platform?}
-    B -->|Mobile| C[LyricHomeScreen]
-    B -->|Web| D[Web HomeScreen]
+    A[Open LyricQsk] --> B{Scan/enter party QR?}
+    B -->|Yes| C[Join party session]
+    B -->|No| D[Create party & display QR]
 
-    C --> C1[Lyric search and play]
-    C --> C2[Host party]
-    C --> C3[Join party]
+    C --> E[Party dashboard]
+    D --> E
 
-    C1 --> E[PlaybackServiceMobile]
-    E --> F[LRCLIB search/get]
-    E --> G[YouTube search]
-    E --> H[Rank candidates]
-    H --> I[YouTubePlayer plays from start time]
-    C1 --> J[LocalSuggestionsService stores recents]
+    E --> F{Add music?}
+    
+    F -->|Lyric-line search| G[Lyric-line search]
+    F -->|Recent plays| H[Recent plays - quota-saving]
+    F -->|Switch party| I[Switch party via QR/ID]
 
-    C2 --> K[HostPartyScreen]
-    C3 --> L[JoinViaLinkScreen]
-    L --> M[JoinPartyScreen]
+    G --> J[Add to shared queue]
+    H --> J
+    I --> E
 
-    K --> N[SharedQueueService streamQueue]
-    M --> O[SharedQueueService addSong]
-    D --> N
+    J --> K[Playback host streams track]
+    K --> L[Capture play metadata]
 
-    N --> P[Firebase Realtime DB path parties/{partyId}/queue]
-    O --> P
+    L --> M{Generate custom lyrics?}
+    M -->|Yes| N[Call Suno-like lyric API]
+    M -->|No| O[Display / share lyrics in party view]
+    
+    N --> P[Return unique lyrics]
+    P --> O
 
-    Q[Hosted web page /join-queue.html] --> O
+    O --> Q[Loop back to party dashboard]
+    Q --> E
 ```
 
 ## 4. Mobile flow details
 
-## 4.1 Lyric Play (default mobile home)
+## 4.1 Party Dashboard
 
-File: `lib/screens/lyric_home_screen.dart`
+File: `lib/screens/host_party_screen.dart` / `lib/screens/join_party_screen.dart`
 
 ### What user does
 
-- Enters or dictates a lyric line.
-- Taps `Find & play`.
-- Selects from ranked candidates (if multiple).
-- Song starts from resolved timestamp.
+- After joining/creating party, enters party dashboard.
+- Dashboard shows:
+  - Party ID and share QR
+  - Shared music queue
+  - Currently playing track
+  - Add music options
 
 ### What code does
 
+1. Initializes `SharedQueueService(partyId)`.
+2. Subscribes to `streamQueue()` for real-time updates from Firebase.
+3. Displays party metadata and options to add music.
+
+## 4.2 Add Music Flow
+
+### User options
+
+1. **Lyric-line search**: Enter or dictate a lyric line to find song
+2. **Recent plays**: Query-saving option to re-add recently played tracks
+3. **Switch party**: Change to a different party using QR/ID
+
+Each option leads to adding the selected track to the shared queue.
+
+### Lyric-line search
+
+File: `lib/services/playback_service_mobile.dart`
+
 1. Calls `PlaybackServiceMobile.resolveCandidates(query)`.
-1. `PlaybackServiceMobile`:
+2. `PlaybackServiceMobile`:
    - Searches LRCLIB across multiple query variants.
    - Hydrates lyric candidates (`getById`) when synced lyrics are missing.
    - Computes best timestamp match for the lyric line.
    - Searches YouTube via `YoutubeMobileService`.
    - Filters short/reel-style videos.
    - Ranks and merges lyric-derived + YouTube-derived candidates.
-1. Selected candidate returns `videoId`, `startTimeSeconds`, `trackName`, `artistName`.
-1. `YoutubePlayerController.load(...)` plays the selected video from start time.
-1. Recents are persisted using `LocalSuggestionsService`:
-   - recent lines
-   - recent tracks
-   - recent search history
+3. Selected candidate returns `videoId`, `startTimeSeconds`, `trackName`, `artistName`.
+4. Track is added to shared queue.
+
+### Recent plays (quota-saving)
+
+File: `lib/services/local_suggestions_service.dart`
+
+- Uses `LocalSuggestionsService` to retrieve recent tracks.
+- Avoids unnecessary API calls by recommending previously played songs.
+- User can quickly re-add favorite tracks with one tap.
 
 ### Voice input path
 
-- Uses `speech_to_text` in `LyricHomeScreen`.
+- Uses `speech_to_text` in lyrics search.
 - On final speech result, recognized text populates search field.
 
-## 4.2 Host Party (mobile)
+## 4.3 Playback and Metadata
 
 File: `lib/screens/host_party_screen.dart`
 
-### What user does
+### Playback flow
 
-- Opens host mode.
-- Gets generated `partyId` and share link/QR.
-- Watches queue updates in real time.
-- Plays next or clears queue.
-- Optionally searches and adds tracks directly.
-
-### What code does
-
-1. Generates party ID: `party_<timestamp>`.
-1. Creates `SharedQueueService(partyId: generatedId)`.
-1. Subscribes to `streamQueue()` for real-time updates from Firebase.
 1. If queue has items, first item is auto-loaded into YouTube player.
-1. Share link format:
-   - `https://mongobox-79a1f.firebaseapp.com/join-queue.html?partyId=<id>`
-1. Guest additions arrive through same Firebase path and reflect live.
+2. `YoutubePlayerController.load(...)` plays the track from start time.
+3. Metadata (track ID, artist, timestamp) is captured while playing.
+4. When track finishes or user skips, next queue item auto-loads.
 
-## 4.3 Join Party (mobile guest)
+### Metadata capture
 
-Files:
+(Currently in-progress feature)
 
-- `lib/screens/join_via_link_screen.dart`
-- `lib/screens/join_party_screen.dart`
+Records for each played track:
+- YouTube video ID
+- Track name and artist
+- Play duration and completion status
+- Playback timestamp within party session
+- Used for lyrics generation input
 
-### What user does
+## 4.4 Lyrics Generation
 
-- Pastes/scans host link.
-- App extracts `partyId`.
-- Searches songs and taps `Add`.
+File: `lib/services/lyrics_service.dart` (to be enhanced)
 
-### What code does
+### User decision
 
-1. `JoinViaLinkScreen` parses URL query param `partyId`.
-1. If found, navigates to `JoinPartyScreen(partyId: ...)`.
-1. `JoinPartyScreen` searches with `YoutubeMobileService`.
-1. On add, pushes `Song` to Firebase queue through `SharedQueueService`.
+After track completes playback, user can opt-in to generate custom lyrics.
 
-Fallback behavior:
+### Generation flow
 
-- If no valid `partyId`, link can be opened externally.
+1. If user selects "Generate custom lyrics":
+   - Collects metadata from playback (track name, artist, duration)
+   - Calls free Suno-like lyric API with track metadata
+2. API returns unique, custom lyrics for the track
+3. Lyrics are returned and displayed in party view
+4. Shared with all party members
+5. User can loop back to "Add music?" to continue session
 
 ## 5. Web flow details
 
@@ -174,10 +199,10 @@ Files:
 Production behavior (`web/join-queue.html`):
 
 1. Reads `partyId` from URL.
-1. Initializes Firebase JS SDK.
-1. Searches YouTube Data API.
-1. Pushes selected songs to `parties/{partyId}/queue`.
-1. Host apps (mobile/web) receive updates live via Realtime Database stream.
+2. Initializes Firebase JS SDK.
+3. Searches YouTube Data API.
+4. Pushes selected songs to `parties/{partyId}/queue`.
+5. Host apps (mobile/web) receive updates live via Realtime Database stream.
 
 Hosting routes are configured in `firebase.json` so `/join-queue.html` serves this page.
 
@@ -206,6 +231,7 @@ Hosting routes are configured in `firebase.json` so `/join-queue.html` serves th
 - LRCLIB client (`/api/search`, `/api/get/{id}`).
 - Computes text similarity and best timed lyric line match.
 - Converts matched lyric entry to playable start timestamp.
+- (Enhanced feature): Calls Suno-like lyric API for custom lyrics generation.
 
 ### `PlaybackServiceMobile` (`lib/services/playback_service_mobile.dart`)
 
@@ -216,7 +242,8 @@ Hosting routes are configured in `firebase.json` so `/join-queue.html` serves th
 ### `LocalSuggestionsService` (`lib/services/local_suggestions_service.dart`)
 
 - Persists local recent lines/tracks/searches using SharedPreferences.
-- Drives suggestion chips/history in `LyricHomeScreen`.
+- Drives suggestion chips/history in search screens.
+- Enables quota-saving "Recent plays" feature.
 
 ## 7. Data model and storage
 
@@ -232,7 +259,8 @@ Song fields (typical):
 - `title`
 - `artist`
 - `thumbnail`
-- optional web-only `addedAt`
+- `addedAt` (timestamp)
+- `metadata` (optional: duration, lyrics)
 
 ### Local storage (SharedPreferences)
 
@@ -244,33 +272,39 @@ Song fields (typical):
 
 Active main screens:
 
-- `LyricHomeScreen` (mobile default)
-- `HostPartyScreen`
-- `JoinViaLinkScreen`
-- `JoinPartyScreen`
+- `HostPartyScreen` (party host dashboard)
+- `JoinPartyScreen` (party guest dashboard)
 - `web/HomeScreen` (Flutter web)
 
-Available but not currently in primary launch flow:
+Available supporting screens:
 
+- `JoinViaLinkScreen` (link parsing to join)
+- `LyricHomeScreen` (standalone lyric search, legacy entry point)
 - `GuestInfoScreen`
 - `LoginScreen` (sign-in removed)
 - `SuggestSongScreen` in `QR_landing_page.dart` (standalone/legacy)
-- `YouTubeService` and `LocalQueueService` (legacy/simple variants)
 
 ## 9. End-to-end example (host + guest)
 
-1. Host opens app and taps `Host a party`.
-1. App creates `party_...` and starts streaming Firebase queue.
-1. Host shares link/QR with `partyId` in query string.
-1. Guest opens link in app or browser page.
-1. Guest searches YouTube and taps `Add`.
-1. Song is pushed to `parties/{partyId}/queue`.
-1. Host queue updates instantly from `streamQueue()`.
-1. Host playback points at first queue item; `Next` removes it.
+1. Host opens app and taps "Create party".
+2. App creates `party_...` and displays QR code.
+3. App starts streaming Firebase queue.
+4. Host shares link/QR with `partyId` in query string.
+5. Guest scans QR or enters party ID.
+6. Guest searches lyric line or selects recent play and taps "Add".
+7. Song is pushed to `parties/{partyId}/queue`.
+8. Host queue updates instantly from `streamQueue()`.
+9. Host playback points at first queue item.
+10. Song plays; metadata is captured.
+11. After playback, user optionally generates custom lyrics.
+12. Lyrics are displayed and shared in party view.
+13. Host/guest can continue adding songs or switch parties.
 
 ## 10. Operational notes
 
 - Firebase app name is fixed as `MongoBox`; all queue operations depend on this initialization in `main.dart`.
 - Web and mobile share the same Realtime Database queue path and YouTube API key pattern.
 - Logs are verbose by design (debug-heavy) across host/guest and queue services.
+- Lyrics generation is quota-conscious; recent plays feature reduced API calls.
+- Party switching allows seamless transition between multiple active sessions.
 
