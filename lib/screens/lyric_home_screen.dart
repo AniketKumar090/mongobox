@@ -7,6 +7,11 @@ import '../services/playback_service_mobile.dart';
 import '../services/local_suggestions_service.dart';
 import '../services/youtube_quota_monitor.dart';
 import '../services/lightweight_search_service.dart';
+import '../services/tts_service.dart';
+import '../services/youtube_player_background_helper.dart';
+import '../services/jamendo_service.dart';
+import '../services/background_audio_player_service.dart';
+import '../services/soundcloud_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import '../screens/ generate_song_screen.dart'; // ← NEW
@@ -18,7 +23,8 @@ class LyricHomeScreen extends StatefulWidget {
   State<LyricHomeScreen> createState() => _LyricHomeScreenState();
 }
 
-class _LyricHomeScreenState extends State<LyricHomeScreen> {
+class _LyricHomeScreenState extends State<LyricHomeScreen>
+    with WidgetsBindingObserver {
   final _lyricController = TextEditingController();
   final _playbackService = PlaybackServiceMobile();
   final _quotaMonitor = YouTubeQuotaMonitor();
@@ -29,6 +35,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   bool _isLoading = false;
   bool _isListening = false;
   bool _isQuotaSavingMode = false;
+  bool _wasPlayingBeforeBackground = false;
 
   LocalSuggestionsService? _suggestions;
   List<String> _recentLines = [];
@@ -36,11 +43,121 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   List<RecentSearch> _recentSearches = [];
 
   final SpeechToText _speech = SpeechToText();
+  final TtsService _tts = TtsService();
+  final JamendoService _jamendo = JamendoService();
+  final SoundCloudService _soundcloud = SoundCloudService();
+
+  bool _isBackgroundAudioLoading = false;
+  JamendoTrack? _backgroundTrack;
+  SoundCloudTrack? _backgroundSoundCloudTrack;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadSuggestions();
+    _initTts();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final c = _ytController;
+    if (c == null) return;
+
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _wasPlayingBeforeBackground = c.value.isPlaying;
+      // If user minimizes while YouTube is playing, try to mirror audio in a
+      // background-capable player automatically.
+      if (_wasPlayingBeforeBackground) {
+        _autoStartBackgroundMirror();
+      }
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed && _wasPlayingBeforeBackground) {
+      YouTubePlayerBackgroundHelper.resumePlayback(c);
+    }
+  }
+
+  void _autoStartBackgroundMirror() {
+    // Fire-and-forget; lifecycle callback must stay sync.
+    _startBackgroundMirrorFromNowPlaying(auto: true);
+  }
+
+  Future<void> _startBackgroundMirrorFromNowPlaying({required bool auto}) async {
+    if (_isBackgroundAudioLoading) return;
+    if (BackgroundAudioPlayerService.instance.isPlaying) return;
+
+    final now = _nowPlaying;
+    if (now == null) return;
+    if (now.trackName.trim().isEmpty || now.artistName.trim().isEmpty) return;
+
+    setState(() => _isBackgroundAudioLoading = true);
+    try {
+      // 1) Prefer SoundCloud mirror (usually closest for mainstream tracks).
+      final sc = await _soundcloud.findMirrorStream(
+        trackName: now.trackName,
+        artistName: now.artistName,
+      );
+
+      if (!mounted) return;
+      if (sc != null && sc.confidence >= 0.62) {
+        _ytController?.pause();
+        await BackgroundAudioPlayerService.instance.playUrl(sc.streamUrl);
+        if (!mounted) return;
+        setState(() {
+          _backgroundSoundCloudTrack = sc.track;
+          _backgroundTrack = null;
+        });
+        return;
+      }
+
+      // 2) Fallback to Jamendo mirror (royalty-free catalog; may be different).
+      final jm = await _jamendo.findMirrorTrack(
+        trackName: now.trackName,
+        artistName: now.artistName,
+      );
+      if (!mounted) return;
+      final jmTrack = jm?.track;
+      final jmConf = jm?.confidence ?? 0;
+
+      if (jmTrack != null && jmConf >= 0.55) {
+        _ytController?.pause();
+        await BackgroundAudioPlayerService.instance.playUrl(jmTrack.audioUrl);
+        if (!mounted) return;
+        setState(() {
+          _backgroundTrack = jmTrack;
+          _backgroundSoundCloudTrack = null;
+        });
+        return;
+      }
+
+      // If auto mode, keep quiet; user can manually try via the button.
+      if (!auto) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not find a close-enough background stream.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (!auto) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Background audio failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isBackgroundAudioLoading = false);
+    }
+  }
+
+  Future<void> _initTts() async {
+    await _tts.init(onStateChanged: () {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _loadSuggestions() async {
@@ -61,20 +178,19 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _lyricController.dispose();
     _ytController?.dispose();
+    _tts.dispose();
     super.dispose();
   }
 
   void _playResult(PlaybackResult result) {
     if (_ytController == null) {
-      _ytController = YoutubePlayerController(
-        initialVideoId: result.videoId,
-        flags: YoutubePlayerFlags(
-          autoPlay: true,
-          startAt: result.startTimeSeconds,
-          mute: false,
-        ),
+      _ytController = YouTubePlayerBackgroundHelper.createBackgroundAwareController(
+        videoId: result.videoId,
+        startSeconds: result.startTimeSeconds,
+        autoPlay: true,
       );
     } else {
       _ytController!.load(result.videoId, startAt: result.startTimeSeconds);
@@ -105,6 +221,108 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         });
       }
     });
+  }
+
+  Future<void> _toggleBackgroundAudio() async {
+    if (_isBackgroundAudioLoading) return;
+
+    final isPlaying = BackgroundAudioPlayerService.instance.isPlaying;
+    if (isPlaying) {
+      await BackgroundAudioPlayerService.instance.stop();
+      if (mounted) {
+        setState(() {
+          _backgroundTrack = null;
+          _backgroundSoundCloudTrack = null;
+        });
+      }
+      return;
+    }
+
+    final now = _nowPlaying;
+    final typed = _lyricController.text.trim();
+    final hasIdentity = now != null &&
+        now.trackName.trim().isNotEmpty &&
+        now.artistName.trim().isNotEmpty;
+    if ((typed.isEmpty) && !hasIdentity) return;
+
+    setState(() => _isBackgroundAudioLoading = true);
+    try {
+      // Prefer SoundCloud when we have a known track identity.
+      if (hasIdentity) {
+        final sc = await _soundcloud.findMirrorStream(
+          trackName: now!.trackName,
+          artistName: now.artistName,
+        );
+        if (!mounted) return;
+        if (sc != null && sc.confidence >= 0.62) {
+          if (_ytController?.value.isPlaying ?? false) {
+            _ytController?.pause();
+          }
+          await BackgroundAudioPlayerService.instance.playUrl(sc.streamUrl);
+          if (!mounted) return;
+          setState(() {
+            _backgroundSoundCloudTrack = sc.track;
+            _backgroundTrack = null;
+          });
+          return;
+        }
+      }
+
+      JamendoTrack? track;
+      double confidence = 0;
+
+      if (hasIdentity) {
+        final mirror = await _jamendo.findMirrorTrack(
+          trackName: now!.trackName,
+          artistName: now.artistName,
+        );
+        track = mirror?.track;
+        confidence = mirror?.confidence ?? 0;
+      } else {
+        track = await _jamendo.searchBestTrack(typed);
+        confidence = track == null ? 0 : 0.35;
+      }
+
+      if (!mounted) return;
+      if (track == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No background-capable stream found.')),
+        );
+        return;
+      }
+
+      // If we're mirroring a known YouTube song, enforce a minimum confidence
+      // so we don't play a completely different track "discreetly".
+      if (hasIdentity && confidence < 0.55) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not find a close-enough Jamendo match for this song.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      // Avoid double-audio: pause YouTube if it’s currently playing.
+      if (_ytController?.value.isPlaying ?? false) {
+        _ytController?.pause();
+      }
+
+      await BackgroundAudioPlayerService.instance.playUrl(track.audioUrl);
+      if (!mounted) return;
+      setState(() {
+        _backgroundTrack = track;
+        _backgroundSoundCloudTrack = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Background audio failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isBackgroundAudioLoading = false);
+    }
   }
 
   Future<void> _startListening() async {
@@ -139,6 +357,34 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   Future<void> _stopListening() async {
     await _speech.stop();
     if (mounted) setState(() => _isListening = false);
+  }
+
+  Future<void> _toggleSpeakLine() async {
+    if (_isLoading) return;
+    final text = _lyricController.text.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Type a line first to speak it')),
+      );
+      return;
+    }
+
+    if (_isListening) {
+      await _stopListening();
+    }
+
+    try {
+      if (_tts.isSpeaking) {
+        await _tts.stop();
+      } else {
+        await _tts.speak(text);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('TTS error: $e')),
+      );
+    }
   }
 
   void _showQuotaExceededDialog() {
@@ -763,6 +1009,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                       ),
                       const SizedBox(width: 12),
                       IconButton.filled(
+                        onPressed: _isLoading ? null : _toggleSpeakLine,
+                        icon: Icon(
+                          _tts.isSpeaking ? Icons.stop : Icons.volume_up,
+                        ),
+                        tooltip: _tts.isSpeaking ? 'Stop speaking' : 'Speak line',
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton.filled(
                         onPressed: _isLoading
                             ? null
                             : () {
@@ -900,6 +1154,62 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                   if (_nowPlaying != null) ...[
                     const SizedBox(height: 24),
                     _NowPlayingStrip(result: _nowPlaying!),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: _isBackgroundAudioLoading
+                                ? null
+                                : _toggleBackgroundAudio,
+                            icon: _isBackgroundAudioLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    BackgroundAudioPlayerService
+                                            .instance.isPlaying
+                                        ? Icons.stop_rounded
+                                        : Icons.headphones_rounded,
+                                  ),
+                            label: Text(
+                              BackgroundAudioPlayerService.instance.isPlaying
+                                  ? 'Stop background audio'
+                                  : 'Play in background',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_backgroundSoundCloudTrack != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Background stream: ${_backgroundSoundCloudTrack!.title} • ${_backgroundSoundCloudTrack!.userName}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ] else if (_backgroundTrack != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Background stream: ${_backgroundTrack!.name} • ${_backgroundTrack!.artistName}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                   if (_ytController != null) ...[
                     const SizedBox(height: 16),

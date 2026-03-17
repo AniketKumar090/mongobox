@@ -5,6 +5,7 @@ import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/env_config.dart';
+import 'services/audio_session_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +27,9 @@ void main() async {
   } else {
     print('✅ Using existing Firebase app (apps count: ${Firebase.apps.length})');
   }
+
+  // Ensure background-friendly playback audio session on mobile platforms.
+  await AppAudioSessionService.ensureConfigured();
   
   runApp(MyApp());
 }

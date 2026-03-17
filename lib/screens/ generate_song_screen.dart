@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/local_suggestions_service.dart';
+import 'voice_sample_screen.dart';
 
 // ─── MOOD OPTIONS ─────────────────────────────────────────────────────────────
 const _moods = [
@@ -24,13 +25,16 @@ class _SongResult {
     required this.lyrics,
     required this.mood,
     required this.genre,
+    required this.language,
   });
   final String title;
   final String lyrics;
   final String mood;
   final String genre;
+  final String language;
 
-  String get fullText => '"$title"\nMood: $mood | Genre: $genre\n\n$lyrics';
+  String get fullText =>
+      '"$title"\nLanguage: $language\nMood: $mood | Genre: $genre\n\n$lyrics';
 }
 
 // ─── SCREEN ───────────────────────────────────────────────────────────────────
@@ -46,6 +50,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
   List<RecentTrack> _recentTracks = [];
   String? _aiSuggestedMood;
+  String? _aiSuggestedLanguage;
   String? _selectedMood; // null = use AI suggestion
   _SongResult? _result;
   bool _isLoading = false;
@@ -81,16 +86,29 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     });
     if (tracks.isEmpty) return;
 
-    try {
-      final mood = await _detectMood(tracks);
-      if (!mounted) return;
-      setState(() {
-        _aiSuggestedMood = mood;
-        _isMoodLoading = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _isMoodLoading = false);
+    Future<void> updateMood() async {
+      try {
+        final mood = await _detectMood(tracks);
+        if (!mounted) return;
+        setState(() => _aiSuggestedMood = mood);
+      } catch (_) {
+        // Ignore: mood is optional.
+      } finally {
+        if (mounted) setState(() => _isMoodLoading = false);
+      }
     }
+
+    Future<void> updateLanguage() async {
+      try {
+        final language = await _detectLanguage(tracks);
+        if (!mounted) return;
+        setState(() => _aiSuggestedLanguage = language);
+      } catch (_) {
+        // Ignore: language is optional (fallback to English).
+      }
+    }
+
+    await Future.wait([updateMood(), updateLanguage()]);
   }
 
   // ── Groq: detect mood from track list (fast, 10 tokens) ──────────────────
@@ -142,6 +160,183 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     );
   }
 
+  // ── Groq: detect dominant language from lyric snippets ───────────────────
+  Future<String> _detectLanguage(List<RecentTrack> tracks) async {
+    final apiKey = dotenv.env['GROQ_API_KEY'] ?? '';
+
+    final snippets = tracks
+        .map((t) => t.lyricSnippet.trim())
+        .where((s) => s.isNotEmpty)
+        .map((s) => s.replaceAll(RegExp(r'\s+'), ' '))
+        .map((s) => s.length > 90 ? s.substring(0, 90) : s)
+        .take(10)
+        .toList();
+
+    final fallbackFromScript =
+        _guessLanguageFromUnicodeSample(snippets.join('\n'));
+
+    if (apiKey.isEmpty) {
+      if (fallbackFromScript != null) return fallbackFromScript;
+      throw Exception('GROQ_API_KEY not set');
+    }
+
+    final titles = tracks
+        .map((t) => '${t.trackName} – ${t.artistName}'.trim())
+        .where((s) => s.isNotEmpty)
+        .take(10)
+        .toList();
+
+    final sample = [
+      if (snippets.isNotEmpty) 'Lyric snippets:\n- ${snippets.join('\n- ')}',
+      if (titles.isNotEmpty) 'Track titles:\n- ${titles.join('\n- ')}',
+    ].join('\n\n');
+
+    final response = await http
+        .post(
+          Uri.parse('https://api.groq.com/openai/v1/chat/completions'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: json.encode({
+            'model': 'llama-3.3-70b-versatile',
+            'max_tokens': 8,
+            'temperature': 0,
+            'messages': [
+              {
+                'role': 'system',
+                'content':
+                    'You are a language classifier for song lyrics. Reply with ONLY the dominant language name in English (examples: Hindi, Spanish, Japanese, Korean, Arabic, French, Portuguese, Bengali, Tamil, Telugu, Marathi, Urdu, Indonesian, Turkish, Vietnamese, Thai, German, Italian, Russian, Chinese, English). If uncertain, reply English. No punctuation, no extra text.',
+              },
+              {
+                'role': 'user',
+                'content': sample.isEmpty
+                    ? 'Dominant language:'
+                    : 'What is the dominant language in this listening history sample?\n\n$sample',
+              },
+            ],
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) throw Exception('Language detection failed');
+
+    final data = json.decode(response.body);
+    final raw =
+        (data['choices'][0]['message']['content'] as String).trim();
+
+    // Keep it as a short label, avoid accidental extra words.
+    final cleaned = raw
+        .split(RegExp(r'[\n,;/]+'))
+        .first
+        .trim()
+        .replaceAll(RegExp(r"[^A-Za-z '-]"), '')
+        .trim();
+
+    if (cleaned.isEmpty) return 'English';
+    // Title-case-ish for consistency in UI.
+    final normalized = cleaned
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .map((p) =>
+            p.length == 1 ? p.toUpperCase() : '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}')
+        .join(' ');
+
+    if (normalized.toLowerCase() == 'english' &&
+        fallbackFromScript != null &&
+        fallbackFromScript.toLowerCase() != 'english') {
+      return fallbackFromScript;
+    }
+    return normalized;
+  }
+
+  String? _guessLanguageFromUnicodeSample(String text) {
+    if (text.trim().isEmpty) return null;
+
+    int countDevanagari = 0;
+    int countBengali = 0;
+    int countGurmukhi = 0;
+    int countGujarati = 0;
+    int countTamil = 0;
+    int countTelugu = 0;
+    int countKannada = 0;
+    int countMalayalam = 0;
+    int countArabic = 0;
+    int countHangul = 0;
+    int countHiraganaKatakana = 0;
+    int countCjk = 0;
+    int countCyrillic = 0;
+    int countThai = 0;
+
+    for (final rune in text.runes) {
+      if (rune >= 0x0900 && rune <= 0x097F) countDevanagari++;
+      if (rune >= 0x0980 && rune <= 0x09FF) countBengali++;
+      if (rune >= 0x0A00 && rune <= 0x0A7F) countGurmukhi++;
+      if (rune >= 0x0A80 && rune <= 0x0AFF) countGujarati++;
+      if (rune >= 0x0B80 && rune <= 0x0BFF) countTamil++;
+      if (rune >= 0x0C00 && rune <= 0x0C7F) countTelugu++;
+      if (rune >= 0x0C80 && rune <= 0x0CFF) countKannada++;
+      if (rune >= 0x0D00 && rune <= 0x0D7F) countMalayalam++;
+      if ((rune >= 0x0600 && rune <= 0x06FF) ||
+          (rune >= 0x0750 && rune <= 0x077F) ||
+          (rune >= 0x08A0 && rune <= 0x08FF)) {
+        countArabic++;
+      }
+      if ((rune >= 0x1100 && rune <= 0x11FF) ||
+          (rune >= 0xAC00 && rune <= 0xD7AF)) {
+        countHangul++;
+      }
+      if ((rune >= 0x3040 && rune <= 0x309F) ||
+          (rune >= 0x30A0 && rune <= 0x30FF)) {
+        countHiraganaKatakana++;
+      }
+      if (rune >= 0x4E00 && rune <= 0x9FFF) countCjk++;
+      if (rune >= 0x0400 && rune <= 0x04FF) countCyrillic++;
+      if (rune >= 0x0E00 && rune <= 0x0E7F) countThai++;
+    }
+
+    final map = <String, int>{
+      'Hindi': countDevanagari,
+      'Bengali': countBengali,
+      'Punjabi': countGurmukhi,
+      'Gujarati': countGujarati,
+      'Tamil': countTamil,
+      'Telugu': countTelugu,
+      'Kannada': countKannada,
+      'Malayalam': countMalayalam,
+      'Arabic': countArabic,
+      'Russian': countCyrillic,
+      'Thai': countThai,
+    };
+
+    String? bestLang;
+    var bestCount = 0;
+    map.forEach((lang, count) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestLang = lang;
+      }
+    });
+
+    // Japanese/Korean/Chinese need special handling.
+    if (countHangul > bestCount) {
+      bestCount = countHangul;
+      bestLang = 'Korean';
+    }
+    if (countHiraganaKatakana > bestCount) {
+      bestCount = countHiraganaKatakana;
+      bestLang = 'Japanese';
+    }
+    if (countCjk > bestCount && countHiraganaKatakana == 0) {
+      bestCount = countCjk;
+      bestLang = 'Chinese';
+    }
+
+    // Require a meaningful amount of non-Latin signal.
+    if (bestLang == null || bestCount < 8) return null;
+    return bestLang;
+  }
+
   // ── STEP 2: Generate full lyrics via Groq ────────────────────────────────
   Future<void> _generate() async {
     if (_isLoading) return;
@@ -173,18 +368,31 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         .map((t) => '${t.trackName} – ${t.artistName}')
         .join('\n');
 
+    String language = _aiSuggestedLanguage ?? 'English';
+    try {
+      if (_aiSuggestedLanguage == null) {
+        language = await _detectLanguage(_recentTracks);
+        if (mounted) setState(() => _aiSuggestedLanguage = language);
+      }
+    } catch (_) {
+      // Ignore: fallback stays English.
+    }
+
     final prompt =
         'You are a professional songwriter. Analyze this listening history and write an original song.\n\n'
         'Listening history:\n$trackList\n\n'
         'Requested mood: $mood\n\n'
+        'Requested language: $language\n\n'
         'Rules:\n'
         '- Write COMPLETELY ORIGINAL lyrics — do not reference the songs above\n'
         '- Match the energy, themes, and style of what they listen to\n'
+        '- Write ALL lyric lines in $language (keep section headers like [Verse 1] in English)\n'
+        '- Do not switch languages mid-song\n'
         '- Structure: [Verse 1], [Chorus], [Verse 2], [Bridge], [Outro]\n'
         '- Lyrics must be vivid, emotional, specific — no generic lines\n'
         '- Title: 2–4 words, evocative\n\n'
         'Respond ONLY with this JSON (no markdown, no extra text):\n'
-        '{"title":"Song Title","mood":"$mood","genre":"Genre / Sub-genre","lyrics":"[Verse 1]\\nline\\nline\\n\\n[Chorus]\\nline\\nline\\n\\n[Verse 2]\\nline\\nline\\n\\n[Bridge]\\nline\\nline\\n\\n[Outro]\\nline\\nline"}';
+        '{"title":"Song Title","mood":"$mood","genre":"Genre / Sub-genre","language":"$language","lyrics":"[Verse 1]\\nline\\nline\\n\\n[Chorus]\\nline\\nline\\n\\n[Verse 2]\\nline\\nline\\n\\n[Bridge]\\nline\\nline\\n\\n[Outro]\\nline\\nline"}';
 
     try {
       final response = await http
@@ -232,6 +440,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           lyrics: parsed['lyrics'] as String? ?? '',
           mood: parsed['mood'] as String? ?? mood,
           genre: parsed['genre'] as String? ?? '',
+          language: parsed['language'] as String? ?? language,
         );
         _isLoading = false;
       });
@@ -253,6 +462,21 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         behavior: SnackBarBehavior.floating,
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  void _openVoiceClone() {
+    final r = _result;
+    if (r == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VoiceSampleScreen(
+          songTitle: r.title,
+          lyrics: r.lyrics,
+          mood: r.mood,
+          genre: r.genre,
+        ),
       ),
     );
   }
@@ -386,6 +610,18 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                 _ResultCard(
                     result: _result!, cs: cs, tt: tt, onCopy: _copyToClipboard),
                 const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _isLoading ? null : _openVoiceClone,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  icon: const Icon(Icons.record_voice_over_rounded),
+                  label: const Text('Record my voice'),
+                ),
+                const SizedBox(height: 10),
                 OutlinedButton.icon(
                   onPressed: _isLoading ? null : _generate,
                   style: OutlinedButton.styleFrom(
@@ -702,6 +938,10 @@ class _ResultCard extends StatelessWidget {
                   _Chip(
                       icon: Icons.library_music,
                       label: result.genre,
+                      cs: cs),
+                  _Chip(
+                      icon: Icons.language,
+                      label: result.language,
                       cs: cs),
                 ],
               ),

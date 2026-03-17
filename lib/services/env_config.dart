@@ -74,4 +74,80 @@ class EnvConfig {
       'Set in .env locally or pass via --dart-define=ANTHROPIC_API_KEY=...'
     );
   }
+
+  static String get grokApiKey {
+    // Try .env file first
+    try {
+      final envFileKey = _clean(dotenv.env['GROQ_API_KEY']);
+      if (envFileKey.isNotEmpty) {
+        return envFileKey;
+      }
+    } catch (e) {
+      print('⚠️  Error reading GROQ_API_KEY from .env: $e');
+    }
+
+    // Try compile-time environment (e.g. `--dart-define=GROQ_API_KEY=...`)
+    final envVarKey = _clean(const String.fromEnvironment('GROQ_API_KEY'));
+    if (envVarKey.isNotEmpty) {
+      return envVarKey;
+    }
+
+    // Groq is optional - return empty string if not configured
+    print('⚠️  Grok API key not configured. Grok search refinement will be skipped.');
+    return '';
+  }
+
+  static String get jamendoClientId {
+    // Try .env file first
+    try {
+      final envFileKey = _clean(dotenv.env['JAMENDO_CLIENT_ID']);
+      if (envFileKey.isNotEmpty) {
+        return envFileKey;
+      }
+    } catch (e) {
+      print('⚠️  Error reading JAMENDO_CLIENT_ID from .env: $e');
+    }
+
+    // Try compile-time environment (e.g. `--dart-define=JAMENDO_CLIENT_ID=...`)
+    final envVarKey = _clean(const String.fromEnvironment('JAMENDO_CLIENT_ID'));
+    if (envVarKey.isNotEmpty) {
+      return envVarKey;
+    }
+
+    // Jamendo is optional - return empty string if not configured.
+    print('⚠️  Jamendo client id not configured. Background audio search will be disabled.');
+    return '';
+  }
+
+  static String get soundcloudClientId {
+    try {
+      final envFileKey = _clean(dotenv.env['SOUNDCLOUD_CLIENT_ID']);
+      if (envFileKey.isNotEmpty) return envFileKey;
+    } catch (e) {
+      print('⚠️  Error reading SOUNDCLOUD_CLIENT_ID from .env: $e');
+    }
+
+    final envVarKey =
+        _clean(const String.fromEnvironment('SOUNDCLOUD_CLIENT_ID'));
+    if (envVarKey.isNotEmpty) return envVarKey;
+
+    print('⚠️  SoundCloud client id not configured.');
+    return '';
+  }
+
+  static String get soundcloudClientSecret {
+    try {
+      final envFileKey = _clean(dotenv.env['SOUNDCLOUD_CLIENT_SECRET']);
+      if (envFileKey.isNotEmpty) return envFileKey;
+    } catch (e) {
+      print('⚠️  Error reading SOUNDCLOUD_CLIENT_SECRET from .env: $e');
+    }
+
+    final envVarKey =
+        _clean(const String.fromEnvironment('SOUNDCLOUD_CLIENT_SECRET'));
+    if (envVarKey.isNotEmpty) return envVarKey;
+
+    print('⚠️  SoundCloud client secret not configured.');
+    return '';
+  }
 }

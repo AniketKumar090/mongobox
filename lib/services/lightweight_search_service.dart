@@ -7,6 +7,7 @@ import 'lyrics_service.dart';
 import 'youtube_quota_monitor.dart';
 import 'local_suggestions_service.dart';
 import 'playback_service_mobile.dart';
+import 'grok_search_refinement_service.dart';
 
 class LightweightSearchResult {
   const LightweightSearchResult({
@@ -30,7 +31,8 @@ class LightweightSearchService {
   final LyricsService _lyrics = LyricsService();
   final YouTubeQuotaMonitor _quotaMonitor = YouTubeQuotaMonitor();
   final http.Client _client = http.Client();
-  
+  final GrokSearchRefinement _grokRefinement = GrokSearchRefinement();
+
   // Aggressive caching to reduce API calls
   final Map<String, List<LightweightSearchResult>> _searchCache = {};
   final Map<String, String> _videoIdCache = {};
@@ -140,7 +142,7 @@ class LightweightSearchService {
     if (query.isEmpty) return [];
 
     final cacheKey = _normalize(query);
-    
+
     // Check cache first (highest priority)
     if (_searchCache.containsKey(cacheKey)) {
       return _searchCache[cacheKey]!;
@@ -157,11 +159,16 @@ class LightweightSearchService {
     }
 
     // Normal optimized search
-    final results = await _optimizedSearch(query);
-    
+    var results = await _optimizedSearch(query);
+
+    // Refine results using Grok for better ranking (only if we have results)
+    if (results.isNotEmpty) {
+      results = await _grokRefinement.refineSearchResults(query, results);
+    }
+
     // Cache the results
     _searchCache[cacheKey] = results;
-    
+
     return results;
   }
 
@@ -321,6 +328,7 @@ class LightweightSearchService {
     _searchCache.clear();
     _videoIdCache.clear();
     _titleCache.clear();
+    _grokRefinement.clearCache();
   }
 
   /// Get cache statistics
@@ -329,6 +337,7 @@ class LightweightSearchService {
       'searchCache': _searchCache.length,
       'videoIdCache': _videoIdCache.length,
       'titleCache': _titleCache.length,
+      ..._grokRefinement.getCacheStats(),
     };
   }
 }

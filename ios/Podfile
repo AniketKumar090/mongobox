@@ -39,5 +39,16 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # Ensure iOS deployment target and permission_handler flags are set
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+
+      # Enable microphone + speech recognition permissions for permission_handler
+      defs = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+      defs << 'PERMISSION_MICROPHONE=1' unless defs.include?('PERMISSION_MICROPHONE=1')
+      defs << 'PERMISSION_SPEECH_RECOGNIZER=1' unless defs.include?('PERMISSION_SPEECH_RECOGNIZER=1')
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+    end
   end
 end

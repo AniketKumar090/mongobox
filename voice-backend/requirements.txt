@@ -1,0 +1,17 @@
+# MongoBox Voice Backend — Python dependencies
+
+# ── Web server ────────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# ── Voice cloning (Coqui XTTS-v2) ─────────────────────────────────────────────
+TTS==0.22.0
+
+# ── Deep learning runtime ─────────────────────────────────────────────────────
+torch==2.3.0
+torchaudio==2.3.0
+
+# ── Audio utils ───────────────────────────────────────────────────────────────
+numpy==1.26.4
+scipy==1.13.0
