@@ -14,7 +14,7 @@ class EnvConfig {
     }
     return v;
   }
-  
+
   static Future<void> load() async {
     if (_initialized) return;
     try {
@@ -38,17 +38,17 @@ class EnvConfig {
     } catch (e) {
       print('⚠️  Error reading from .env: $e');
     }
-    
+
     // Try environment variables (for GitHub Actions)
     final envVarKey = const String.fromEnvironment('YOUTUBE_API_KEY');
     if (envVarKey.isNotEmpty) {
       return envVarKey;
     }
-    
+
     // Fallback (for build compatibility)
     throw Exception(
       'YOUTUBE_API_KEY not found. '
-      'Set in .env file locally or as YOUTUBE_API_KEY environment variable'
+      'Set in .env file locally or as YOUTUBE_API_KEY environment variable',
     );
   }
 
@@ -71,7 +71,7 @@ class EnvConfig {
 
     throw Exception(
       'ANTHROPIC_API_KEY not found. '
-      'Set in .env locally or pass via --dart-define=ANTHROPIC_API_KEY=...'
+      'Set in .env locally or pass via --dart-define=ANTHROPIC_API_KEY=...',
     );
   }
 
@@ -93,7 +93,9 @@ class EnvConfig {
     }
 
     // Groq is optional - return empty string if not configured
-    print('⚠️  Grok API key not configured. Grok search refinement will be skipped.');
+    print(
+      '⚠️  Grok API key not configured. Grok search refinement will be skipped.',
+    );
     return '';
   }
 
@@ -115,7 +117,9 @@ class EnvConfig {
     }
 
     // Jamendo is optional - return empty string if not configured.
-    print('⚠️  Jamendo client id not configured. Background audio search will be disabled.');
+    print(
+      '⚠️  Jamendo client id not configured. Background audio search will be disabled.',
+    );
     return '';
   }
 
@@ -127,8 +131,9 @@ class EnvConfig {
       print('⚠️  Error reading SOUNDCLOUD_CLIENT_ID from .env: $e');
     }
 
-    final envVarKey =
-        _clean(const String.fromEnvironment('SOUNDCLOUD_CLIENT_ID'));
+    final envVarKey = _clean(
+      const String.fromEnvironment('SOUNDCLOUD_CLIENT_ID'),
+    );
     if (envVarKey.isNotEmpty) return envVarKey;
 
     print('⚠️  SoundCloud client id not configured.');
@@ -143,11 +148,36 @@ class EnvConfig {
       print('⚠️  Error reading SOUNDCLOUD_CLIENT_SECRET from .env: $e');
     }
 
-    final envVarKey =
-        _clean(const String.fromEnvironment('SOUNDCLOUD_CLIENT_SECRET'));
+    final envVarKey = _clean(
+      const String.fromEnvironment('SOUNDCLOUD_CLIENT_SECRET'),
+    );
     if (envVarKey.isNotEmpty) return envVarKey;
 
     print('⚠️  SoundCloud client secret not configured.');
     return '';
+  }
+
+  static String get voiceBackendUrl {
+    try {
+      final envFileValue = _clean(dotenv.env['VOICE_BACKEND_URL']);
+      if (envFileValue.isNotEmpty) {
+        return envFileValue.replaceFirst(RegExp(r'/+$'), '');
+      }
+    } catch (e) {
+      print('⚠️  Error reading VOICE_BACKEND_URL from .env: $e');
+    }
+
+    final envVarValue = _clean(
+      const String.fromEnvironment('VOICE_BACKEND_URL'),
+    );
+    if (envVarValue.isNotEmpty) {
+      return envVarValue.replaceFirst(RegExp(r'/+$'), '');
+    }
+
+    print(
+      '⚠️  Voice backend URL not configured. Falling back to '
+      'http://127.0.0.1:8000 for local simulator testing.',
+    );
+    return 'http://127.0.0.1:8000';
   }
 }

@@ -7,6 +7,7 @@ python-multipart==0.0.9
 
 # ── Voice cloning (Coqui XTTS-v2) ─────────────────────────────────────────────
 TTS==0.22.0
+transformers==4.41.2
 
 # ── Deep learning runtime ─────────────────────────────────────────────────────
 torch==2.3.0

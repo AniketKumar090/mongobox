@@ -57,7 +57,7 @@ def _strip_section_tags(text: str) -> str:
     lines = [
         line
         for line in text.splitlines()
-        if line.strip() and not re.match(r"^\\[", line.strip(), re.IGNORECASE)
+        if line.strip() and not re.match(r"^\[", line.strip(), re.IGNORECASE)
     ]
     return "\n".join(lines)
 
@@ -83,22 +83,17 @@ def _chunk_lyrics(text: str, max_chars: int = 220) -> list[str]:
     return chunks
 
 
-def _convert_to_ref_wav(src: str, dst: str) -> None:
-    """
-    Convert the uploaded recording to a 22050 Hz mono WAV reference for XTTS.
-    Requires system ffmpeg:
-      macOS:  brew install ffmpeg
-      Ubuntu: sudo apt install ffmpeg
-    """
+def _run_ffmpeg_wav_convert(src: str, dst: str, sample_rate: int, channels: int = 1) -> None:
+    """Convert audio to a normalized PCM WAV format with ffmpeg."""
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         src,
         "-ar",
-        "22050",
+        str(sample_rate),
         "-ac",
-        "1",
+        str(channels),
         "-c:a",
         "pcm_s16le",
         dst,
@@ -118,30 +113,55 @@ def _convert_to_ref_wav(src: str, dst: str) -> None:
         raise RuntimeError(f"ffmpeg conversion failed: {detail or 'unknown error'}") from exc
 
 
+def _convert_to_ref_wav(src: str, dst: str) -> None:
+    """
+    Convert the uploaded recording to a 22050 Hz mono WAV reference for XTTS.
+    Requires system ffmpeg:
+      macOS:  brew install ffmpeg
+      Ubuntu: sudo apt install ffmpeg
+    """
+    _run_ffmpeg_wav_convert(src, dst, sample_rate=22050, channels=1)
+
+
+def _normalize_generated_wav(src: str, dst: str) -> None:
+    """Normalize XTTS output to a consistent mergeable WAV format."""
+    _run_ffmpeg_wav_convert(src, dst, sample_rate=24000, channels=1)
+
+
 def _merge_wav_chunks(chunk_paths: list[str], out_path: str) -> None:
     """Concatenate multiple WAV files into one (all chunks must match format)."""
     import array
     import wave
 
     out_frames = array.array("h")
-    params = None
+    format_params = None
 
     for p in chunk_paths:
         with wave.open(p, "rb") as wf:
             if wf.getsampwidth() != 2:
                 raise RuntimeError("Unsupported WAV sample width; expected 16-bit PCM.")
-            if params is None:
-                params = wf.getparams()
-            elif wf.getparams() != params:
+            current_format = (
+                wf.getnchannels(),
+                wf.getsampwidth(),
+                wf.getframerate(),
+                wf.getcomptype(),
+                wf.getcompname(),
+            )
+            if format_params is None:
+                format_params = current_format
+            elif current_format != format_params:
                 raise RuntimeError("WAV chunks have mismatched audio parameters; cannot merge.")
             raw = wf.readframes(wf.getnframes())
             out_frames.frombytes(raw)
 
-    if params is None or not out_frames:
+    if format_params is None or not out_frames:
         raise RuntimeError("No audio chunks to merge.")
 
     with wave.open(out_path, "wb") as wf:
-        wf.setparams(params)
+        wf.setnchannels(format_params[0])
+        wf.setsampwidth(format_params[1])
+        wf.setframerate(format_params[2])
+        wf.setcomptype(format_params[3], format_params[4])
         wf.writeframes(out_frames.tobytes())
 
 
@@ -234,14 +254,16 @@ async def clone_voice(
         # 4) XTTS inference (one wav per chunk)
         chunk_wavs: list[str] = []
         for i, chunk in enumerate(chunks):
-            out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
+            out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_raw.wav")
             _tts.tts_to_file(
                 text=chunk,
                 speaker_wav=ref_wav,
                 language=detected_lang,
                 file_path=out_chunk,
             )
-            chunk_wavs.append(out_chunk)
+            normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
+            _normalize_generated_wav(out_chunk, normalized_chunk)
+            chunk_wavs.append(normalized_chunk)
 
         # 5) Merge
         final_wav = os.path.join(tmp_dir, "cloned_voice.wav")

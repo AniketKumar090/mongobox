@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+import '../services/voice_clone_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static UI Mode: Voice song preview and playback
@@ -31,9 +34,11 @@ class VoiceSongScreen extends StatefulWidget {
 class _VoiceSongScreenState extends State<VoiceSongScreen> {
   final _musicPlayer = AudioPlayer();
   final _voicePlayer = AudioPlayer();
+  final _cloneService = VoiceCloneService();
 
   String? _voiceAudioPath;
   String? _musicAudioPath;
+  String? _errorMessage;
 
   _Step _currentStep = _Step.cloningVoice;
   bool _voiceDone = false;
@@ -43,26 +48,74 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   // Voice quality tracking
   String? _qualityWarning;
   String? _voiceSourceLabel;
+  StreamSubscription<PlayerState>? _voicePlayerStateSub;
 
   @override
   void initState() {
     super.initState();
-    // Static UI mode - skip API calls, show ready state immediately
-    setState(() {
-      _currentStep = _Step.ready;
-      _voiceDone = true;
-      _musicDone = true;
-      _isPlaying = false;
-      _voiceSourceLabel = 'Your Voice';
-      _qualityWarning = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _generatePreview();
     });
   }
 
   @override
   void dispose() {
+    _voicePlayerStateSub?.cancel();
     _musicPlayer.dispose();
     _voicePlayer.dispose();
+    _cloneService.dispose();
     super.dispose();
+  }
+
+  Future<void> _generatePreview() async {
+    setState(() {
+      _currentStep = _Step.cloningVoice;
+      _voiceDone = false;
+      _musicDone = false;
+      _isPlaying = false;
+      _voiceAudioPath = null;
+      _musicAudioPath = null;
+      _errorMessage = null;
+      _voiceSourceLabel = null;
+      _qualityWarning = null;
+    });
+
+    try {
+      final clonedFile = await _cloneService.cloneVoice(
+        voiceSamplePath: widget.voiceSamplePath,
+        lyrics: widget.lyrics,
+        mood: widget.mood,
+        genre: widget.genre,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _currentStep = _Step.generatingMusic;
+        _voiceDone = true;
+        _voiceSourceLabel = 'Generated from your voice sample';
+        _qualityWarning =
+            'This MVP uses cloned voice TTS, so it will sound closer to your voice performing the lyrics than a fully natural sung vocal.';
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      if (!mounted) return;
+
+      setState(() {
+        _voiceAudioPath = clonedFile.path;
+        _musicDone = true;
+        _currentStep = _Step.ready;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _currentStep = _Step.error;
+        _errorMessage = _readableError(error);
+      });
+    }
+  }
+
+  String _readableError(Object error) {
+    return error.toString().replaceFirst('Exception: ', '').trim();
   }
 
   // ── PLAYBACK: voice + music simultaneously ──────────────────────────────────
@@ -85,19 +138,20 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       await _musicPlayer.setLoopMode(LoopMode.all);
     }
 
+    await _voicePlayerStateSub?.cancel();
+    _voicePlayerStateSub = _voicePlayer.playerStateStream.listen((state) {
+      if (state.processingState == ProcessingState.completed && mounted) {
+        _musicPlayer.stop();
+        setState(() => _isPlaying = false);
+      }
+    });
+
     setState(() => _isPlaying = true);
 
     await Future.wait([
       _voicePlayer.play(),
       if (_musicAudioPath != null) _musicPlayer.play(),
     ]);
-
-    _voicePlayer.playerStateStream.listen((state) {
-      if (state.processingState == ProcessingState.completed && mounted) {
-        _musicPlayer.stop();
-        setState(() => _isPlaying = false);
-      }
-    });
   }
 
   // ── SHARE ───────────────────────────────────────────────────────────────────
@@ -114,8 +168,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   Future<void> _download() async {
     if (_voiceAudioPath == null) return;
     final docsDir = await getApplicationDocumentsDirectory();
-    final safeName =
-        widget.songTitle.replaceAll(RegExp(r'[^\w\s]'), '').replaceAll(' ', '_');
+    final safeName = widget.songTitle
+        .replaceAll(RegExp(r'[^\w\s]'), '')
+        .replaceAll(' ', '_');
     final dest = File('${docsDir.path}/${safeName}_voice.wav');
     await File(_voiceAudioPath!).copy(dest.path);
     if (!mounted) return;
@@ -137,8 +192,10 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
-        title: Text('"${widget.songTitle}"',
-            style: const TextStyle(fontSize: 16)),
+        title: Text(
+          '"${widget.songTitle}"',
+          style: const TextStyle(fontSize: 16),
+        ),
         centerTitle: true,
         backgroundColor: cs.inverseSurface,
         foregroundColor: cs.onInverseSurface,
@@ -150,7 +207,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-
               // ── Song info card ───────────────────────────────────────────
               Container(
                 padding: const EdgeInsets.all(20),
@@ -170,18 +226,24 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                         color: cs.primary.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(Icons.graphic_eq_rounded,
-                          color: cs.primary, size: 28),
+                      child: Icon(
+                        Icons.graphic_eq_rounded,
+                        color: cs.primary,
+                        size: 28,
+                      ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('"${widget.songTitle}"',
-                              style: tt.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: cs.onPrimaryContainer)),
+                          Text(
+                            '"${widget.songTitle}"',
+                            style: tt.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: cs.onPrimaryContainer,
+                            ),
+                          ),
                           const SizedBox(height: 4),
                           Wrap(
                             spacing: 6,
@@ -208,9 +270,24 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 tt: tt,
               ),
 
+              if (_currentStep == _Step.cloningVoice ||
+                  _currentStep == _Step.generatingMusic) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    'We are sending your recording and lyrics to the voice backend, then saving the returned WAV locally on your device.',
+                    style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ],
+
               // ── Ready ────────────────────────────────────────────────────
               if (_currentStep == _Step.ready) ...[
-
                 // Voice source label
                 if (_voiceSourceLabel != null)
                   Container(
@@ -254,8 +331,11 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.info_outline_rounded,
-                            color: cs.onTertiaryContainer, size: 18),
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: cs.onTertiaryContainer,
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -281,7 +361,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                       backgroundColor: _isPlaying ? cs.error : cs.primary,
                       foregroundColor: cs.onPrimary,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20)),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                       elevation: 6,
                     ),
                     icon: Icon(
@@ -294,10 +375,12 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                       _isPlaying
                           ? 'Pause'
                           : _musicAudioPath != null
-                              ? 'Play with Background Music'
-                              : 'Play My Song',
+                          ? 'Play with Background Music'
+                          : 'Play My Song',
                       style: tt.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold, color: cs.onPrimary),
+                        fontWeight: FontWeight.bold,
+                        color: cs.onPrimary,
+                      ),
                     ),
                   ),
                 ),
@@ -307,11 +390,14 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 // Music status
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
-                    color: _musicAudioPath != null
-                        ? cs.surfaceContainerHighest
-                        : cs.errorContainer.withValues(alpha: 0.4),
+                    color:
+                        _musicAudioPath != null
+                            ? cs.surfaceContainerHighest
+                            : cs.errorContainer.withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -321,9 +407,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                             ? Icons.music_note_rounded
                             : Icons.music_off_rounded,
                         size: 18,
-                        color: _musicAudioPath != null
-                            ? cs.primary
-                            : cs.error,
+                        color: _musicAudioPath != null ? cs.primary : cs.error,
                       ),
                       const SizedBox(width: 10),
                       Text(
@@ -331,9 +415,10 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                             ? '${widget.mood} instrumental • 30% volume'
                             : 'Background music unavailable — vocals only',
                         style: tt.bodySmall?.copyWith(
-                          color: _musicAudioPath != null
-                              ? cs.onSurfaceVariant
-                              : cs.onErrorContainer,
+                          color:
+                              _musicAudioPath != null
+                                  ? cs.onSurfaceVariant
+                                  : cs.onErrorContainer,
                         ),
                       ),
                     ],
@@ -353,7 +438,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                       ),
                     ),
@@ -366,7 +452,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                       ),
                     ),
@@ -377,6 +464,47 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
                 // Lyrics
                 _LyricsCard(lyrics: widget.lyrics, cs: cs, tt: tt),
+              ],
+
+              if (_currentStep == _Step.error) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.errorContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Could not generate the voice preview',
+                        style: tt.titleSmall?.copyWith(
+                          color: cs.onErrorContainer,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorMessage ??
+                            'An unexpected error happened while calling the voice backend.',
+                        style: tt.bodyMedium?.copyWith(
+                          color: cs.onErrorContainer,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      FilledButton.icon(
+                        onPressed: _generatePreview,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: cs.error,
+                          foregroundColor: cs.onError,
+                        ),
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Try Again'),
+                      ),
+                    ],
+                  ),
+                ),
               ],
 
               const SizedBox(height: 40),
@@ -411,109 +539,123 @@ class _PipelineSteps extends StatelessWidget {
     final steps = [
       _StepData(
         icon: Icons.record_voice_over_rounded,
-        title: 'Cloning your voice',
-        subtitle: 'Chatterbox • ResembleAI · free, no key needed',
+        title: 'Uploading your sample',
+        subtitle: 'Sending your recording and lyrics to the voice backend',
         isDone: voiceDone,
         isActive: !voiceDone && currentStep != _Step.error,
       ),
       _StepData(
         icon: Icons.music_note_rounded,
-        title: 'Generating background music',
-        subtitle: 'MusicGen • Meta · free, no key needed',
+        title: 'Generating cloned vocals',
+        subtitle: 'XTTS-v2 renders your lyrics in your voice tone',
         isDone: musicDone,
         isActive: !musicDone && currentStep != _Step.error,
       ),
       _StepData(
         icon: Icons.auto_awesome_rounded,
-        title: 'Your song is ready',
-        subtitle: 'Voice + music mixed · ready to play & share',
+        title: 'Preview ready',
+        subtitle: 'Your cloned vocal file is ready to play and save',
         isDone: currentStep == _Step.ready,
         isActive: voiceDone && musicDone && currentStep != _Step.ready,
       ),
     ];
 
     return Column(
-      children: steps.map((s) {
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            color: s.isDone
-                ? cs.primaryContainer.withValues(alpha: 0.4)
-                : s.isActive
-                    ? cs.surfaceContainerHighest
-                    : cs.surfaceContainerHighest.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: s.isDone
-                  ? cs.primary.withValues(alpha: 0.3)
-                  : s.isActive
-                      ? cs.outline.withValues(alpha: 0.3)
-                      : cs.outline.withValues(alpha: 0.1),
-            ),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: s.isDone
-                    ? Container(
-                        decoration: BoxDecoration(
-                          color: cs.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.check_rounded,
-                            color: cs.primary, size: 22),
-                      )
-                    : s.isActive
-                        ? Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: cs.primary,
-                            ),
-                          )
-                        : Container(
-                            decoration: BoxDecoration(
-                              color: cs.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(s.icon,
-                                color: cs.onSurfaceVariant
-                                    .withValues(alpha: 0.4),
-                                size: 20),
-                          ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      s.title,
-                      style: tt.labelLarge?.copyWith(
-                        color: s.isDone || s.isActive
-                            ? cs.onSurface
-                            : cs.onSurface.withValues(alpha: 0.4),
-                        fontWeight: s.isDone || s.isActive
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                      ),
-                    ),
-                    Text(
-                      s.subtitle,
-                      style: tt.labelSmall?.copyWith(
-                          color: cs.onSurfaceVariant
-                              .withValues(alpha: s.isDone ? 0.8 : 0.5)),
-                    ),
-                  ],
+      children:
+          steps.map((s) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color:
+                    s.isDone
+                        ? cs.primaryContainer.withValues(alpha: 0.4)
+                        : s.isActive
+                        ? cs.surfaceContainerHighest
+                        : cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color:
+                      s.isDone
+                          ? cs.primary.withValues(alpha: 0.3)
+                          : s.isActive
+                          ? cs.outline.withValues(alpha: 0.3)
+                          : cs.outline.withValues(alpha: 0.1),
                 ),
               ),
-            ],
-          ),
-        );
-      }).toList(),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 40,
+                    height: 40,
+                    child:
+                        s.isDone
+                            ? Container(
+                              decoration: BoxDecoration(
+                                color: cs.primary.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                Icons.check_rounded,
+                                color: cs.primary,
+                                size: 22,
+                              ),
+                            )
+                            : s.isActive
+                            ? Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: cs.primary,
+                              ),
+                            )
+                            : Container(
+                              decoration: BoxDecoration(
+                                color: cs.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                s.icon,
+                                color: cs.onSurfaceVariant.withValues(
+                                  alpha: 0.4,
+                                ),
+                                size: 20,
+                              ),
+                            ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          s.title,
+                          style: tt.labelLarge?.copyWith(
+                            color:
+                                s.isDone || s.isActive
+                                    ? cs.onSurface
+                                    : cs.onSurface.withValues(alpha: 0.4),
+                            fontWeight:
+                                s.isDone || s.isActive
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                          ),
+                        ),
+                        Text(
+                          s.subtitle,
+                          style: tt.labelSmall?.copyWith(
+                            color: cs.onSurfaceVariant.withValues(
+                              alpha: s.isDone ? 0.8 : 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
     );
   }
 }
@@ -535,8 +677,7 @@ class _StepData {
 
 // ─── LYRICS CARD ──────────────────────────────────────────────────────────────
 class _LyricsCard extends StatelessWidget {
-  const _LyricsCard(
-      {required this.lyrics, required this.cs, required this.tt});
+  const _LyricsCard({required this.lyrics, required this.cs, required this.tt});
   final String lyrics;
   final ColorScheme cs;
   final TextTheme tt;
@@ -554,9 +695,13 @@ class _LyricsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Lyrics',
-              style: tt.labelLarge?.copyWith(
-                  fontWeight: FontWeight.bold, color: cs.primary)),
+          Text(
+            'Lyrics',
+            style: tt.labelLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: cs.primary,
+            ),
+          ),
           const SizedBox(height: 14),
           ...lines.map((line) {
             final isSection = RegExp(
@@ -567,19 +712,26 @@ class _LyricsCard extends StatelessWidget {
             if (isSection) {
               return Padding(
                 padding: const EdgeInsets.only(top: 16, bottom: 4),
-                child: Text(line.trim(),
-                    style: tt.labelMedium?.copyWith(
-                        color: cs.primary,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5)),
+                child: Text(
+                  line.trim(),
+                  style: tt.labelMedium?.copyWith(
+                    color: cs.primary,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
               );
             }
             if (line.trim().isEmpty) return const SizedBox(height: 4);
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Text(line,
-                  style: tt.bodyMedium
-                      ?.copyWith(color: cs.onSurface, height: 1.65)),
+              child: Text(
+                line,
+                style: tt.bodyMedium?.copyWith(
+                  color: cs.onSurface,
+                  height: 1.65,
+                ),
+              ),
             );
           }),
         ],
@@ -603,11 +755,14 @@ class _SmallChip extends StatelessWidget {
         color: cs.primary.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 11,
-              color: cs.onPrimaryContainer,
-              fontWeight: FontWeight.w500)),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          color: cs.onPrimaryContainer,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
     );
   }
 }
