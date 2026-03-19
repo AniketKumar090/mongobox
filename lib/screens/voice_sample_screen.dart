@@ -6,46 +6,55 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
 import '../models/song_reference.dart';
-import '../services/transliteration_service.dart';
 import 'voice_song_screen.dart';
 
-/// The sentences the user reads aloud for a voice sample.
-/// Short, phonetically diverse — covers most sounds in English.
+// ─────────────────────────────────────────────────────────────────────────────
+// Base English sentences the user reads aloud for a voice sample.
+// Short, phonetically diverse — covers most sounds in English.
+// For Hindi / Hindi‑dominant songs we instead show Hindi sample lines with
+// a Hinglish (Latin) line underneath so users can read even if they can't
+// read Devanagari.
+// ─────────────────────────────────────────────────────────────────────────────
 const _sampleSentences = [
-  '"The quick brown fox jumps over the lazy dog."',
-  '"She sells seashells by the seashore."',
-  '"How much wood would a woodchuck chuck?"',
+  'The quick brown fox jumps over the lazy dog.',
+  'She sells seashells by the seashore.',
+  'How much wood would a woodchuck chuck if a woodchuck could chuck wood?',
 ];
 
-/// Base sentences in native scripts (will be transliterated to Roman for display)
-const _urduSampleSentencesNative = [
-  '"میری آواز میں یہ گیت دل سے نکلتا ہے۔"',
-  '"رات کی خاموشی میں تیری یاد جاگتی رہتی ہے۔"',
-  '"دل کی دھڑکن ہر پل تیرا نام پکارتی ہے۔"',
-];
-
-const _hindiSampleSentencesNative = [
-  '"मेरी आवाज़ में यह गीत दिल से निकलता है।"',
-  '"रात की खामोशी में तेरी याद जगती रहती है।"',
-  '"दिल की धड़कन हर पल तेरा नाम पुकारती है।"',
+/// Hindi sample lines + Hinglish underneath for Hindi‑dominant songs.
+const _hindiSampleSentencePairs = [
+  (
+    'मेरी आवाज़ में ये गाना दिल से निकलता है।',
+    'Meri awaaz mein ye gaana dil se nikalta hai.',
+  ),
+  (
+    'रात की ख़ामोशी में तेरी याद गूंजती रहती है।',
+    'Raat ki khamoshi mein teri yaad goonjti rehti hai.',
+  ),
+  (
+    'दिल की धड़कन हर पल तेरा नाम पुकारती है।',
+    'Dil ki dhadkan har pal tera naam pukarti hai.',
+  ),
 ];
 
 class VoiceSampleScreen extends StatefulWidget {
   const VoiceSampleScreen({
     super.key,
     required this.songTitle,
-    required this.lyrics,
+    required this.hindiLyrics,
+    required this.englishLyrics,
+    required this.dominantLanguage,
     required this.mood,
     required this.genre,
-    required this.language,
     this.referenceSong,
   });
 
   final String songTitle;
-  final String lyrics;
+  final String hindiLyrics;
+  final String englishLyrics;
+  final String dominantLanguage;
   final String mood;
   final String genre;
-  final String language;
   final SongReference? referenceSong;
 
   @override
@@ -56,7 +65,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     with SingleTickerProviderStateMixin {
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
-  final _transliterationService = TransliterationService();
 
   String? _recordedPath;
   bool _isRecording = false;
@@ -65,10 +73,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   Timer? _timer;
 
   late AnimationController _waveController;
-  
-  // Transliterated sample sentences
-  List<String> _displaySampleSentences = [];
-  bool _isLoadingSentences = false;
 
   @override
   void initState() {
@@ -76,78 +80,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _waveController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
-    );
-    _loadTransliteratedSentences();
-  }
-
-  Future<void> _loadTransliteratedSentences() async {
-    setState(() => _isLoadingSentences = true);
-    final normalizedLanguage = widget.language.trim().toLowerCase();
-    
-    List<String> nativeSentences;
-    switch (normalizedLanguage) {
-      case 'urdu':
-        nativeSentences = _urduSampleSentencesNative;
-        break;
-      case 'hindi':
-        nativeSentences = _hindiSampleSentencesNative;
-        break;
-      default:
-        nativeSentences = _sampleSentences;
-    }
-    
-    // Transliterate if needed (for non-Latin scripts)
-    final transliterated = <String>[];
-    for (final sentence in nativeSentences) {
-      if (_transliterationService.needsTransliteration(sentence)) {
-        final translit = await _transliterationService.transliterate(
-          sentence,
-          widget.language,
-        );
-        transliterated.add(translit);
-      } else {
-        transliterated.add(sentence);
-      }
-    }
-    
-    if (mounted) {
-      setState(() {
-        _displaySampleSentences = transliterated;
-        _isLoadingSentences = false;
-      });
-    }
-  }
-
-  Future<void> _showMicSettingsDialog() async {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-
-    await showDialog<void>(
-      context: context,
-      builder:
-          (ctx) => AlertDialog(
-            title: const Text('Microphone permission'),
-            content: const Text(
-              'Microphone access is turned off for this app. Enable it in Settings to record your voice sample.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: Text('Cancel', style: tt.labelLarge),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: cs.primary,
-                  foregroundColor: cs.onPrimary,
-                ),
-                onPressed: () async {
-                  Navigator.of(ctx).pop();
-                  await openAppSettings();
-                },
-                child: const Text('Open Settings'),
-              ),
-            ],
-          ),
     );
   }
 
@@ -158,6 +90,37 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _player.dispose();
     _waveController.dispose();
     super.dispose();
+  }
+
+  Future<void> _showMicSettingsDialog() async {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Microphone permission'),
+        content: const Text(
+          'Microphone access is turned off. Enable it in Settings to record your voice.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: tt.labelLarge),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: cs.primary,
+              foregroundColor: cs.onPrimary,
+            ),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _startRecording() async {
@@ -182,7 +145,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     try {
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_sample.m4a';
-
       await _recorder.start(
         const RecordConfig(
           encoder: AudioEncoder.aacLc,
@@ -256,9 +218,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     final tt = Theme.of(context).textTheme;
     final hasRecording = _recordedPath != null;
     final isShort = _recordingSeconds < 5 && hasRecording;
-    final sampleSentences = _displaySampleSentences.isNotEmpty
-        ? _displaySampleSentences
-        : _sampleSentences;
+    final isHindiDominant =
+        widget.dominantLanguage.toLowerCase().contains('hindi');
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -275,6 +236,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ── Info card ────────────────────────────────────────────────
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -315,11 +277,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                                 ),
                               ),
                               Text(
-                                'Read aloud in ${widget.language} for 10–15 seconds',
+                                'Read aloud clearly for 10–15 seconds',
                                 style: tt.bodySmall?.copyWith(
-                                  color: cs.onPrimaryContainer.withValues(
-                                    alpha: 0.7,
-                                  ),
+                                  color: cs.onPrimaryContainer
+                                      .withValues(alpha: 0.7),
                                 ),
                               ),
                             ],
@@ -327,17 +288,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Record a short voice sample.',
-                      style: tt.bodySmall?.copyWith(
-                        color: cs.onPrimaryContainer.withValues(alpha: 0.85),
-                      ),
-                    ),
                     if (widget.referenceSong != null) ...[
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 12),
                       Text(
-                        'Pronunciation guide: ${widget.referenceSong!.trackName} by ${widget.referenceSong!.artistName}',
+                        'Style reference: ${widget.referenceSong!.trackName} by ${widget.referenceSong!.artistName}',
                         style: tt.bodySmall?.copyWith(
                           color: cs.onPrimaryContainer.withValues(alpha: 0.85),
                           fontWeight: FontWeight.w600,
@@ -347,46 +301,54 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   ],
                 ),
               ),
+
               const SizedBox(height: 28),
+
               Text(
-                'Read this aloud:',
+                'Read these sentences aloud:',
                 style: tt.titleSmall?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 12),
-              if (_isLoadingSentences)
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            cs.primary,
+
+              // ── Prompt sentences: Hindi+Hinglish for Hindi songs, otherwise English only ──
+              if (isHindiDominant)
+                ..._hindiSampleSentencePairs.map(
+                  (pair) => Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: cs.outline.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          pair.$1,
+                          style: tt.bodyLarge?.copyWith(
+                            fontStyle: FontStyle.italic,
+                            height: 1.5,
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Text(
-                          'Preparing readable text...',
+                        const SizedBox(height: 6),
+                        Text(
+                          pair.$2,
                           style: tt.bodyMedium?.copyWith(
+                            fontStyle: FontStyle.italic,
+                            height: 1.4,
                             color: cs.onSurfaceVariant,
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 )
               else
-                ...List.generate(sampleSentences.length, (i) {
-                  return Container(
+                ..._sampleSentences.map(
+                  (sentence) => Container(
                     margin: const EdgeInsets.only(bottom: 10),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -397,15 +359,44 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                       ),
                     ),
                     child: Text(
-                      sampleSentences[i],
+                      sentence,
                       style: tt.bodyLarge?.copyWith(
                         fontStyle: FontStyle.italic,
-                        height: 1.5,
+                        height: 1.55,
                       ),
                     ),
-                  );
-                }),
+                  ),
+                ),
+
+              const SizedBox(height: 8),
+
+              // ── Tip ──────────────────────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.lightbulb_outline_rounded,
+                        size: 16, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Speak naturally — your voice tone is what matters, not the words.',
+                        style: tt.bodySmall
+                            ?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
               const SizedBox(height: 24),
+
+              // ── Wave visualiser while recording ──────────────────────────
               if (_isRecording)
                 _WaveVisualiser(
                   controller: _waveController,
@@ -413,13 +404,18 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   cs: cs,
                   tt: tt,
                 ),
+
               const SizedBox(height: 16),
+
+              // ── Record / Stop button ─────────────────────────────────────
               SizedBox(
                 height: 64,
                 child: FilledButton.icon(
-                  onPressed: _isRecording ? _stopRecording : _startRecording,
+                  onPressed:
+                      _isRecording ? _stopRecording : _startRecording,
                   style: FilledButton.styleFrom(
-                    backgroundColor: _isRecording ? cs.error : cs.primary,
+                    backgroundColor:
+                        _isRecording ? cs.error : cs.primary,
                     foregroundColor: cs.onPrimary,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(18),
@@ -434,8 +430,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     _isRecording
                         ? 'Stop  (${_recordingSeconds}s)'
                         : hasRecording
-                        ? 'Re-record'
-                        : 'Start Recording',
+                            ? 'Re-record'
+                            : 'Start Recording',
                     style: tt.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: cs.onPrimary,
@@ -443,8 +439,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   ),
                 ),
               ),
+
               if (hasRecording) ...[
                 const SizedBox(height: 12),
+
                 if (isShort)
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -454,24 +452,22 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.warning_amber_rounded,
-                          color: cs.error,
-                          size: 18,
-                        ),
+                        Icon(Icons.warning_amber_rounded,
+                            color: cs.error, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Recording is very short. For better quality, aim for 10–15 seconds.',
-                            style: tt.bodySmall?.copyWith(
-                              color: cs.onErrorContainer,
-                            ),
+                            'Recording is very short. Aim for 10–15 seconds for best quality.',
+                            style: tt.bodySmall
+                                ?.copyWith(color: cs.onErrorContainer),
                           ),
                         ),
                       ],
                     ),
                   ),
+
                 const SizedBox(height: 12),
+
                 OutlinedButton.icon(
                   onPressed: _playback,
                   style: OutlinedButton.styleFrom(
@@ -481,27 +477,31 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     ),
                   ),
                   icon: Icon(
-                    _isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                    _isPlaying
+                        ? Icons.stop_rounded
+                        : Icons.play_arrow_rounded,
                   ),
                   label: Text(
                     _isPlaying ? 'Stop playback' : 'Play back recording',
                   ),
                 ),
+
                 const SizedBox(height: 12),
+
                 FilledButton.icon(
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder:
-                            (context) => VoiceSongScreen(
-                              songTitle: widget.songTitle,
-                              lyrics: widget.lyrics,
-                              mood: widget.mood,
-                              genre: widget.genre,
-                              language: widget.language,
-                              referenceSong: widget.referenceSong,
-                              voiceSamplePath: _recordedPath!,
-                            ),
+                        builder: (_) => VoiceSongScreen(
+                          songTitle: widget.songTitle,
+                          hindiLyrics: widget.hindiLyrics,
+                          englishLyrics: widget.englishLyrics,
+                          dominantLanguage: widget.dominantLanguage,
+                          mood: widget.mood,
+                          genre: widget.genre,
+                          referenceSong: widget.referenceSong,
+                          voiceSamplePath: _recordedPath!,
+                        ),
                       ),
                     );
                   },
@@ -517,6 +517,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   label: const Text('Use This Recording'),
                 ),
               ],
+
               const SizedBox(height: 40),
             ],
           ),
@@ -526,6 +527,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   }
 }
 
+// ─── WAVE VISUALISER ──────────────────────────────────────────────────────────
 class _WaveVisualiser extends StatelessWidget {
   const _WaveVisualiser({
     required this.controller,
@@ -533,7 +535,6 @@ class _WaveVisualiser extends StatelessWidget {
     required this.cs,
     required this.tt,
   });
-
   final AnimationController controller;
   final int seconds;
   final ColorScheme cs;
@@ -566,9 +567,9 @@ class _WaveVisualiser extends StatelessWidget {
             return AnimatedBuilder(
               animation: controller,
               builder: (_, __) {
-                final h =
-                    8.0 +
-                    24.0 * (0.3 + 0.7 * ((controller.value + i * 0.15) % 1.0));
+                final h = 8.0 +
+                    24.0 *
+                        (0.3 + 0.7 * ((controller.value + i * 0.15) % 1.0));
                 return Container(
                   width: 3,
                   height: h,
@@ -590,7 +591,6 @@ class _WaveVisualiser extends StatelessWidget {
 class _PulsingDot extends StatefulWidget {
   const _PulsingDot({required this.cs});
   final ColorScheme cs;
-
   @override
   State<_PulsingDot> createState() => _PulsingDotState();
 }
@@ -618,15 +618,14 @@ class _PulsingDotState extends State<_PulsingDot>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _c,
-      builder:
-          (_, __) => Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: widget.cs.error.withValues(alpha: 0.5 + 0.5 * _c.value),
-              shape: BoxShape.circle,
-            ),
-          ),
+      builder: (_, __) => Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          color: widget.cs.error.withValues(alpha: 0.5 + 0.5 * _c.value),
+          shape: BoxShape.circle,
+        ),
+      ),
     );
   }
 }

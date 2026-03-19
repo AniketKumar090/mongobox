@@ -14,7 +14,7 @@ import '../services/background_audio_player_service.dart';
 import '../services/soundcloud_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
-import '../screens/ generate_song_screen.dart'; // ← NEW
+import '../screens/generate_song_screen.dart'; // ← NEW
 
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
@@ -560,7 +560,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   // ── NEW ──────────────────────────────────────────────────────────────────────
   void _openGenerateSong() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const GenerateSongScreen()),
+      MaterialPageRoute(builder: (_) =>  GenerateSongScreen()),
     );
   }
   // ─────────────────────────────────────────────────────────────────────────────
