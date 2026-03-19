@@ -5,6 +5,9 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../models/song_reference.dart';
+import '../services/background_music_service.dart';
+import '../services/transliteration_service.dart';
 import '../services/voice_clone_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,6 +21,8 @@ class VoiceSongScreen extends StatefulWidget {
     required this.lyrics,
     required this.mood,
     required this.genre,
+    required this.language,
+    this.referenceSong,
     required this.voiceSamplePath,
   });
 
@@ -25,6 +30,8 @@ class VoiceSongScreen extends StatefulWidget {
   final String lyrics;
   final String mood;
   final String genre;
+  final String language;
+  final SongReference? referenceSong;
   final String voiceSamplePath;
 
   @override
@@ -35,9 +42,11 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   final _musicPlayer = AudioPlayer();
   final _voicePlayer = AudioPlayer();
   final _cloneService = VoiceCloneService();
+  final _backgroundMusicService = BackgroundMusicService();
+  final _transliterationService = TransliterationService();
 
   String? _voiceAudioPath;
-  String? _musicAudioPath;
+  String? _musicSourceUrl;
   String? _errorMessage;
 
   _Step _currentStep = _Step.cloningVoice;
@@ -48,13 +57,21 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   // Voice quality tracking
   String? _qualityWarning;
   String? _voiceSourceLabel;
+  String? _musicSourceLabel;
   StreamSubscription<PlayerState>? _voicePlayerStateSub;
+  
+  // Transliterated lyrics
+  String? _romanLyrics;
+  bool _showRoman = false;
+  bool _isTransliterating = false;
+  _LyricsViewMode _lyricsViewMode = _LyricsViewMode.original;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generatePreview();
+      _transliterateLyricsIfNeeded();
     });
   }
 
@@ -74,10 +91,11 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       _musicDone = false;
       _isPlaying = false;
       _voiceAudioPath = null;
-      _musicAudioPath = null;
+      _musicSourceUrl = null;
       _errorMessage = null;
       _voiceSourceLabel = null;
       _qualityWarning = null;
+      _musicSourceLabel = null;
     });
 
     try {
@@ -86,22 +104,35 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         lyrics: widget.lyrics,
         mood: widget.mood,
         genre: widget.genre,
+        language: widget.language,
+        referenceSong: widget.referenceSong,
       );
 
       if (!mounted) return;
       setState(() {
         _currentStep = _Step.generatingMusic;
         _voiceDone = true;
-        _voiceSourceLabel = 'Generated from your voice sample';
+        _voiceSourceLabel =
+            widget.referenceSong == null
+                ? 'Generated from your voice sample'
+                : 'Generated from your voice sample with ${widget.referenceSong!.artistName} pronunciation guidance';
         _qualityWarning =
-            'This MVP uses cloned voice TTS, so it will sound closer to your voice performing the lyrics than a fully natural sung vocal.';
+            'This MVP uses cloned voice TTS with reference-song metadata for pronunciation guidance, so it will sound closer to your voice performing the lyrics than a fully natural sung vocal.';
       });
+
+      final backgroundTrack = await _backgroundMusicService.findTrack(
+        mood: widget.mood,
+        genre: widget.genre,
+        language: widget.language,
+      );
 
       await Future<void>.delayed(const Duration(milliseconds: 180));
       if (!mounted) return;
 
       setState(() {
         _voiceAudioPath = clonedFile.path;
+        _musicSourceUrl = backgroundTrack?.sourceUrl;
+        _musicSourceLabel = backgroundTrack?.label;
         _musicDone = true;
         _currentStep = _Step.ready;
       });
@@ -118,6 +149,33 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     return error.toString().replaceFirst('Exception: ', '').trim();
   }
 
+  // Transliterate lyrics if they're in a non-Latin script
+  Future<void> _transliterateLyricsIfNeeded() async {
+    if (!_transliterationService.needsTransliteration(widget.lyrics)) {
+      return;
+    }
+
+    setState(() => _isTransliterating = true);
+
+    try {
+      final roman = await _transliterationService.transliterateLyrics(
+        widget.lyrics,
+        widget.language,
+      );
+      
+      if (!mounted) return;
+      setState(() {
+        _romanLyrics = roman;
+        _showRoman = true; // Auto-show Roman version
+        _lyricsViewMode = _LyricsViewMode.both;
+        _isTransliterating = false;
+      });
+    } catch (_) {
+      // Silently fail — stay on original script
+      if (mounted) setState(() => _isTransliterating = false);
+    }
+  }
+
   // ── PLAYBACK: voice + music simultaneously ──────────────────────────────────
   Future<void> _play() async {
     if (_voiceAudioPath == null) return;
@@ -132,10 +190,21 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     await _voicePlayer.setFilePath(_voiceAudioPath!);
     await _voicePlayer.setVolume(1.0);
 
-    if (_musicAudioPath != null) {
-      await _musicPlayer.setFilePath(_musicAudioPath!);
-      await _musicPlayer.setVolume(0.3);
-      await _musicPlayer.setLoopMode(LoopMode.all);
+    var canPlayMusic = _musicSourceUrl != null;
+    if (canPlayMusic) {
+      try {
+        await _musicPlayer.setUrl(_musicSourceUrl!);
+        await _musicPlayer.setVolume(0.3);
+        await _musicPlayer.setLoopMode(LoopMode.all);
+      } catch (_) {
+        canPlayMusic = false;
+        if (mounted) {
+          setState(() {
+            _musicSourceUrl = null;
+            _musicSourceLabel = null;
+          });
+        }
+      }
     }
 
     await _voicePlayerStateSub?.cancel();
@@ -150,7 +219,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
     await Future.wait([
       _voicePlayer.play(),
-      if (_musicAudioPath != null) _musicPlayer.play(),
+      if (canPlayMusic) _musicPlayer.play(),
     ]);
   }
 
@@ -250,6 +319,12 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                             children: [
                               _SmallChip(label: widget.mood, cs: cs),
                               _SmallChip(label: widget.genre, cs: cs),
+                              _SmallChip(label: widget.language, cs: cs),
+                              if (widget.referenceSong != null)
+                                _SmallChip(
+                                  label: widget.referenceSong!.artistName,
+                                  cs: cs,
+                                ),
                             ],
                           ),
                         ],
@@ -374,7 +449,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     label: Text(
                       _isPlaying
                           ? 'Pause'
-                          : _musicAudioPath != null
+                          : _musicSourceUrl != null
                           ? 'Play with Background Music'
                           : 'Play My Song',
                       style: tt.titleMedium?.copyWith(
@@ -395,7 +470,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                   ),
                   decoration: BoxDecoration(
                     color:
-                        _musicAudioPath != null
+                        _musicSourceUrl != null
                             ? cs.surfaceContainerHighest
                             : cs.errorContainer.withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(12),
@@ -403,22 +478,24 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                   child: Row(
                     children: [
                       Icon(
-                        _musicAudioPath != null
+                        _musicSourceUrl != null
                             ? Icons.music_note_rounded
                             : Icons.music_off_rounded,
                         size: 18,
-                        color: _musicAudioPath != null ? cs.primary : cs.error,
+                        color: _musicSourceUrl != null ? cs.primary : cs.error,
                       ),
                       const SizedBox(width: 10),
-                      Text(
-                        _musicAudioPath != null
-                            ? '${widget.mood} instrumental • 30% volume'
-                            : 'Background music unavailable — vocals only',
-                        style: tt.bodySmall?.copyWith(
-                          color:
-                              _musicAudioPath != null
-                                  ? cs.onSurfaceVariant
-                                  : cs.onErrorContainer,
+                      Expanded(
+                        child: Text(
+                          _musicSourceUrl != null
+                              ? '${_musicSourceLabel ?? '${widget.mood} instrumental'} • 30% volume'
+                              : 'Background music unavailable — vocals only',
+                          style: tt.bodySmall?.copyWith(
+                            color:
+                                _musicSourceUrl != null
+                                    ? cs.onSurfaceVariant
+                                    : cs.onErrorContainer,
+                          ),
                         ),
                       ),
                     ],
@@ -463,7 +540,54 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 const SizedBox(height: 24),
 
                 // Lyrics
-                _LyricsCard(lyrics: widget.lyrics, cs: cs, tt: tt),
+                if (_isTransliterating)
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              cs.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Making lyrics readable...',
+                          style: tt.bodyMedium?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  _LyricsCard(
+                    lyrics: _romanLyrics ?? widget.lyrics,
+                    originalLyrics: widget.lyrics,
+                    romanLyrics: _romanLyrics,
+                    showRoman: _showRoman,
+                    onToggle: () {
+                      setState(() => _showRoman = !_showRoman);
+                    },
+                    viewMode: _lyricsViewMode,
+                    onViewModeChanged: (mode) {
+                      setState(() {
+                        _lyricsViewMode = mode;
+                        _showRoman = mode != _LyricsViewMode.original;
+                      });
+                    },
+                    cs: cs,
+                    tt: tt,
+                  ),
               ],
 
               if (_currentStep == _Step.error) ...[
@@ -677,14 +801,40 @@ class _StepData {
 
 // ─── LYRICS CARD ──────────────────────────────────────────────────────────────
 class _LyricsCard extends StatelessWidget {
-  const _LyricsCard({required this.lyrics, required this.cs, required this.tt});
+  const _LyricsCard({
+    required this.lyrics,
+    required this.originalLyrics,
+    this.romanLyrics,
+    required this.showRoman,
+    required this.onToggle,
+    required this.viewMode,
+    required this.onViewModeChanged,
+    required this.cs,
+    required this.tt,
+  });
+  
   final String lyrics;
+  final String originalLyrics;
+  final String? romanLyrics;
+  final bool showRoman;
+  final VoidCallback onToggle;
+  final _LyricsViewMode viewMode;
+  final ValueChanged<_LyricsViewMode> onViewModeChanged;
   final ColorScheme cs;
   final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
-    final lines = lyrics.split('\n');
+    final originalLines = originalLyrics.split('\n');
+    final romanLines = romanLyrics?.split('\n');
+    final canShowRoman = romanLines != null;
+    final effectiveViewMode = canShowRoman ? viewMode : _LyricsViewMode.original;
+
+    final lines =
+        effectiveViewMode == _LyricsViewMode.hinglish && romanLines != null
+            ? romanLines
+            : originalLines;
+    
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -695,15 +845,42 @@ class _LyricsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Lyrics',
-            style: tt.labelLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: cs.primary,
-            ),
+          Row(
+            children: [
+              Text(
+                'Lyrics',
+                style: tt.labelLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: cs.primary,
+                ),
+              ),
+              const Spacer(),
+              if (canShowRoman)
+                SegmentedButton<_LyricsViewMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _LyricsViewMode.original,
+                      label: Text('Original'),
+                    ),
+                    ButtonSegment(
+                      value: _LyricsViewMode.hinglish,
+                      label: Text('Hinglish'),
+                    ),
+                    ButtonSegment(
+                      value: _LyricsViewMode.both,
+                      label: Text('Both'),
+                    ),
+                  ],
+                  selected: {effectiveViewMode},
+                  onSelectionChanged: (set) {
+                    onViewModeChanged(set.first);
+                  },
+                ),
+            ],
           ),
           const SizedBox(height: 14),
-          ...lines.map((line) {
+          ...List.generate(lines!.length, (i) {
+            final line = lines[i];
             final isSection = RegExp(
               r'^\[(Verse|Chorus|Bridge|Outro|Pre-Chorus)',
               caseSensitive: false,
@@ -723,14 +900,47 @@ class _LyricsCard extends StatelessWidget {
               );
             }
             if (line.trim().isEmpty) return const SizedBox(height: 4);
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Text(
-                line,
-                style: tt.bodyMedium?.copyWith(
-                  color: cs.onSurface,
-                  height: 1.65,
+
+            final useBoth = effectiveViewMode == _LyricsViewMode.both && romanLines != null;
+            if (!useBoth) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  line,
+                  style: tt.bodyMedium?.copyWith(
+                    color: cs.onSurface,
+                    height: 1.65,
+                  ),
                 ),
+              );
+            }
+
+            final romanLine = i < romanLines.length ? romanLines[i] : '';
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    originalLines[i],
+                    style: tt.bodyMedium?.copyWith(
+                      color: cs.onSurface,
+                      height: 1.6,
+                    ),
+                  ),
+                  if (romanLine.trim().isNotEmpty &&
+                      romanLine.trim() != originalLines[i].trim())
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        romanLine,
+                        style: tt.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             );
           }),
@@ -739,6 +949,8 @@ class _LyricsCard extends StatelessWidget {
     );
   }
 }
+
+enum _LyricsViewMode { original, hinglish, both }
 
 // ─── SMALL CHIP ───────────────────────────────────────────────────────────────
 class _SmallChip extends StatelessWidget {

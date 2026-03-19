@@ -5,6 +5,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
+import '../models/song_reference.dart';
+import '../services/transliteration_service.dart';
 import 'voice_song_screen.dart';
 
 /// The sentences the user reads aloud for a voice sample.
@@ -15,6 +17,19 @@ const _sampleSentences = [
   '"How much wood would a woodchuck chuck?"',
 ];
 
+/// Base sentences in native scripts (will be transliterated to Roman for display)
+const _urduSampleSentencesNative = [
+  '"میری آواز میں یہ گیت دل سے نکلتا ہے۔"',
+  '"رات کی خاموشی میں تیری یاد جاگتی رہتی ہے۔"',
+  '"دل کی دھڑکن ہر پل تیرا نام پکارتی ہے۔"',
+];
+
+const _hindiSampleSentencesNative = [
+  '"मेरी आवाज़ में यह गीत दिल से निकलता है।"',
+  '"रात की खामोशी में तेरी याद जगती रहती है।"',
+  '"दिल की धड़कन हर पल तेरा नाम पुकारती है।"',
+];
+
 class VoiceSampleScreen extends StatefulWidget {
   const VoiceSampleScreen({
     super.key,
@@ -22,12 +37,16 @@ class VoiceSampleScreen extends StatefulWidget {
     required this.lyrics,
     required this.mood,
     required this.genre,
+    required this.language,
+    this.referenceSong,
   });
 
   final String songTitle;
   final String lyrics;
   final String mood;
   final String genre;
+  final String language;
+  final SongReference? referenceSong;
 
   @override
   State<VoiceSampleScreen> createState() => _VoiceSampleScreenState();
@@ -37,6 +56,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     with SingleTickerProviderStateMixin {
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
+  final _transliterationService = TransliterationService();
 
   String? _recordedPath;
   bool _isRecording = false;
@@ -45,6 +65,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   Timer? _timer;
 
   late AnimationController _waveController;
+  
+  // Transliterated sample sentences
+  List<String> _displaySampleSentences = [];
+  bool _isLoadingSentences = false;
 
   @override
   void initState() {
@@ -53,6 +77,45 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
+    _loadTransliteratedSentences();
+  }
+
+  Future<void> _loadTransliteratedSentences() async {
+    setState(() => _isLoadingSentences = true);
+    final normalizedLanguage = widget.language.trim().toLowerCase();
+    
+    List<String> nativeSentences;
+    switch (normalizedLanguage) {
+      case 'urdu':
+        nativeSentences = _urduSampleSentencesNative;
+        break;
+      case 'hindi':
+        nativeSentences = _hindiSampleSentencesNative;
+        break;
+      default:
+        nativeSentences = _sampleSentences;
+    }
+    
+    // Transliterate if needed (for non-Latin scripts)
+    final transliterated = <String>[];
+    for (final sentence in nativeSentences) {
+      if (_transliterationService.needsTransliteration(sentence)) {
+        final translit = await _transliterationService.transliterate(
+          sentence,
+          widget.language,
+        );
+        transliterated.add(translit);
+      } else {
+        transliterated.add(sentence);
+      }
+    }
+    
+    if (mounted) {
+      setState(() {
+        _displaySampleSentences = transliterated;
+        _isLoadingSentences = false;
+      });
+    }
   }
 
   Future<void> _showMicSettingsDialog() async {
@@ -61,29 +124,30 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Microphone permission'),
-        content: const Text(
-          'Microphone access is turned off for this app. Enable it in Settings to record your voice sample.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('Cancel', style: tt.labelLarge),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: cs.primary,
-              foregroundColor: cs.onPrimary,
+      builder:
+          (ctx) => AlertDialog(
+            title: const Text('Microphone permission'),
+            content: const Text(
+              'Microphone access is turned off for this app. Enable it in Settings to record your voice sample.',
             ),
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              await openAppSettings();
-            },
-            child: const Text('Open Settings'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text('Cancel', style: tt.labelLarge),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.primary,
+                  foregroundColor: cs.onPrimary,
+                ),
+                onPressed: () async {
+                  Navigator.of(ctx).pop();
+                  await openAppSettings();
+                },
+                child: const Text('Open Settings'),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -192,6 +256,9 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     final tt = Theme.of(context).textTheme;
     final hasRecording = _recordedPath != null;
     final isShort = _recordingSeconds < 5 && hasRecording;
+    final sampleSentences = _displaySampleSentences.isNotEmpty
+        ? _displaySampleSentences
+        : _sampleSentences;
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -248,10 +315,11 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                                 ),
                               ),
                               Text(
-                                'Read aloud for 10–15 seconds',
+                                'Read aloud in ${widget.language} for 10–15 seconds',
                                 style: tt.bodySmall?.copyWith(
-                                  color: cs.onPrimaryContainer
-                                      .withValues(alpha: 0.7),
+                                  color: cs.onPrimaryContainer.withValues(
+                                    alpha: 0.7,
+                                  ),
                                 ),
                               ),
                             ],
@@ -266,6 +334,16 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                         color: cs.onPrimaryContainer.withValues(alpha: 0.85),
                       ),
                     ),
+                    if (widget.referenceSong != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'Pronunciation guide: ${widget.referenceSong!.trackName} by ${widget.referenceSong!.artistName}',
+                        style: tt.bodySmall?.copyWith(
+                          color: cs.onPrimaryContainer.withValues(alpha: 0.85),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -275,24 +353,58 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                 style: tt.titleSmall?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 12),
-              ...List.generate(_sampleSentences.length, (i) {
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(16),
+              if (_isLoadingSentences)
+                Container(
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: cs.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
                   ),
-                  child: Text(
-                    _sampleSentences[i],
-                    style: tt.bodyLarge?.copyWith(
-                      fontStyle: FontStyle.italic,
-                      height: 1.5,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            cs.primary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Text(
+                          'Preparing readable text...',
+                          style: tt.bodyMedium?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                ...List.generate(sampleSentences.length, (i) {
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: cs.outline.withValues(alpha: 0.2),
+                      ),
                     ),
-                  ),
-                );
-              }),
+                    child: Text(
+                      sampleSentences[i],
+                      style: tt.bodyLarge?.copyWith(
+                        fontStyle: FontStyle.italic,
+                        height: 1.5,
+                      ),
+                    ),
+                  );
+                }),
               const SizedBox(height: 24),
               if (_isRecording)
                 _WaveVisualiser(
@@ -322,8 +434,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     _isRecording
                         ? 'Stop  (${_recordingSeconds}s)'
                         : hasRecording
-                            ? 'Re-record'
-                            : 'Start Recording',
+                        ? 'Re-record'
+                        : 'Start Recording',
                     style: tt.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: cs.onPrimary,
@@ -380,13 +492,16 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (context) => VoiceSongScreen(
-                          songTitle: widget.songTitle,
-                          lyrics: widget.lyrics,
-                          mood: widget.mood,
-                          genre: widget.genre,
-                          voiceSamplePath: _recordedPath!,
-                        ),
+                        builder:
+                            (context) => VoiceSongScreen(
+                              songTitle: widget.songTitle,
+                              lyrics: widget.lyrics,
+                              mood: widget.mood,
+                              genre: widget.genre,
+                              language: widget.language,
+                              referenceSong: widget.referenceSong,
+                              voiceSamplePath: _recordedPath!,
+                            ),
                       ),
                     );
                   },
@@ -451,7 +566,8 @@ class _WaveVisualiser extends StatelessWidget {
             return AnimatedBuilder(
               animation: controller,
               builder: (_, __) {
-                final h = 8.0 +
+                final h =
+                    8.0 +
                     24.0 * (0.3 + 0.7 * ((controller.value + i * 0.15) % 1.0));
                 return Container(
                   width: 3,
@@ -502,14 +618,15 @@ class _PulsingDotState extends State<_PulsingDot>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _c,
-      builder: (_, __) => Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: widget.cs.error.withValues(alpha: 0.5 + 0.5 * _c.value),
-          shape: BoxShape.circle,
-        ),
-      ),
+      builder:
+          (_, __) => Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: widget.cs.error.withValues(alpha: 0.5 + 0.5 * _c.value),
+              shape: BoxShape.circle,
+            ),
+          ),
     );
   }
 }

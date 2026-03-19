@@ -37,6 +37,12 @@ python start.py
 - `lyrics` (text, required)
 - `mood` (text, optional)
 - `genre` (text, optional)
+- `language` (text, optional): requested lyric language, for example `Urdu`
+- `accent_hint` (text, optional): pronunciation hint for English lyrics, one of `indian`, `british`, `american` (defaults to `indian`)
+- `reference_track_title` (text, optional): source song title for pronunciation guidance
+- `reference_artist_name` (text, optional): source singer/artist for pronunciation guidance
+- `reference_lyric_snippet` (text, optional): lyric snippet from the selected song
+- `reference_video_id` (text, optional)
 
 Returns: `audio/wav`
 

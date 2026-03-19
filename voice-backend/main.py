@@ -205,6 +205,159 @@ def _detect_language_code(text: str) -> str:
     return script_to_lang[best] if counts[best] >= 5 else "en"
 
 
+def _resolve_language_code(
+    language_hint: str,
+    text: str,
+    genre_hint: str = "",
+    reference_track_title: str = "",
+    reference_artist_name: str = "",
+    reference_lyric_snippet: str = "",
+) -> str:
+    normalized = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
+    combined_reference_text = "\n".join(
+        part
+        for part in [
+            text,
+            reference_lyric_snippet,
+            reference_track_title,
+            reference_artist_name,
+            genre_hint,
+        ]
+        if part and part.strip()
+    )
+    combined_lower = combined_reference_text.lower()
+    if normalized:
+        hint_map = {
+            "english": "en",
+            "spanish": "es",
+            "french": "fr",
+            "german": "de",
+            "italian": "it",
+            "portuguese": "pt",
+            "polish": "pl",
+            "turkish": "tr",
+            "russian": "ru",
+            "dutch": "nl",
+            "czech": "cs",
+            "arabic": "ar",
+            "chinese": "zh",
+            "japanese": "ja",
+            "hungarian": "hu",
+            "korean": "ko",
+            "hindi": "hi",
+            # XTTS-v2 does not expose Urdu directly. Use the closest supported
+            # language based on the script used by the generated lyrics.
+            "urdu": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
+        }
+        if normalized in hint_map:
+            return hint_map[normalized]
+
+    south_asian_markers = {
+        "urdu": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
+        "hindi": "hi",
+        "bollywood": "hi",
+        "ghazal": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
+        "qawwali": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
+    }
+    for token, lang_code in south_asian_markers.items():
+        if token in combined_lower:
+            return lang_code
+
+    return _detect_language_code(combined_reference_text)
+
+
+def _resolve_pronunciation_profile(
+    language_hint: str,
+    genre_hint: str,
+    reference_track_title: str,
+    reference_artist_name: str,
+    reference_lyric_snippet: str,
+) -> str:
+    combined = " ".join(
+        part.lower()
+        for part in [
+            language_hint,
+            genre_hint,
+            reference_track_title,
+            reference_artist_name,
+            reference_lyric_snippet,
+        ]
+        if part and part.strip()
+    )
+    if any(token in combined for token in ["urdu", "hindi", "bollywood", "ghazal", "qawwali", "desi"]):
+        return "south_asian"
+    return "default"
+
+
+def _resolve_accent_hint(
+    accent_hint: str,
+    language_hint: str,
+    genre_hint: str,
+    reference_track_title: str,
+    reference_artist_name: str,
+    reference_lyric_snippet: str,
+) -> str:
+    """
+    Best-effort accent resolver.
+
+    We can't truly "extract" an artist's accent from metadata, but we can use
+    metadata as a heuristic hint for English pronunciation shaping.
+    """
+    normalized = re.sub(r"[^a-z]+", " ", (accent_hint or "").strip().lower()).strip()
+    if normalized in {"indian", "british", "american"}:
+        return normalized
+
+    combined = " ".join(
+        part.lower()
+        for part in [
+            language_hint,
+            genre_hint,
+            reference_track_title,
+            reference_artist_name,
+            reference_lyric_snippet,
+        ]
+        if part and part.strip()
+    )
+    # If metadata suggests South Asian content, prefer Indian.
+    if any(token in combined for token in ["urdu", "hindi", "bollywood", "ghazal", "qawwali", "desi"]):
+        return "indian"
+
+    # Default (requested): Indian accent when uncertain.
+    return "indian"
+
+
+_INDIAN_EN_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
+    # "th" becomes closer to "t/d" often; we avoid changing inside common proper nouns.
+    (re.compile(r"\bthis\b", re.IGNORECASE), "dis"),
+    (re.compile(r"\bthat\b", re.IGNORECASE), "dat"),
+    (re.compile(r"\bthese\b", re.IGNORECASE), "dese"),
+    (re.compile(r"\bthose\b", re.IGNORECASE), "dose"),
+    (re.compile(r"\bthink\b", re.IGNORECASE), "tink"),
+    (re.compile(r"\bthing\b", re.IGNORECASE), "ting"),
+    (re.compile(r"\bthree\b", re.IGNORECASE), "tree"),
+    (re.compile(r"\bthrough\b", re.IGNORECASE), "troo"),
+    (re.compile(r"\bwith\b", re.IGNORECASE), "wit"),
+    # Soft "v/w" confusion: nudge "v" -> "w" in some high-frequency words only.
+    (re.compile(r"\bvery\b", re.IGNORECASE), "wery"),
+    (re.compile(r"\blove\b", re.IGNORECASE), "luv"),
+]
+
+
+def _shape_english_pronunciation(text: str, accent: str) -> str:
+    """
+    Nudge pronunciation by respelling a few English tokens.
+
+    This is deliberately conservative to avoid mangling lyrics. It's only used
+    when XTTS language is English.
+    """
+    if accent != "indian":
+        return text
+    shaped = text
+    for pattern, replacement in _INDIAN_EN_REPLACEMENTS:
+        shaped = pattern.sub(replacement, shaped)
+    return shaped
+
+
 # ── Main endpoint ──────────────────────────────────────────────────────────────
 
 @app.post("/clone")
@@ -213,6 +366,12 @@ async def clone_voice(
     lyrics: str = Form(..., description="Raw lyrics text (may include section tags)"),
     mood: str = Form("", description="Song mood e.g. Chill"),
     genre: str = Form("", description="Song genre e.g. Lo-fi"),
+    language: str = Form("", description="Requested song language e.g. Urdu"),
+    accent_hint: str = Form("", description="Pronunciation/accent hint e.g. indian/british/american"),
+    reference_track_title: str = Form("", description="Reference song title used for lyric generation"),
+    reference_artist_name: str = Form("", description="Reference artist name used for lyric generation"),
+    reference_lyric_snippet: str = Form("", description="Reference lyric snippet used for lyric generation"),
+    reference_video_id: str = Form("", description="Reference video id"),
 ) -> FileResponse:
     """
     Clone user voice with lyrics.
@@ -242,18 +401,48 @@ async def clone_voice(
         if not chunks:
             raise HTTPException(400, "Lyrics are empty after stripping section tags.")
 
-        detected_lang = _detect_language_code(clean_lyrics)
+        detected_lang = _resolve_language_code(
+            language,
+            clean_lyrics,
+            genre_hint=genre,
+            reference_track_title=reference_track_title,
+            reference_artist_name=reference_artist_name,
+            reference_lyric_snippet=reference_lyric_snippet,
+        )
+        pronunciation_profile = _resolve_pronunciation_profile(
+            language,
+            genre,
+            reference_track_title,
+            reference_artist_name,
+            reference_lyric_snippet,
+        )
+        accent = _resolve_accent_hint(
+            accent_hint,
+            language,
+            genre,
+            reference_track_title,
+            reference_artist_name,
+            reference_lyric_snippet,
+        )
         log.info(
-            "Clone request: chunks=%d lang=%s mood=%s genre=%s",
+            "Clone request: chunks=%d lang=%s accent=%s pronunciation_profile=%s requested_language=%s mood=%s genre=%s reference=%s / %s video=%s",
             len(chunks),
             detected_lang,
+            accent,
+            pronunciation_profile,
+            language or "-",
             mood or "-",
             genre or "-",
+            reference_track_title or "-",
+            reference_artist_name or "-",
+            reference_video_id or "-",
         )
 
         # 4) XTTS inference (one wav per chunk)
         chunk_wavs: list[str] = []
         for i, chunk in enumerate(chunks):
+            if detected_lang == "en":
+                chunk = _shape_english_pronunciation(chunk, accent=accent)
             out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_raw.wav")
             _tts.tts_to_file(
                 text=chunk,
