@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+
+# Disable numba JIT cache if disk/cache dir is unwritable (avoids RuntimeError)
+os.environ.setdefault("NUMBA_DISABLE_JIT_CACHE", "1")
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -358,6 +362,131 @@ def _shape_english_pronunciation(text: str, accent: str) -> str:
     return shaped
 
 
+# ── Option B: extract instrumental from reference song & mix ────────────────────
+
+def _download_youtube_audio(video_id: str, out_path: str, tmp_dir: str) -> bool:
+    """Download audio from YouTube via yt-dlp. Returns True on success."""
+    if not video_id or not video_id.strip():
+        return False
+    url = f"https://www.youtube.com/watch?v={video_id.strip()}"
+    template = os.path.join(tmp_dir, "yt_audio.%(ext)s")
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "-x",
+        "--audio-format", "best",
+        "-o", template,
+        "--no-playlist",
+        "--no-warnings",
+        "--geo-bypass",
+        url,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180, cwd=tmp_dir)
+        import glob
+        for f in glob.glob(os.path.join(tmp_dir, "yt_audio.*")):
+            if os.path.isfile(f):
+                if f.lower().endswith(".wav"):
+                    shutil.move(f, out_path)
+                else:
+                    _run_ffmpeg_wav_convert(f, out_path, sample_rate=44100, channels=1)
+                return True
+        return False
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        log.warning("yt-dlp download failed for %s: %s", video_id, e)
+        return False
+
+
+def _separate_instrumental(audio_path: str, out_dir: str) -> str | None:
+    """Run Demucs to extract no_vocals stem. Returns path to no_vocals.wav or None."""
+    demucs_out = os.path.join(out_dir, "demucs_out")
+    cmd = [
+        sys.executable, "-m", "demucs",
+        "-n", "htdemucs",
+        "--two-stems", "vocals",
+        "-o", demucs_out,
+        audio_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600, cwd=out_dir)
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        log.warning("Demucs separation failed: %s", e)
+        return None
+
+    # Demucs outputs: demucs_out/htdemucs/<track_name>/no_vocals.wav
+    base = os.path.splitext(os.path.basename(audio_path))[0]
+    for model_dir in ["htdemucs", "htdemucs_ft"]:
+        track_dir = os.path.join(demucs_out, model_dir, base)
+        no_vocals = os.path.join(track_dir, "no_vocals.wav")
+        if os.path.isfile(no_vocals):
+            return no_vocals
+    # Fallback: any no_vocals.wav under demucs_out
+    for root, _, files in os.walk(demucs_out):
+        if "no_vocals.wav" in files:
+            return os.path.join(root, "no_vocals.wav")
+    return None
+
+
+def _get_wav_duration_seconds(path: str) -> float:
+    import wave
+    with wave.open(path, "rb") as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+        return frames / float(rate) if rate else 0.0
+
+
+def _mix_vocal_with_instrumental(
+    vocal_path: str,
+    instrumental_path: str,
+    out_path: str,
+    instrumental_gain: float = 0.4,
+) -> None:
+    """
+    Mix cloned vocal with extracted instrumental.
+    Trims instrumental to vocal length. Output 44100 Hz mono.
+    """
+    duration = _get_wav_duration_seconds(vocal_path)
+    if duration <= 0:
+        shutil.copy(vocal_path, out_path)
+        return
+
+    # Convert vocal to 44100 for mixing (XTTS is 24k)
+    vocal_44 = out_path + ".vocal_44.wav"
+    _run_ffmpeg_wav_convert(vocal_path, vocal_44, sample_rate=44100, channels=1)
+
+    # Trim instrumental to vocal length, convert to 44100 mono
+    inst_44 = out_path + ".inst_44.wav"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", instrumental_path,
+        "-t", str(duration),
+        "-ar", "44100",
+        "-ac", "1",
+        "-af", f"volume={instrumental_gain}",
+        "-c:a", "pcm_s16le",
+        inst_44,
+        "-loglevel", "error",
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+
+    # Mix: amix with duration=first
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", vocal_44,
+        "-i", inst_44,
+        "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0",
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        out_path,
+        "-loglevel", "error",
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+    for p in [vocal_44, inst_44]:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 # ── Main endpoint ──────────────────────────────────────────────────────────────
 
 @app.post("/clone")
@@ -460,6 +589,22 @@ async def clone_voice(
             shutil.copy(chunk_wavs[0], final_wav)
         else:
             _merge_wav_chunks(chunk_wavs, final_wav)
+
+        # 5b) Option B: if reference video ID provided, extract instrumental & mix
+        video_id = (reference_video_id or "").strip()
+        if video_id:
+            yt_wav = os.path.join(tmp_dir, "yt_reference.wav")
+            if _download_youtube_audio(video_id, yt_wav, tmp_dir):
+                inst_path = _separate_instrumental(yt_wav, tmp_dir)
+                if inst_path:
+                    mixed_wav = os.path.join(tmp_dir, "cloned_mixed.wav")
+                    _mix_vocal_with_instrumental(final_wav, inst_path, mixed_wav)
+                    final_wav = mixed_wav
+                    log.info("Mixed cloned voice with extracted instrumental")
+                else:
+                    log.warning("Demucs separation failed; returning voice-only")
+            else:
+                log.warning("YouTube download failed; returning voice-only")
 
         log.info("Pipeline complete: audio_bytes=%d", os.path.getsize(final_wav))
 

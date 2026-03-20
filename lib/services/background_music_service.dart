@@ -44,10 +44,27 @@ class BackgroundMusicService {
     );
 
     for (final query in queries) {
+      final qLower = query.toLowerCase();
+      final requireInstrumental = qLower.contains('instrumental') ||
+          qLower.contains('karaoke') ||
+          qLower.contains('backing') ||
+          qLower.contains('beat');
+
       // ── SoundCloud first ─────────────────────────────────────────────────
       try {
         final scTracks = await _soundCloudService.searchTracks(query, limit: 10);
         for (final track in scTracks) {
+          if (requireInstrumental) {
+            final tLower = track.title.toLowerCase();
+            final hits = [
+              'instrumental',
+              'karaoke',
+              'backing',
+              'beat',
+              'instrumental version',
+            ].any(tLower.contains);
+            if (!hits) continue;
+          }
           final streamUrl = await _soundCloudService.getBestStreamUrl(track.id);
           if (streamUrl == null || streamUrl.isEmpty) continue;
           return BackgroundMusicTrack(
@@ -63,7 +80,20 @@ class BackgroundMusicService {
       try {
         final jamTracks = await _jamendoService.searchTracks(query, limit: 10);
         if (jamTracks.isNotEmpty) {
-          final track = jamTracks.first;
+          final candidates = requireInstrumental
+              ? jamTracks.where((t) {
+                  final tLower = t.name.toLowerCase();
+                  return [
+                    'instrumental',
+                    'karaoke',
+                    'backing',
+                    'beat',
+                    'instrumental version',
+                  ].any(tLower.contains);
+                }).toList()
+              : jamTracks;
+          if (candidates.isEmpty) continue;
+          final track = candidates.first;
           return BackgroundMusicTrack(
             sourceUrl: track.audioUrl,
             label: '${track.name} • ${track.artistName}',
@@ -90,6 +120,7 @@ class BackgroundMusicService {
     final cleanLang = _normalize(language);
     final cleanTrack = _normalize(referenceTrackTitle);
     final cleanArtist = _normalize(referenceArtistName);
+    final refNoPunct = cleanTrack.replaceAll(RegExp(r'[^a-z0-9\s]'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
 
     // Genre may be slash-separated, e.g. "Bollywood / Romantic"
     final genreParts = cleanGenre
@@ -100,12 +131,20 @@ class BackgroundMusicService {
 
     final queries = <String>[
       // ── Tier 1: reference song (most specific) ───────────────────────────
-      if (cleanTrack.isNotEmpty && cleanArtist.isNotEmpty)
+      if (cleanTrack.isNotEmpty && cleanArtist.isNotEmpty) ...[
         '$cleanTrack $cleanArtist instrumental',
-      if (cleanTrack.isNotEmpty && cleanArtist.isNotEmpty)
         '$cleanTrack $cleanArtist karaoke',
-      if (cleanTrack.isNotEmpty)
+        '$cleanTrack $cleanArtist backing track',
+        '$cleanTrack $cleanArtist beat',
+        '$cleanTrack $cleanArtist instrumental version',
+        // Often title punctuation breaks search; try a de-punct variant too.
+        '$refNoPunct $cleanArtist instrumental',
+      ],
+      if (cleanTrack.isNotEmpty) ...[
         '$cleanTrack instrumental',
+        '$cleanTrack karaoke instrumental',
+        '$cleanTrack backing track',
+      ],
       if (cleanArtist.isNotEmpty)
         '$cleanArtist instrumental',
       if (cleanArtist.isNotEmpty && cleanGenre.isNotEmpty)

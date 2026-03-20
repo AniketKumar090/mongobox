@@ -91,6 +91,10 @@ def check_cuda() -> None:
 
 
 def start_server(host: str, port: int, reload: bool) -> None:
+    # Disable numba JIT cache to avoid "no locator available" when disk is full
+    # or cache dir is unwritable (e.g. read-only volume, sandbox).
+    os.environ.setdefault("NUMBA_DISABLE_JIT_CACHE", "1")
+
     print(f"\n{BOLD}Starting FastAPI server …{RESET}")
     print(f"  URL:    {GREEN}http://{host}:{port}{RESET}")
     print(f"  Health: {GREEN}http://{host}:{port}/health{RESET}")

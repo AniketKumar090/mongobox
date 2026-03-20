@@ -241,21 +241,30 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     final path =
         language == 'Hindi' ? _hindiClonePath : _englishClonePath;
 
-    // Fetch background music
-    final bgTrack = await _bgMusicService.findTrack(
-      mood: widget.mood,
-      genre: widget.genre,
-      language: language,
-      referenceTrackTitle: widget.referenceSong?.trackName ?? '',
-      referenceArtistName: widget.referenceSong?.artistName ?? '',
-    );
+    // Option B: when reference song has videoId, backend returns voice+instrumental mixed.
+    // Skip fetching separate background music.
+    String? musicUrl;
+    String? musicLabel;
+    if ((widget.referenceSong?.videoId ?? '').isEmpty) {
+      final bgTrack = await _bgMusicService.findTrack(
+        mood: widget.mood,
+        genre: widget.genre,
+        language: language,
+        referenceTrackTitle: widget.referenceSong?.trackName ?? '',
+        referenceArtistName: widget.referenceSong?.artistName ?? '',
+      );
+      musicUrl = bgTrack?.sourceUrl;
+      musicLabel = bgTrack?.label;
+    } else {
+      musicLabel = 'Mixed with original instrumental';
+    }
 
     if (!mounted) return;
     setState(() {
       _chosenLanguage = language;
       _activeClonePath = path;
-      _musicSourceUrl = bgTrack?.sourceUrl;
-      _musicSourceLabel = bgTrack?.label;
+      _musicSourceUrl = musicUrl;
+      _musicSourceLabel = musicLabel;
       _step = _CloneStep.ready;
       _lyricsTab =
           language == 'Hindi' ? _LyricsTab.hindi : _LyricsTab.english;

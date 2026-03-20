@@ -110,7 +110,7 @@ class VoiceCloneService {
     try {
       streamedResponse = await _client
           .send(request)
-          .timeout(const Duration(minutes: 3));
+          .timeout(const Duration(minutes: 10));
     } on SocketException {
       throw Exception(
         'Could not reach the voice backend at $backendUrl. '
