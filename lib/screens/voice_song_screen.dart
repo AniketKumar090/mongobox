@@ -7,7 +7,6 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/song_reference.dart';
 import '../services/background_music_service.dart';
-import '../services/transliteration_service.dart';
 import '../services/voice_clone_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,7 +20,6 @@ import '../services/voice_clone_service.dart';
 
 enum _CloneStep { cloning, pickLanguage, ready, error }
 enum _LyricsTab { hindi, english }
-enum _HindiView { devanagari, hinglish, both }
 
 class VoiceSongScreen extends StatefulWidget {
   const VoiceSongScreen({
@@ -54,7 +52,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   final _voicePlayer = AudioPlayer();
   final _cloneService = VoiceCloneService();
   final _bgMusicService = BackgroundMusicService();
-  final _transliterationService = TransliterationService();
 
   // ── Clone results ──────────────────────────────────────────────────────────
   String? _hindiClonePath;
@@ -77,11 +74,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   bool _isPlaying = false;
   String? _errorMessage;
   StreamSubscription<PlayerState>? _voiceStateSub;
-
-  // ── Hinglish transliteration ───────────────────────────────────────────────
-  String? _hinglishLyrics;
-  bool _isTransliterating = false;
-  _HindiView _hindiView = _HindiView.both;
+  double _voiceSpeed = 1.2;
+  double _voiceVolume = 0.75;
+  double _musicVolume = 1.0;
 
   // ── Lyrics tab (for display only) ─────────────────────────────────────────
   late _LyricsTab _lyricsTab;
@@ -94,7 +89,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         : _LyricsTab.english;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startParallelCloning();
-      _transliterateInBackground();
     });
   }
 
@@ -271,25 +265,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     });
   }
 
-  // ── Transliterate Hindi → Hinglish in background ──────────────────────────
-  Future<void> _transliterateInBackground() async {
-    setState(() => _isTransliterating = true);
-    try {
-      final roman = await _transliterationService.transliterateLyrics(
-        widget.hindiLyrics,
-        'Hindi',
-      );
-      if (!mounted) return;
-      setState(() {
-        _hinglishLyrics = roman;
-        _hindiView = _HindiView.both;
-        _isTransliterating = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _isTransliterating = false);
-    }
-  }
-
   // ── PLAYBACK ──────────────────────────────────────────────────────────────
   Future<void> _play() async {
     final path = _activeClonePath;
@@ -303,13 +278,15 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     }
 
     await _voicePlayer.setFilePath(path);
-    await _voicePlayer.setVolume(1.0);
+    await _voicePlayer.setSpeed(_voiceSpeed);
+    await _voicePlayer.setVolume(_voiceVolume);
 
     var canPlayMusic = _musicSourceUrl != null;
     if (canPlayMusic) {
       try {
         await _musicPlayer.setUrl(_musicSourceUrl!);
-        await _musicPlayer.setVolume(0.3);
+        await _musicPlayer.setSpeed(_voiceSpeed);
+        await _musicPlayer.setVolume(_musicVolume);
         await _musicPlayer.setLoopMode(LoopMode.all);
       } catch (_) {
         canPlayMusic = false;
@@ -577,7 +554,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                       Expanded(
                         child: Text(
                           _musicSourceUrl != null
-                              ? '${_musicSourceLabel ?? '${widget.mood} instrumental'} • 30% vol'
+                              ? '${_musicSourceLabel ?? '${widget.mood} instrumental'} • music ${(100 * _musicVolume).round()}% / vocal ${(100 * _voiceVolume).round()}%'
                               : 'Background music unavailable — vocals only',
                           style: tt.bodySmall?.copyWith(
                             color: _musicSourceUrl != null
@@ -585,6 +562,92 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                                 : cs.onErrorContainer,
                           ),
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: cs.outline.withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Vocal speed ${_voiceSpeed.toStringAsFixed(2)}x',
+                        style: tt.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Slider(
+                        value: _voiceSpeed,
+                        min: 1.0,
+                        max: 1.5,
+                        divisions: 10,
+                        label: '${_voiceSpeed.toStringAsFixed(2)}x',
+                        onChanged: (v) async {
+                          setState(() => _voiceSpeed = v);
+                          await _voicePlayer.setSpeed(v);
+                          await _musicPlayer.setSpeed(v);
+                        },
+                      ),
+                      Text(
+                        'Mix balance (music supports boost up to 200%)',
+                        style: tt.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Vocals', style: tt.labelSmall),
+                                Slider(
+                                  value: _voiceVolume,
+                                  min: 0.4,
+                                  max: 1.0,
+                                  divisions: 6,
+                                  label:
+                                      '${(100 * _voiceVolume).round()}%',
+                                  onChanged: (v) async {
+                                    setState(() => _voiceVolume = v);
+                                    await _voicePlayer.setVolume(v);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Music', style: tt.labelSmall),
+                                Slider(
+                                  value: _musicVolume,
+                                  min: 0.4,
+                                  max: 2.0,
+                                  divisions: 16,
+                                  label:
+                                      '${(100 * _musicVolume).round()}%',
+                                  onChanged: (v) async {
+                                    setState(() => _musicVolume = v);
+                                    await _musicPlayer.setVolume(v);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -631,13 +694,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 _LyricsSection(
                   hindiLyrics: widget.hindiLyrics,
                   englishLyrics: widget.englishLyrics,
-                  hinglishLyrics: _hinglishLyrics,
-                  isTransliterating: _isTransliterating,
                   activeTab: _lyricsTab,
-                  hindiView: _hindiView,
                   onTabChanged: (t) => setState(() => _lyricsTab = t),
-                  onHindiViewChanged: (v) =>
-                      setState(() => _hindiView = v),
                   cs: cs,
                   tt: tt,
                 ),
@@ -1115,23 +1173,15 @@ class _LyricsSection extends StatelessWidget {
   const _LyricsSection({
     required this.hindiLyrics,
     required this.englishLyrics,
-    required this.hinglishLyrics,
-    required this.isTransliterating,
     required this.activeTab,
-    required this.hindiView,
     required this.onTabChanged,
-    required this.onHindiViewChanged,
     required this.cs,
     required this.tt,
   });
   final String hindiLyrics;
   final String englishLyrics;
-  final String? hinglishLyrics;
-  final bool isTransliterating;
   final _LyricsTab activeTab;
-  final _HindiView hindiView;
   final ValueChanged<_LyricsTab> onTabChanged;
-  final ValueChanged<_HindiView> onHindiViewChanged;
   final ColorScheme cs;
   final TextTheme tt;
 
@@ -1155,7 +1205,7 @@ class _LyricsSection extends StatelessWidget {
                       fontWeight: FontWeight.bold, color: cs.primary)),
               const SizedBox(width: 12),
               _TabButton(
-                label: 'हिंदी',
+                label: 'Hindi',
                 isActive: activeTab == _LyricsTab.hindi,
                 onTap: () => onTabChanged(_LyricsTab.hindi),
                 cs: cs,
@@ -1169,54 +1219,20 @@ class _LyricsSection extends StatelessWidget {
                 cs: cs,
                 tt: tt,
               ),
-              if (isTransliterating && activeTab == _LyricsTab.hindi) ...[
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: cs.primary),
-                ),
-              ],
             ],
           ),
 
-          // ── Hinglish toggle (Hindi tab only) ─────────────────────────
-          if (activeTab == _LyricsTab.hindi &&
-              hinglishLyrics != null) ...[
-            const SizedBox(height: 10),
-            SegmentedButton<_HindiView>(
-              segments: const [
-                ButtonSegment(
-                    value: _HindiView.devanagari,
-                    label: Text('देवनागरी')),
-                ButtonSegment(
-                    value: _HindiView.hinglish,
-                    label: Text('Hinglish')),
-                ButtonSegment(
-                    value: _HindiView.both, label: Text('Both')),
-              ],
-              selected: {hindiView},
-              onSelectionChanged: (s) => onHindiViewChanged(s.first),
-            ),
-          ],
-
           const SizedBox(height: 14),
 
-          // ── Lyrics body ──────────────────────────────────────────────
-          if (activeTab == _LyricsTab.english)
-            _PlainLines(
-                lines: englishLyrics.split('\n'), cs: cs, tt: tt)
-          else
-            _HindiLines(
-              devanagari: hindiLyrics,
-              hinglish: hinglishLyrics,
-              view: hinglishLyrics != null
-                  ? hindiView
-                  : _HindiView.devanagari,
-              cs: cs,
-              tt: tt,
-            ),
+          // ── Lyrics body (Hindi for Hindi tab, English for English tab) ─
+          _PlainLines(
+            lines: (activeTab == _LyricsTab.english
+                    ? englishLyrics
+                    : hindiLyrics)
+                .split('\n'),
+            cs: cs,
+            tt: tt,
+          ),
         ],
       ),
     );
@@ -1297,82 +1313,6 @@ class _PlainLines extends StatelessWidget {
                   ?.copyWith(color: cs.onSurface, height: 1.65)),
         );
       }).toList(),
-    );
-  }
-}
-
-class _HindiLines extends StatelessWidget {
-  const _HindiLines({
-    required this.devanagari,
-    required this.hinglish,
-    required this.view,
-    required this.cs,
-    required this.tt,
-  });
-  final String devanagari;
-  final String? hinglish;
-  final _HindiView view;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    final devLines = devanagari.split('\n');
-    final hinLines = hinglish?.split('\n');
-    final primary =
-        (view == _HindiView.hinglish && hinLines != null)
-            ? hinLines
-            : devLines;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: List.generate(primary.length, (i) {
-        final line = primary[i];
-        final isHeader = RegExp(
-          r'^\[(Verse|Chorus|Bridge|Outro|Pre-Chorus)',
-          caseSensitive: false,
-        ).hasMatch(line.trim());
-
-        if (isHeader) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 16, bottom: 4),
-            child: Text(line.trim(),
-                style: tt.labelMedium?.copyWith(
-                    color: cs.primary, fontWeight: FontWeight.bold)),
-          );
-        }
-        if (line.trim().isEmpty) return const SizedBox(height: 4);
-
-        if (view != _HindiView.both || hinLines == null) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(line,
-                style: tt.bodyMedium
-                    ?.copyWith(color: cs.onSurface, height: 1.65)),
-          );
-        }
-
-        final hin = i < hinLines.length ? hinLines[i] : '';
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(devLines[i],
-                  style: tt.bodyMedium
-                      ?.copyWith(color: cs.onSurface, height: 1.6)),
-              if (hin.trim().isNotEmpty &&
-                  hin.trim() != devLines[i].trim())
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(hin,
-                      style: tt.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant, height: 1.35)),
-                ),
-            ],
-          ),
-        );
-      }),
     );
   }
 }

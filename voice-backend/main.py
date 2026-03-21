@@ -438,7 +438,7 @@ def _mix_vocal_with_instrumental(
     vocal_path: str,
     instrumental_path: str,
     out_path: str,
-    instrumental_gain: float = 0.4,
+    instrumental_gain: float = 0.95,
 ) -> None:
     """
     Mix cloned vocal with extracted instrumental.
@@ -628,6 +628,74 @@ async def clone_voice(
 
 
 # ── Health check ───────────────────────────────────────────────────────────────
+def _detect_bpm(audio_path: str) -> float | None:
+    """Detect BPM of audio file using librosa. Returns BPM or None on failure."""
+    try:
+        import librosa
+        y, sr = librosa.load(audio_path, sr=22050, mono=True, duration=60)
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        if isinstance(tempo, (list, tuple)):
+            tempo = float(tempo[0]) if tempo else 0.0
+        else:
+            tempo = float(tempo)
+        return round(tempo, 1) if 50 <= tempo <= 220 else None
+    except Exception as e:
+        log.warning("BPM detection failed: %s", e)
+        return None
+
+
+@app.get("/analyze-bpm")
+def analyze_bpm(video_id: str = "") -> dict:
+    """
+    Detect BPM of a YouTube track by video_id.
+    Downloads audio, runs beat tracking, returns {"bpm": float} or {"bpm": null, "error": "..."}.
+    """
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return {"bpm": None, "error": "video_id required"}
+    tmp_dir = tempfile.mkdtemp(prefix="mongobox_bpm_")
+    try:
+        yt_wav = os.path.join(tmp_dir, "audio.wav")
+        if not _download_youtube_audio(video_id, yt_wav, tmp_dir):
+            return {"bpm": None, "error": "Could not download audio"}
+        bpm = _detect_bpm(yt_wav)
+        return {"bpm": bpm}
+    except Exception as e:
+        log.exception("BPM endpoint error: %s", e)
+        return {"bpm": None, "error": str(e)}
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except OSError:
+            pass
+
+
+@app.get("/bpm")
+def get_bpm(video_id: str = "") -> dict:
+    """
+    Detect BPM of a YouTube track by video_id.
+    Downloads audio, runs beat tracking, returns {"bpm": float} or {"bpm": null, "error": "..."}.
+    """
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return {"bpm": None, "error": "video_id required"}
+    tmp_dir = tempfile.mkdtemp(prefix="mongobox_bpm_")
+    try:
+        yt_wav = os.path.join(tmp_dir, "audio.wav")
+        if not _download_youtube_audio(video_id, yt_wav, tmp_dir):
+            return {"bpm": None, "error": "Could not download audio"}
+        bpm = _detect_bpm(yt_wav)
+        return {"bpm": bpm}
+    except Exception as e:
+        log.exception("BPM endpoint error: %s", e)
+        return {"bpm": None, "error": str(e)}
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except OSError:
+            pass
+
+
 @app.get("/health")
 def health() -> dict:
     return {

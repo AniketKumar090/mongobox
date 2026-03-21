@@ -26,6 +26,11 @@ String _getApiKey() {
   if (!_youtubeInitialized) {
     initializeYoutubeApiKey();
   }
+  if (youtubeApiKey.trim().isEmpty) {
+    throw Exception(
+      'YouTube API key missing. Add a valid YOUTUBE_API_KEY in .env.',
+    );
+  }
   return youtubeApiKey;
 }
 
@@ -78,6 +83,14 @@ class YoutubeMobileService {
 
     try {
       final response = await _client.get(uri).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 400) {
+        final reason = _extractYoutubeErrorReason(response.body);
+        if (reason == 'badRequest' || reason == 'keyInvalid') {
+          throw Exception(
+            'YouTube API key is invalid. Update YOUTUBE_API_KEY in .env.',
+          );
+        }
+      }
       if (response.statusCode == 403) {
         // Quota exceeded - throw exception to show user-friendly error
         throw Exception('YouTube API quota exceeded: ${response.body}');
@@ -133,7 +146,8 @@ class YoutubeMobileService {
 
       _searchCache[cacheKey] = results;
       return results;
-    } catch (_) {
+    } catch (e) {
+      if (_isYoutubeConfigError(e)) rethrow;
       _searchCache[cacheKey] = const [];
       return const [];
     }
@@ -149,6 +163,17 @@ class YoutubeMobileService {
 
     try {
       final response = await _client.get(uri).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 400) {
+        final reason = _extractYoutubeErrorReason(response.body);
+        if (reason == 'badRequest' || reason == 'keyInvalid') {
+          throw Exception(
+            'YouTube API key is invalid. Update YOUTUBE_API_KEY in .env.',
+          );
+        }
+      }
+      if (response.statusCode == 403) {
+        throw Exception('YouTube API quota exceeded: ${response.body}');
+      }
       if (response.statusCode != 200) return const {};
 
       final data = json.decode(response.body) as Map<String, dynamic>?;
@@ -165,7 +190,8 @@ class YoutubeMobileService {
         byId[id] = _parseIsoDurationSeconds(iso);
       }
       return byId;
-    } catch (_) {
+    } catch (e) {
+      if (_isYoutubeConfigError(e)) rethrow;
       return const {};
     }
   }
@@ -184,5 +210,28 @@ class YoutubeMobileService {
       if (value.contains(t)) return true;
     }
     return false;
+  }
+
+  String _extractYoutubeErrorReason(String body) {
+    try {
+      final decoded = json.decode(body) as Map<String, dynamic>;
+      final error = decoded['error'] as Map<String, dynamic>?;
+      final errors = error?['errors'] as List<dynamic>?;
+      if (errors != null && errors.isNotEmpty) {
+        final first = errors.first as Map<String, dynamic>;
+        final reason = (first['reason'] as String?)?.trim();
+        if (reason != null && reason.isNotEmpty) return reason;
+      }
+      final message = (error?['message'] as String?)?.toLowerCase() ?? '';
+      if (message.contains('api key not valid')) return 'keyInvalid';
+    } catch (_) {
+      // Keep fallback empty.
+    }
+    return '';
+  }
+
+  bool _isYoutubeConfigError(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('api key') || text.contains('quota exceeded');
   }
 }

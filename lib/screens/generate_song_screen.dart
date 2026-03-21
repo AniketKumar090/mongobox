@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/song_reference.dart';
 import '../services/local_suggestions_service.dart';
-import '../services/transliteration_service.dart';
 import 'voice_sample_screen.dart';
 
 // ─── MOOD OPTIONS ─────────────────────────────────────────────────────────────
@@ -34,13 +33,13 @@ class _SongResult {
   });
 
   final String title;
-  final String hindiLyrics;       // Devanagari
+  final String hindiLyrics;       // Hindi (Devanagari) lyrics for Hindi cloning
   final String englishLyrics;     // English
   final String mood;
   final String genre;
   final String dominantLanguage;  // 'Hindi' or 'English'
   final SongReference? referenceSong;
-  final String? hinglishLyrics;   // Romanised Hindi, loaded async
+  final String? hinglishLyrics;   // Romanised Hindi for readable voice-sample prompts
 
   String get primaryLyrics =>
       dominantLanguage == 'Hindi' ? hindiLyrics : englishLyrics;
@@ -55,9 +54,6 @@ class _SongResult {
 }
 
 enum _GenerationMode { singleSong, history }
-
-// Which lyrics panel to show
-enum _LyricsView { devanagari, hinglish, both }
 
 // ─── SCREEN ───────────────────────────────────────────────────────────────────
 class GenerateSongScreen extends StatefulWidget {
@@ -82,11 +78,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
   bool _isMoodLoading = false;
   String? _errorMessage;
 
-  // Hinglish toggle
-  bool _isRomanizing = false;
-  _LyricsView _lyricsView = _LyricsView.both;
-
-  final _transliterationService = TransliterationService();
   late AnimationController _shimmerController;
 
   @override
@@ -152,7 +143,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       _result = null;
       _errorMessage = null;
       _selectedMood = null;
-      _lyricsView = _LyricsView.both;
       _isMoodLoading = _analysisTracks.isNotEmpty;
     });
     await _refreshMoodSuggestion();
@@ -165,7 +155,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       _result = null;
       _errorMessage = null;
       _selectedMood = null;
-      _lyricsView = _LyricsView.both;
       _isMoodLoading = _analysisTracks.isNotEmpty;
     });
     if (_generationMode == _GenerationMode.singleSong) {
@@ -247,7 +236,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       _isLoading = true;
       _errorMessage = null;
       _result = null;
-      _lyricsView = _LyricsView.both;
     });
 
     final trackList = referenceTracks
@@ -303,10 +291,14 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           .trim();
 
       final parsed = json.decode(raw) as Map<String, dynamic>;
+      final hindiLyrics =
+          (parsed['hindi_lyrics'] ?? parsed['hinglish_lyrics']) as String? ?? '';
+      final hinglishLyrics =
+          (parsed['hinglish_lyrics'] ?? parsed['hindi_lyrics']) as String? ?? '';
 
       final result = _SongResult(
         title: parsed['title'] as String? ?? 'Untitled',
-        hindiLyrics: parsed['hindi_lyrics'] as String? ?? '',
+        hindiLyrics: hindiLyrics,
         englishLyrics: parsed['english_lyrics'] as String? ?? '',
         mood: parsed['mood'] as String? ?? mood,
         genre: parsed['genre'] as String? ?? '',
@@ -320,50 +312,20 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                 videoId: selectedReference.videoId,
                 startTimeSeconds: selectedReference.startTimeSeconds,
               ),
+        hinglishLyrics: hinglishLyrics,
       );
 
       if (!mounted) return;
       setState(() {
         _result = result;
         _isLoading = false;
-        _isRomanizing = true;
-        _lyricsView = _LyricsView.devanagari;
       });
-
-      _romanizeInBackground(result);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = e.toString().replaceAll('Exception: ', '');
       });
-    }
-  }
-
-  /// Transliterate Hindi Devanagari → Hinglish in background.
-  Future<void> _romanizeInBackground(_SongResult result) async {
-    try {
-      final hinglish = await _transliterationService.transliterateLyrics(
-        result.hindiLyrics,
-        'Hindi',
-      );
-      if (!mounted) return;
-      setState(() {
-        _result = _SongResult(
-          title: result.title,
-          hindiLyrics: result.hindiLyrics,
-          englishLyrics: result.englishLyrics,
-          mood: result.mood,
-          genre: result.genre,
-          dominantLanguage: result.dominantLanguage,
-          referenceSong: result.referenceSong,
-          hinglishLyrics: hinglish,
-        );
-        _lyricsView = _LyricsView.both;
-        _isRomanizing = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _isRomanizing = false);
     }
   }
 
@@ -392,6 +354,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           mood: r.mood,
           genre: r.genre,
           referenceSong: r.referenceSong,
+          hinglishLyrics: r.hinglishLyrics,
         ),
       ),
     );
@@ -408,15 +371,16 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         'Requested mood: $mood\n\n'
         'Rules:\n'
         '- Write COMPLETELY ORIGINAL bilingual lyrics inspired by the listening style above\n'
-        '- Use Hindi (Devanagari) for Verse 1, Verse 2 and Bridge; use English for Chorus and Outro\n'
-        '- Hindi lines MUST use Devanagari script only. No Roman Hindi.\n'
-        '- English lines must be natural, colloquial English — not a translation of Hindi lines\n'
+        '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
+        '- Keep meaning, rhyme, and section structure aligned across Devanagari and Hinglish.\n'
+        '- Hinglish should be natural and singable (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
         '- Section headers ([Verse 1], [Chorus], [Bridge], [Outro]) always in English\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
-        '- Title: 2–4 words, bilingual style (e.g. "दिल की Beat" or "Roshan Nights")\n\n'
+        '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
         '{"title":"...","mood":"$mood","genre":"Genre",'
-        '"hindi_lyrics":"[Verse 1]\\nपंक्ति\\n\\n[Chorus]\\nपंक्ति\\n\\n[Verse 2]\\nपंक्ति\\n\\n[Bridge]\\nपंक्ति\\n\\n[Outro]\\nपंक्ति",'
+        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Chorus]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
+        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Chorus]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
         '"english_lyrics":"[Verse 1]\\nline\\n\\n[Chorus]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
@@ -434,15 +398,16 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         '- Write a COMPLETELY ORIGINAL bilingual song inspired by that reference\n'
         '- Do NOT copy, translate, or closely mimic any line from the reference\n'
         '- Do NOT mention the reference song or artist name\n'
-        '- Use Hindi (Devanagari) for Verse 1, Verse 2 and Bridge; use English for Chorus and Outro\n'
-        '- Hindi lines MUST use Devanagari script only. No Roman Hindi.\n'
-        '- English lines must be natural, colloquial English — not a translation\n'
+        '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
+        '- Keep meaning, rhyme, and section structure aligned across Devanagari and Hinglish.\n'
+        '- Hinglish should be natural and singable (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
         '- Section headers ([Verse 1], [Chorus], [Bridge], [Outro]) always in English\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
-        '- Title: 2–4 words, bilingual style (e.g. "दिल की Beat" or "Roshan Nights")\n\n'
+        '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
         '{"title":"...","mood":"$mood","genre":"Genre",'
-        '"hindi_lyrics":"[Verse 1]\\nपंक्ति\\n\\n[Chorus]\\nपंक्ति\\n\\n[Verse 2]\\nपंक्ति\\n\\n[Bridge]\\nपंक्ति\\n\\n[Outro]\\nपंक्ति",'
+        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Chorus]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
+        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Chorus]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
         '"english_lyrics":"[Verse 1]\\nline\\n\\n[Chorus]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
@@ -583,9 +548,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                 const SizedBox(height: 28),
                 _ResultCard(
                   result: _result!,
-                  lyricsView: _lyricsView,
-                  isRomanizing: _isRomanizing,
-                  onViewChanged: (v) => setState(() => _lyricsView = v),
                   onCopy: _copyToClipboard,
                   cs: cs,
                   tt: tt,
@@ -978,17 +940,11 @@ enum _LyricsTab { hindi, english }
 class _ResultCard extends StatefulWidget {
   const _ResultCard({
     required this.result,
-    required this.lyricsView,
-    required this.isRomanizing,
-    required this.onViewChanged,
     required this.onCopy,
     required this.cs,
     required this.tt,
   });
   final _SongResult result;
-  final _LyricsView lyricsView;
-  final bool isRomanizing;
-  final ValueChanged<_LyricsView> onViewChanged;
   final VoidCallback onCopy;
   final ColorScheme cs;
   final TextTheme tt;
@@ -1013,7 +969,6 @@ class _ResultCardState extends State<_ResultCard> {
     final result = widget.result;
     final cs = widget.cs;
     final tt = widget.tt;
-    final hasHinglish = result.hinglishLyrics != null;
     final isDominantHindi = result.dominantLanguage == 'Hindi';
 
     return Column(
@@ -1039,16 +994,6 @@ class _ResultCardState extends State<_ResultCard> {
                       ),
                     ),
                   ),
-                  if (widget.isRomanizing)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: cs.primary),
-                      ),
-                    ),
                   IconButton(
                     icon: const Icon(Icons.copy_rounded),
                     onPressed: widget.onCopy,
@@ -1097,7 +1042,7 @@ class _ResultCardState extends State<_ResultCard> {
               Row(
                 children: [
                   _LangTab(
-                    label: 'हिंदी',
+                    label: 'Hinglish',
                     sublabel: isDominantHindi ? 'dominant' : null,
                     isActive: _activeTab == _LyricsTab.hindi,
                     onTap: () => setState(() => _activeTab = _LyricsTab.hindi),
@@ -1116,25 +1061,6 @@ class _ResultCardState extends State<_ResultCard> {
                   ),
                 ],
               ),
-
-              // ── Hinglish toggle (Hindi tab only) ─────────────────────────
-              if (_activeTab == _LyricsTab.hindi && hasHinglish) ...[
-                const SizedBox(height: 10),
-                SegmentedButton<_LyricsView>(
-                  segments: const [
-                    ButtonSegment(
-                        value: _LyricsView.devanagari,
-                        label: Text('देवनागरी')),
-                    ButtonSegment(
-                        value: _LyricsView.hinglish,
-                        label: Text('Hinglish')),
-                    ButtonSegment(
-                        value: _LyricsView.both, label: Text('Both')),
-                  ],
-                  selected: {widget.lyricsView},
-                  onSelectionChanged: (s) => widget.onViewChanged(s.first),
-                ),
-              ],
             ],
           ),
         ),
@@ -1150,21 +1076,14 @@ class _ResultCardState extends State<_ResultCard> {
             border: Border(
                 top: BorderSide(color: cs.outline.withValues(alpha: 0.15))),
           ),
-          child: _activeTab == _LyricsTab.english
-              ? _LyricsLines(
-                  lines: result.englishLyrics.split('\n'),
-                  cs: cs,
-                  tt: tt,
-                )
-              : _LyricsBody(
-                  devanagari: result.hindiLyrics,
-                  hinglish: result.hinglishLyrics,
-                  view: hasHinglish
-                      ? widget.lyricsView
-                      : _LyricsView.devanagari,
-                  cs: cs,
-                  tt: tt,
-                ),
+          child: _LyricsLines(
+            lines: (_activeTab == _LyricsTab.english
+                    ? result.englishLyrics
+                    : result.hindiLyrics)
+                .split('\n'),
+            cs: cs,
+            tt: tt,
+          ),
         ),
       ],
     );
@@ -1285,89 +1204,6 @@ class _LyricsLines extends StatelessWidget {
           ),
         );
       }).toList(),
-    );
-  }
-}
-
-// ─── HINDI LYRICS RENDERER (Devanagari + optional Hinglish) ───────────────────
-class _LyricsBody extends StatelessWidget {
-  const _LyricsBody({
-    required this.devanagari,
-    required this.hinglish,
-    required this.view,
-    required this.cs,
-    required this.tt,
-  });
-  final String devanagari;
-  final String? hinglish;
-  final _LyricsView view;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    final devLines = devanagari.split('\n');
-    final hinLines = hinglish?.split('\n');
-    final primaryLines =
-        (view == _LyricsView.hinglish && hinLines != null) ? hinLines : devLines;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: List.generate(primaryLines.length, (i) {
-        final line = primaryLines[i];
-        final isHeader = RegExp(
-          r'^\[(Verse|Chorus|Bridge|Outro|Pre-Chorus)',
-          caseSensitive: false,
-        ).hasMatch(line.trim());
-
-        if (isHeader) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 20, bottom: 4),
-            child: Text(
-              line.trim(),
-              style: tt.labelLarge?.copyWith(
-                color: cs.primary,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
-          );
-        }
-        if (line.trim().isEmpty) return const SizedBox(height: 4);
-
-        if (view != _LyricsView.both || hinLines == null) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(line,
-                style: tt.bodyMedium
-                    ?.copyWith(color: cs.onSurface, height: 1.7)),
-          );
-        }
-
-        // Both: Devanagari on top, Hinglish muted below
-        final hinLine = i < hinLines.length ? hinLines[i] : '';
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(devLines[i],
-                  style: tt.bodyMedium
-                      ?.copyWith(color: cs.onSurface, height: 1.65)),
-              if (hinLine.trim().isNotEmpty &&
-                  hinLine.trim() != devLines[i].trim())
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    hinLine,
-                    style: tt.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant, height: 1.4),
-                  ),
-                ),
-            ],
-          ),
-        );
-      }),
     );
   }
 }

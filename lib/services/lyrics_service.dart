@@ -357,7 +357,8 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final normalizedUser = _normalizeLine(userLine);
     if (normalizedUser.isEmpty) return null;
 
-    final userWords = _splitTokens(normalizedUser).toSet();
+    final userTokens = _splitTokens(normalizedUser);
+    final userWords = userTokens.toSet();
 
     if (userWords.isEmpty) return null;
 
@@ -374,7 +375,12 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       if (text.isEmpty) continue;
 
       final normalizedText = _normalizeLine(text);
-      final score = _lineSimilarity(normalizedText, normalizedUser, userWords);
+      final score = _lineSimilarity(
+        normalizedText,
+        normalizedUser,
+        userWords,
+        userTokens: userTokens,
+      );
       final timed = _TimedMatch(
         seconds: (minutes * 60) + seconds,
         score: score,
@@ -389,7 +395,12 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     return best;
   }
 
-  static double _lineSimilarity(String normalizedText, String normalizedUser, Set<String> userWords) {
+  static double _lineSimilarity(
+    String normalizedText,
+    String normalizedUser,
+    Set<String> userWords, {
+    List<String>? userTokens,
+  }) {
     if (normalizedText.isEmpty) return 0;
 
     if (normalizedText == normalizedUser) return 1.0;
@@ -398,25 +409,64 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     }
 
     final textTokens = _splitTokens(normalizedText);
-    final userTokens = _splitTokens(normalizedUser);
+    final queryTokens = userTokens ?? _splitTokens(normalizedUser);
     final textWords = textTokens.toSet();
 
-    if (textWords.isEmpty || userTokens.isEmpty) return 0;
+    if (textWords.isEmpty || queryTokens.isEmpty) return 0;
 
     final common = userWords.intersection(textWords).length.toDouble();
     final union = userWords.union(textWords).length.toDouble();
     final jaccard = union == 0 ? 0 : common / union;
 
     final coverage = userWords.isEmpty ? 0 : common / userWords.length;
-    final phraseOverlap = _maxContiguousOverlapRatio(userTokens, textTokens);
+    final phraseOverlap = _maxContiguousOverlapRatio(queryTokens, textTokens);
     final trigram = _charNgramSimilarity(normalizedUser, normalizedText, 3);
+    final orderedWindow = _orderedWindowCoverage(queryTokens, textTokens);
 
-    // Blend token coverage with order-sensitive phrase overlap for line-level precision.
-    return (0.45 * coverage) + (0.2 * jaccard) + (0.2 * phraseOverlap) + (0.15 * trigram);
+    // Better for dense rap lines: emphasize coverage + nearby order while tolerating filler words.
+    return (0.38 * coverage) +
+        (0.16 * jaccard) +
+        (0.20 * phraseOverlap) +
+        (0.14 * trigram) +
+        (0.12 * orderedWindow);
   }
 
   static List<String> _splitTokens(String text) {
     return text.split(RegExp(r'\s+')).where((w) => w.length > 1).toList();
+  }
+
+  /// Compute average milliseconds per word from synced lyrics (LRC format).
+  /// Used to drive beat cursor at reference track's real tempo.
+  /// Returns null if synced lyrics are empty or can't be parsed.
+  static int? computeMsPerWordFromSyncedLyrics(String? syncedLyrics) {
+    if (syncedLyrics == null || syncedLyrics.isEmpty) return null;
+
+    final regex = RegExp(r'\[(\d+):(\d+)\.?(\d*)\]\s*(.*)');
+    final entries = <_LrcEntry>[];
+    for (final line in syncedLyrics.split('\n')) {
+      final match = regex.firstMatch(line);
+      if (match == null) continue;
+      final minutes = int.tryParse(match.group(1) ?? '0') ?? 0;
+      final seconds = int.tryParse(match.group(2) ?? '0') ?? 0;
+      final text = (match.group(4) ?? '').trim();
+      if (text.isEmpty) continue;
+      final totalSeconds = (minutes * 60) + seconds;
+      final cleanText = text.replaceAll(RegExp(r'\[\d+:\d+\.?\d*\]'), ' ');
+      final words = _splitTokens(cleanText);
+      if (words.isEmpty) continue;
+      entries.add(_LrcEntry(seconds: totalSeconds, wordCount: words.length));
+    }
+    if (entries.isEmpty) return null;
+
+    entries.sort((a, b) => a.seconds.compareTo(b.seconds));
+    final firstSec = entries.first.seconds;
+    final lastSec = entries.last.seconds;
+    final spanSec = (lastSec - firstSec).clamp(1, 600); // 1s–10min
+    final totalWords = entries.fold<int>(0, (s, e) => s + e.wordCount);
+    if (totalWords == 0) return null;
+
+    final msPerWord = (spanSec * 1000) ~/ totalWords;
+    return msPerWord.clamp(200, 1200); // sane range 200–1200 ms/word
   }
 
   static double _maxContiguousOverlapRatio(List<String> queryTokens, List<String> textTokens) {
@@ -435,6 +485,21 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       }
     }
     return best / queryTokens.length;
+  }
+
+  static double _orderedWindowCoverage(List<String> queryTokens, List<String> textTokens) {
+    if (queryTokens.isEmpty || textTokens.isEmpty) return 0;
+
+    var qi = 0;
+    var hits = 0;
+    for (final token in textTokens) {
+      if (qi < queryTokens.length && token == queryTokens[qi]) {
+        qi++;
+        hits++;
+      }
+    }
+    if (hits == 0) return 0;
+    return hits / queryTokens.length;
   }
 
   static double _charNgramSimilarity(String a, String b, int n) {
@@ -460,12 +525,47 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
   }
 
   static String _normalizeLine(String s) {
-    return s
-        .toLowerCase()
+    var out = s.toLowerCase();
+    for (final entry in _normalizationReplacements.entries) {
+      out = out.replaceAll(entry.key, entry.value);
+    }
+    return out
         .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ')
         .trim()
         .replaceAll(RegExp(r'\s+'), ' ');
   }
+
+  // Lightweight slang/contraction normalization to improve one-line lyric recall.
+  static const Map<String, String> _normalizationReplacements = {
+    "can't": "cant",
+    "won't": "wont",
+    "ain't": "aint",
+    "i'm": "im",
+    "you're": "youre",
+    "we're": "were",
+    "they're": "theyre",
+    "it's": "its",
+    "that's": "thats",
+    "there's": "theres",
+    "what's": "whats",
+    "don't": "dont",
+    "doesn't": "doesnt",
+    "didn't": "didnt",
+    "isn't": "isnt",
+    "aren't": "arent",
+    "wasn't": "wasnt",
+    "weren't": "werent",
+    "couldn't": "couldnt",
+    "shouldn't": "shouldnt",
+    "wouldn't": "wouldnt",
+    "gonna": "going to",
+    "wanna": "want to",
+    "gotta": "got to",
+    "imma": "i am going to",
+    "tryna": "trying to",
+    "ya": "you",
+    "yall": "you all",
+  };
 
   /// Build a [LyricPlayResult] from a [LyricsMatch] and the user's line (to compute start time).
   LyricPlayResult? toPlayResult(LyricsMatch match, String userLine) {
@@ -493,4 +593,10 @@ class _TimedMatch {
   final int seconds;
   final double score;
   final String lineText;
+}
+
+class _LrcEntry {
+  const _LrcEntry({required this.seconds, required this.wordCount});
+  final int seconds;
+  final int wordCount;
 }

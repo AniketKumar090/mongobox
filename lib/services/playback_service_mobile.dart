@@ -345,9 +345,15 @@ class PlaybackServiceMobile {
 
     final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final shortHead = words.take(8).join(' ');
+    final midWindow = words.length > 10
+        ? words.skip((words.length / 3).floor()).take(8).join(' ')
+        : '';
+    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
 
     final queries = <String>[trimmed, normalized];
     if (shortHead.isNotEmpty && shortHead != normalized) queries.add(shortHead);
+    if (midWindow.isNotEmpty && midWindow != normalized) queries.add(midWindow);
+    if (tailWindow.isNotEmpty && tailWindow != normalized) queries.add(tailWindow);
     queries.addAll(_lyricsHintKeywords.map((hint) => '$normalized $hint'));
 
     final seen = <String>{};
@@ -358,6 +364,10 @@ class PlaybackServiceMobile {
     final trimmed = line.trim();
     final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final shortHead = words.take(8).join(' ');
+    final midWindow = words.length > 10
+        ? words.skip((words.length / 3).floor()).take(8).join(' ')
+        : '';
+    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
 
     final queries = <String>[
       '"$trimmed" lyrics',
@@ -369,6 +379,12 @@ class PlaybackServiceMobile {
     if (shortHead.isNotEmpty && shortHead != trimmed) {
       queries.add('$shortHead lyrics');
       queries.addAll(_lyricsHintKeywords.map((hint) => '$shortHead $hint'));
+    }
+    if (midWindow.isNotEmpty && midWindow != trimmed) {
+      queries.add('$midWindow lyrics');
+    }
+    if (tailWindow.isNotEmpty && tailWindow != trimmed) {
+      queries.add('$tailWindow lyrics');
     }
 
     final seen = <String>{};

@@ -6,6 +6,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
 import '../models/song_reference.dart';
+import '../services/bpm_service.dart';
+import '../services/lyrics_service.dart';
 import 'voice_song_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,20 +23,11 @@ const _sampleSentences = [
   'How much wood would a woodchuck chuck if a woodchuck could chuck wood?',
 ];
 
-/// Hindi sample lines + Hinglish underneath for Hindi‑dominant songs.
-const _hindiSampleSentencePairs = [
-  (
-    'मेरी आवाज़ में ये गाना दिल से निकलता है।',
-    'Meri awaaz mein ye gaana dil se nikalta hai.',
-  ),
-  (
-    'रात की ख़ामोशी में तेरी याद गूंजती रहती है।',
-    'Raat ki khamoshi mein teri yaad goonjti rehti hai.',
-  ),
-  (
-    'दिल की धड़कन हर पल तेरा नाम पुकारती है।',
-    'Dil ki dhadkan har pal tera naam pukarti hai.',
-  ),
+/// Hinglish fallback lines when no flow lines available (Hindi-dominant only).
+const _hinglishFallbackLines = [
+  'Meri awaaz mein ye gaana dil se nikalta hai.',
+  'Raat ki khamoshi mein teri yaad goonjti rehti hai.',
+  'Dil ki dhadkan har pal tera naam pukarti hai.',
 ];
 
 class VoiceSampleScreen extends StatefulWidget {
@@ -47,11 +40,13 @@ class VoiceSampleScreen extends StatefulWidget {
     required this.mood,
     required this.genre,
     this.referenceSong,
+    this.hinglishLyrics,
   });
 
   final String songTitle;
   final String hindiLyrics;
   final String englishLyrics;
+  final String? hinglishLyrics;
   final String dominantLanguage;
   final String mood;
   final String genre;
@@ -65,14 +60,27 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     with SingleTickerProviderStateMixin {
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
+  final _bpmService = BpmService();
 
   String? _recordedPath;
   bool _isRecording = false;
   bool _isPlaying = false;
   int _recordingSeconds = 0;
   Timer? _timer;
+  Timer? _karaokeTicker;
+  final Stopwatch _karaokeWatch = Stopwatch();
+  List<String> _karaokeFlowLines = const [];
+  List<String> _karaokeWords = const [];
+  List<int> _karaokeLineWordStart = const [];
+  int _karaokeCurrentWord = -1;
+  int _karaokeCurrentLine = 0;
+  int _karaokeTargetWpm = 108;
+  int? _referenceMsPerWord;
+  double _activeLineProgress = 0;
+  String? _paceFeedback;
 
   late AnimationController _waveController;
+  final _lyricsService = LyricsService();
 
   @override
   void initState() {
@@ -81,11 +89,56 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
+    _fetchReferenceTempo();
+  }
+
+  Future<void> _fetchReferenceTempo() async {
+    final ref = widget.referenceSong;
+    if (ref == null) return;
+
+    // 1) Try LRCLIB synced lyrics for exact word timing
+    if (ref.trackName.trim().isNotEmpty && ref.artistName.trim().isNotEmpty) {
+      try {
+        final matches = await _lyricsService.search('${ref.trackName} ${ref.artistName}');
+        for (final m in matches.take(5)) {
+          final synced = m.syncedLyrics;
+          if (synced != null && synced.isNotEmpty) {
+            final ms = LyricsService.computeMsPerWordFromSyncedLyrics(synced);
+            if (ms != null && mounted) {
+              setState(() => _referenceMsPerWord = ms);
+              return;
+            }
+          }
+          final full = await _lyricsService.getById(m.id);
+          if (full?.syncedLyrics != null && full!.syncedLyrics!.isNotEmpty) {
+            final ms = LyricsService.computeMsPerWordFromSyncedLyrics(full.syncedLyrics);
+            if (ms != null && mounted) {
+              setState(() => _referenceMsPerWord = ms);
+              return;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2) Fallback: fetch BPM from reference track (voice backend)
+    final videoId = ref.videoId?.trim();
+    if (videoId != null && videoId.isNotEmpty) {
+      try {
+        final bpm = await _bpmService.fetchBpm(videoId);
+        if (bpm != null && bpm >= 50 && bpm <= 220 && mounted) {
+          // ~1.5 words per beat → ms per word = 60000 / (bpm * 1.5)
+          final ms = (60000 / (bpm * 1.5)).round().clamp(220, 900);
+          setState(() => _referenceMsPerWord = ms);
+        }
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _karaokeTicker?.cancel();
     _recorder.dispose();
     _player.dispose();
     _waveController.dispose();
@@ -143,6 +196,26 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     }
 
     try {
+      final isHindiDominant =
+          widget.dominantLanguage.toLowerCase().contains('hindi');
+      final targetLyrics = isHindiDominant
+          ? (widget.hinglishLyrics ?? widget.hindiLyrics)
+          : widget.englishLyrics;
+      final flowPromptLines = _extractFlowPromptLines(
+        targetLyrics,
+        isHindiDominant: isHindiDominant,
+      );
+      int targetWpm;
+      final videoId = (widget.referenceSong?.videoId ?? '').trim();
+      if (videoId.isNotEmpty) {
+        final bpm = await _bpmService.fetchBpm(videoId);
+        targetWpm = bpm != null
+            ? (bpm * 1.2).round().clamp(90, 150)
+            : _estimateTargetWpm(targetLyrics);
+      } else {
+        targetWpm = _estimateTargetWpm(targetLyrics);
+      }
+
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_sample.m4a';
       await _recorder.start(
@@ -163,6 +236,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       });
 
       _waveController.repeat(reverse: true);
+      _startKaraokeGuide(flowLines: flowPromptLines, targetWpm: targetWpm);
       setState(() {
         _isRecording = true;
         _recordedPath = null;
@@ -175,12 +249,19 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   Future<void> _stopRecording() async {
     _timer?.cancel();
     _waveController.stop();
+    _stopKaraokeGuide();
     try {
       final path = await _recorder.stop();
       if (!mounted) return;
+      final feedback = _buildPaceFeedback(
+        spokenSeconds: _recordingSeconds,
+        targetWpm: _karaokeTargetWpm,
+        flowLines: _karaokeFlowLines,
+      );
       setState(() {
         _isRecording = false;
         _recordedPath = path;
+        _paceFeedback = feedback;
       });
     } catch (e) {
       if (!mounted) return;
@@ -212,6 +293,155 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     );
   }
 
+  static const _hindiSections = ['verse 1', 'verse 2', 'verse 3', 'bridge', 'pre-chorus'];
+  static const _englishSections = ['chorus', 'outro', 'hook'];
+
+  List<String> _linesForDominantLanguage(String lyrics, bool isHindiDominant) {
+    final raw = lyrics.split('\n');
+    final result = <String>[];
+    var currentSection = '';
+    for (final line in raw) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      final lower = trimmed.toLowerCase();
+      if (RegExp(r'^\[.+\]').hasMatch(lower)) {
+        currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
+        continue;
+      }
+      final sectionMatch = isHindiDominant
+          ? _hindiSections.any((s) => currentSection.contains(s))
+          : _englishSections.any((s) => currentSection.contains(s));
+      if (sectionMatch && trimmed.length >= 8) {
+        result.add(trimmed);
+      }
+    }
+    if (result.isEmpty) return _cleanSingableLines(lyrics);
+    return result;
+  }
+
+  List<String> _cleanSingableLines(String lyrics) {
+    return lyrics
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) =>
+            l.isNotEmpty &&
+            !l.startsWith('[') &&
+            l.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').length >=
+                8)
+        .toList();
+  }
+
+  List<String> _extractFlowPromptLines(String lyrics, {required bool isHindiDominant}) {
+    final filtered = _linesForDominantLanguage(lyrics, isHindiDominant);
+    if (filtered.isEmpty) return const [];
+    filtered.sort((a, b) => a.length.compareTo(b.length));
+    final picked = filtered.where((l) => l.length <= 90).take(4).toList();
+    return picked.isNotEmpty ? picked : filtered.take(3).toList();
+  }
+
+  int _estimateTargetWpm(String lyrics) {
+    final lines = _cleanSingableLines(lyrics);
+    if (lines.isEmpty) return 105;
+    final words = lines
+        .take(10)
+        .map((l) => l.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length)
+        .fold<int>(0, (a, b) => a + b);
+    final avgWordsPerLine = words / lines.take(10).length;
+    final estimated = (avgWordsPerLine * 18).round(); // rough spoken cadence map
+    return estimated.clamp(90, 150);
+  }
+
+  List<String> _splitWords(String line) {
+    return line.split(RegExp(r'\s+')).where((w) => w.trim().isNotEmpty).toList();
+  }
+
+  void _startKaraokeGuide({
+    required List<String> flowLines,
+    required int targetWpm,
+  }) {
+    _karaokeFlowLines = flowLines;
+    _karaokeTargetWpm = targetWpm;
+    _karaokeCurrentWord = -1;
+    _karaokeCurrentLine = 0;
+    _activeLineProgress = 0;
+    _paceFeedback = null;
+
+    final starts = <int>[];
+    final words = <String>[];
+    var cursor = 0;
+    for (final line in flowLines) {
+      starts.add(cursor);
+      final split = _splitWords(line);
+      words.addAll(split);
+      cursor += split.length;
+    }
+    _karaokeLineWordStart = starts;
+    _karaokeWords = words;
+
+    _karaokeTicker?.cancel();
+    _karaokeWatch
+      ..reset()
+      ..start();
+
+    _karaokeTicker = Timer.periodic(const Duration(milliseconds: 120), (_) {
+      if (!mounted || _karaokeWords.isEmpty) return;
+      final msPerWord = _referenceMsPerWord ??
+          (60000 / _karaokeTargetWpm).round().clamp(220, 900);
+      final rawIndex = (_karaokeWatch.elapsedMilliseconds / msPerWord).floor();
+      final safeIndex = rawIndex.clamp(0, _karaokeWords.length - 1);
+      if (safeIndex == _karaokeCurrentWord) return;
+
+      var lineIndex = 0;
+      for (var i = 0; i < _karaokeLineWordStart.length; i++) {
+        final start = _karaokeLineWordStart[i];
+        final next = i + 1 < _karaokeLineWordStart.length
+            ? _karaokeLineWordStart[i + 1]
+            : _karaokeWords.length;
+        if (safeIndex >= start && safeIndex < next) {
+          lineIndex = i;
+          break;
+        }
+      }
+
+      setState(() {
+        _karaokeCurrentWord = safeIndex;
+        _karaokeCurrentLine = lineIndex;
+        final lineStart = lineIndex < _karaokeLineWordStart.length
+            ? _karaokeLineWordStart[lineIndex]
+            : 0;
+        final lineEnd = lineIndex + 1 < _karaokeLineWordStart.length
+            ? _karaokeLineWordStart[lineIndex + 1]
+            : _karaokeWords.length;
+        final lineWordCount = (lineEnd - lineStart).clamp(1, 9999);
+        final inLine = (safeIndex - lineStart).clamp(0, lineWordCount - 1);
+        _activeLineProgress = (inLine + 1) / lineWordCount;
+      });
+    });
+  }
+
+  void _stopKaraokeGuide() {
+    _karaokeTicker?.cancel();
+    _karaokeWatch.stop();
+  }
+
+  String _buildPaceFeedback({
+    required int spokenSeconds,
+    required int targetWpm,
+    required List<String> flowLines,
+  }) {
+    if (spokenSeconds <= 0 || flowLines.isEmpty) return '';
+    final targetWords = flowLines.expand(_splitWords).length.clamp(1, 9999);
+    final expectedSeconds = (targetWords * 60 / targetWpm);
+    final ratio = spokenSeconds / expectedSeconds;
+    if (ratio < 0.85) {
+      return 'Too fast: slow down a bit to stay on beat.';
+    }
+    if (ratio > 1.2) {
+      return 'Too slow: tighten delivery to match song flow.';
+    }
+    return 'Great pacing: you are close to target flow.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -220,6 +450,13 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     final isShort = _recordingSeconds < 5 && hasRecording;
     final isHindiDominant =
         widget.dominantLanguage.toLowerCase().contains('hindi');
+    final targetLyrics = isHindiDominant
+        ? (widget.hinglishLyrics ?? widget.hindiLyrics)
+        : widget.englishLyrics;
+    final flowPromptLines = _extractFlowPromptLines(
+      targetLyrics,
+      isHindiDominant: isHindiDominant,
+    );
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -310,10 +547,29 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
               ),
               const SizedBox(height: 12),
 
+              if (flowPromptLines.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'Lyrical flow extracted from your selected song. '
+                    'Use karaoke mode while recording - words light up automatically.',
+                    style: tt.bodySmall?.copyWith(
+                      color: cs.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+
               // ── Prompt sentences: Hindi+Hinglish for Hindi songs, otherwise English only ──
-              if (isHindiDominant)
-                ..._hindiSampleSentencePairs.map(
-                  (pair) => Container(
+              if (flowPromptLines.isNotEmpty)
+                ...flowPromptLines.map(
+                  (line) => Container(
                     margin: const EdgeInsets.only(bottom: 10),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -323,26 +579,33 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                         color: cs.outline.withValues(alpha: 0.2),
                       ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          pair.$1,
-                          style: tt.bodyLarge?.copyWith(
-                            fontStyle: FontStyle.italic,
-                            height: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          pair.$2,
-                          style: tt.bodyMedium?.copyWith(
-                            fontStyle: FontStyle.italic,
-                            height: 1.4,
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      line,
+                      style: tt.bodyLarge?.copyWith(
+                        fontStyle: FontStyle.italic,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                )
+              else if (isHindiDominant)
+                ..._hinglishFallbackLines.map(
+                  (line) => Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: cs.outline.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Text(
+                      line,
+                      style: tt.bodyLarge?.copyWith(
+                        fontStyle: FontStyle.italic,
+                        height: 1.5,
+                      ),
                     ),
                   ),
                 )
@@ -405,6 +668,132 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                   tt: tt,
                 ),
 
+              if (_isRecording && _karaokeFlowLines.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: cs.primary.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _referenceMsPerWord != null
+                            ? 'Karaoke guide (reference track tempo)'
+                            : 'Karaoke guide (${_karaokeTargetWpm} WPM target)',
+                        style: tt.labelLarge?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...List.generate(_karaokeFlowLines.length, (i) {
+                        final line = _karaokeFlowLines[i];
+                        final words = _splitWords(line);
+                        final start = i < _karaokeLineWordStart.length
+                            ? _karaokeLineWordStart[i]
+                            : 0;
+                        final currentInLine = _karaokeCurrentWord - start;
+                        final activeLine = i == _karaokeCurrentLine;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (activeLine)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: LayoutBuilder(
+                                    builder: (context, c) {
+                                      final width = c.maxWidth.clamp(1.0, 9999.0);
+                                      final x = (width * _activeLineProgress)
+                                          .clamp(0.0, width);
+                                      return SizedBox(
+                                        height: 10,
+                                        child: Stack(
+                                          children: [
+                                            Positioned(
+                                              left: 0,
+                                              right: 0,
+                                              top: 4,
+                                              child: Container(
+                                                height: 2,
+                                                color: cs.primary
+                                                    .withValues(alpha: 0.25),
+                                              ),
+                                            ),
+                                            AnimatedPositioned(
+                                              duration: const Duration(milliseconds: 120),
+                                              curve: Curves.easeOut,
+                                              left: x - 4,
+                                              top: 0,
+                                              child: Container(
+                                                width: 8,
+                                                height: 8,
+                                                decoration: BoxDecoration(
+                                                  color: cs.primary,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 6,
+                                children: List.generate(words.length, (wi) {
+                                  final isPast = activeLine && wi < currentInLine;
+                                  final isCurrent = activeLine && wi == currentInLine;
+                                  final bg = isCurrent
+                                      ? cs.primary
+                                      : isPast
+                                          ? cs.primary.withValues(alpha: 0.2)
+                                          : Colors.transparent;
+                                  final fg = isCurrent
+                                      ? cs.onPrimary
+                                      : isPast
+                                          ? cs.primary
+                                          : cs.onSurfaceVariant;
+                                  return AnimatedContainer(
+                                    duration: const Duration(milliseconds: 120),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: bg,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      words[wi],
+                                      style: tt.bodyMedium?.copyWith(
+                                        color: fg,
+                                        fontWeight: isCurrent
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 16),
 
               // ── Record / Stop button ─────────────────────────────────────
@@ -442,6 +831,31 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
 
               if (hasRecording) ...[
                 const SizedBox(height: 12),
+
+                if ((_paceFeedback ?? '').isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: cs.primaryContainer.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.speed_rounded, color: cs.primary, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _paceFeedback!,
+                            style: tt.bodySmall?.copyWith(
+                              color: cs.onPrimaryContainer,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                 if (isShort)
                   Container(

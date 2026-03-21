@@ -282,12 +282,34 @@ class LightweightSearchService {
   /// Fallback search using only cached data when quota is exceeded
   Future<List<LightweightSearchResult>> _fallbackSearch(String query) async {
     final results = <LightweightSearchResult>[];
+    final normalizedQuery = _normalize(query);
     
     // Try to find matches in existing cache
     for (final entry in _searchCache.entries) {
-      if (entry.key.contains(query.toLowerCase()) || 
-          query.toLowerCase().contains(entry.key)) {
+      final key = entry.key;
+      final exactLike =
+          key.contains(normalizedQuery) || normalizedQuery.contains(key);
+      if (exactLike) {
         results.addAll(entry.value);
+        continue;
+      }
+
+      // Fuzzy rescue path for noisy/transcribed rap lines in cache-only mode.
+      final fuzzy = LyricsService.scoreTextMatch(key, normalizedQuery);
+      if (fuzzy >= 0.58) {
+        final boosted = entry.value
+            .map((r) => LightweightSearchResult(
+                  videoId: r.videoId,
+                  trackName: r.trackName,
+                  artistName: r.artistName,
+                  startTimeSeconds: r.startTimeSeconds,
+                  confidence: ((r.confidence * 0.75) + (fuzzy * 0.25))
+                      .clamp(0, 1)
+                      .toDouble(),
+                  source: '${r.source}-fuzzy',
+                ))
+            .toList();
+        results.addAll(boosted);
       }
     }
     
