@@ -6,10 +6,13 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../models/saved_voice_song.dart';
 import '../models/song_reference.dart';
+import '../services/saved_voice_song_service.dart';
 import '../services/audio_session_service.dart';
 import '../services/background_music_service.dart';
 import '../services/voice_clone_service.dart';
+import 'saved_voice_songs_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VoiceSongScreen
@@ -50,6 +53,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   final _voicePlayer = AudioPlayer();
   final _cloneService = VoiceCloneService();
   final _bgMusicService = BackgroundMusicService();
+  final _savedSongsService = SavedVoiceSongService();
 
   // ── Clone result ───────────────────────────────────────────────────────────
   String? _clonePath;
@@ -61,6 +65,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   // ── UI state ───────────────────────────────────────────────────────────────
   _CloneStep _step = _CloneStep.cloning;
   bool _isPlaying = false;
+  bool _isSaving = false;
   String? _errorMessage;
   StreamSubscription<PlayerState>? _voiceStateSub;
   double _voiceSpeed = 1.2;
@@ -262,22 +267,71 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   }
 
   Future<void> _download() async {
-    if (_clonePath == null) return;
+    if (_clonePath == null || _isSaving) return;
+    setState(() => _isSaving = true);
     final docsDir = await getApplicationDocumentsDirectory();
-    final safeName = widget.songTitle
-        .replaceAll(RegExp(r'[^\w\s]'), '')
-        .replaceAll(' ', '_');
-    final lang = widget.dominantLanguage.toLowerCase();
-    final dest = File('${docsDir.path}/${safeName}_$lang.wav');
-    await File(_clonePath!).copy(dest.path);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Saved to Documents/${safeName}_$lang.wav'),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
+    try {
+      final libraryDir = Directory('${docsDir.path}/saved_voice_songs');
+      if (!await libraryDir.exists()) {
+        await libraryDir.create(recursive: true);
+      }
+
+      final safeName = widget.songTitle
+          .replaceAll(RegExp(r'[^\w\s]'), '')
+          .trim()
+          .replaceAll(RegExp(r'\s+'), '_');
+      final lang = widget.dominantLanguage.toLowerCase();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = '${safeName.isEmpty ? 'song' : safeName}_${lang}_$timestamp.wav';
+      final dest = File('${libraryDir.path}/$fileName');
+      await File(_clonePath!).copy(dest.path);
+
+      final savedSong = SavedVoiceSong(
+        id: '$safeName-$timestamp',
+        title: widget.songTitle,
+        filePath: dest.path,
+        language: widget.dominantLanguage,
+        mood: widget.mood,
+        genre: widget.genre,
+        createdAtIso: DateTime.now().toIso8601String(),
+        hasBackgroundMusic: _musicSourceUrl != null ||
+            ((widget.referenceSong?.videoId ?? '').isNotEmpty),
+        backgroundMusicUrl: _musicSourceUrl ?? '',
+        backgroundMusicLabel: _musicSourceLabel ?? '',
+      );
+      await _savedSongsService.saveSong(savedSong);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Saved. You can replay "${widget.songTitle}" anytime.'),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'Open',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SavedVoiceSongsScreen(),
+                ),
+              );
+            },
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save song: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
   }
 
   // ── BUILD ─────────────────────────────────────────────────────────────────
@@ -295,6 +349,19 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         backgroundColor: cs.inverseSurface,
         foregroundColor: cs.onInverseSurface,
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Saved songs',
+            icon: const Icon(Icons.library_music_rounded),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SavedVoiceSongsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -546,8 +613,12 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: _download,
-                        icon: const Icon(Icons.download_rounded),
-                        label: const Text('Save'),
+                        icon: Icon(
+                          _isSaving
+                              ? Icons.hourglass_top_rounded
+                              : Icons.bookmark_add_rounded,
+                        ),
+                        label: Text(_isSaving ? 'Saving...' : 'Save'),
                         style: OutlinedButton.styleFrom(
                           padding:
                               const EdgeInsets.symmetric(vertical: 14),

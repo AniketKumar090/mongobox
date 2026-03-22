@@ -6,10 +6,11 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/env_config.dart';
 import 'services/audio_session_service.dart';
+import 'theme/pixel_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Load environment variables from .env file (best effort)
   try {
     await EnvConfig.load();
@@ -17,12 +18,13 @@ void main() async {
   } catch (e) {
     print('⚠️  Could not load .env file: $e');
   }
-  
+
   // Initialize Firebase
   if (Firebase.apps.isEmpty) {
-   await Firebase.initializeApp(
- name: "MongoBox",
- options: DefaultFirebaseOptions.currentPlatform);
+    await Firebase.initializeApp(
+      name: "MongoBox",
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
     print('✅ Firebase initialized fresh');
   } else {
     print('✅ Using existing Firebase app (apps count: ${Firebase.apps.length})');
@@ -30,8 +32,8 @@ void main() async {
 
   // Ensure background-friendly playback audio session on mobile platforms.
   await AppAudioSessionService.ensureConfigured();
-  
-  runApp(MyApp());
+
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -42,21 +44,26 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'MongoBox',
-      theme: ThemeData(
-        useMaterial3: true,
-        primarySwatch: Colors.blue,
-        fontFamily: 'Inter',
-        textTheme: const TextTheme(
-          displayLarge: TextStyle(color: Colors.black87),
-          bodyLarge: TextStyle(color: Colors.black87),
-        ),
-      ),
-      darkTheme: kIsWeb ? null : ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        fontFamily: 'Inter',
-      ),
-      themeMode: kIsWeb ? ThemeMode.light : ThemeMode.system,
+      // ── Mobile: pixel art dark theme ──────────────────────────────────────
+      theme: kIsWeb
+          ? ThemeData(
+              useMaterial3: true,
+              primarySwatch: Colors.blue,
+              fontFamily: 'Inter',
+              textTheme: const TextTheme(
+                displayLarge: TextStyle(color: Colors.black87),
+                bodyLarge: TextStyle(color: Colors.black87),
+              ),
+            )
+          : PixelTheme.theme,
+      darkTheme: kIsWeb
+          ? ThemeData(
+              useMaterial3: true,
+              brightness: Brightness.dark,
+              fontFamily: 'Inter',
+            )
+          : PixelTheme.theme,
+      themeMode: kIsWeb ? ThemeMode.light : ThemeMode.dark,
       home: kIsWeb ? const jukebox.HomeScreen() : const MobileLyricApp(),
     );
   }

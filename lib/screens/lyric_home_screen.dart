@@ -15,6 +15,7 @@ import '../services/soundcloud_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import '../screens/generate_song_screen.dart'; // ← NEW
+import 'saved_voice_songs_screen.dart';
 
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
@@ -649,6 +650,17 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         backgroundColor: Theme.of(context).colorScheme.inverseSurface,
         foregroundColor: Theme.of(context).colorScheme.onInverseSurface,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.library_music_rounded),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SavedVoiceSongsScreen(),
+                ),
+              );
+            },
+            tooltip: 'Saved songs',
+          ),
           IconButton(
             icon: const Icon(Icons.qr_code_2),
             onPressed: _openHostParty,
