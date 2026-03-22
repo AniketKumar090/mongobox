@@ -4,6 +4,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'lyrics_service.dart';
+import 'youtube_mobile_service.dart';
 import 'youtube_quota_monitor.dart';
 import 'local_suggestions_service.dart';
 import 'playback_service_mobile.dart';
@@ -29,6 +30,7 @@ class LightweightSearchResult {
 
 class LightweightSearchService {
   final LyricsService _lyrics = LyricsService();
+  final YoutubeMobileService _youtube = YoutubeMobileService();
   final YouTubeQuotaMonitor _quotaMonitor = YouTubeQuotaMonitor();
   final http.Client _client = http.Client();
   final GrokSearchRefinement _grokRefinement = GrokSearchRefinement();
@@ -175,31 +177,116 @@ class LightweightSearchService {
   /// Optimized search that minimizes API calls
   Future<List<LightweightSearchResult>> _optimizedSearch(String query) async {
     final results = <LightweightSearchResult>[];
-    
-    // Step 1: Search lyrics first (cheaper than YouTube API)
-    final lyricMatches = await _lyrics.search(query);
-    if (lyricMatches.isEmpty) return results;
 
-    // Step 2: For each match, try to find video ID with minimal YouTube calls
-    for (final match in lyricMatches.take(3)) { // Limit to top 3 to save quota
-      final videoId = await _getVideoIdWithCache(match.trackName, match.artistName);
-      if (videoId == null) continue;
+    final lyricMatches = await _collectLyricMatches(query);
+    if (lyricMatches.isNotEmpty) {
+      for (final match in lyricMatches.take(3)) {
+        final videoId = await _getVideoIdWithCache(match.trackName, match.artistName);
+        if (videoId == null) continue;
 
-      // Step 3: Calculate start time from synced lyrics
-      final startTime = _calculateStartTime(match.syncedLyrics, query);
-      
+        final startTime = _calculateStartTime(match.syncedLyrics, query);
+
+        results.add(LightweightSearchResult(
+          videoId: videoId,
+          trackName: match.trackName,
+          artistName: match.artistName,
+          startTimeSeconds: startTime,
+          confidence: _calculateConfidence(match.syncedLyrics, query),
+        ));
+      }
+
+      results.sort((a, b) => b.confidence.compareTo(a.confidence));
+      return results;
+    }
+
+    return _youtubeLyricOnlyFallback(query);
+  }
+
+  /// Merge LRCLIB hits across multiple query variants (head/mid/tail/sliding), like [PlaybackServiceMobile].
+  Future<List<LyricsMatch>> _collectLyricMatches(String query) async {
+    final variants = LyricsService.lyricSearchQueryVariants(query, maxQueries: 12);
+    final byId = <int, LyricsMatch>{};
+    final order = <int>[];
+
+    for (final q in variants) {
+      final list = await _lyrics.search(q);
+      for (final m in list) {
+        if (!byId.containsKey(m.id)) {
+          order.add(m.id);
+          byId[m.id] = m;
+        }
+      }
+      if (order.length >= 18) break;
+    }
+
+    return order.map((id) => byId[id]!).toList();
+  }
+
+  /// When LRCLIB has no match (common for deep rap), search YouTube with the same variants as playback.
+  Future<List<LightweightSearchResult>> _youtubeLyricOnlyFallback(String query) async {
+    final results = <LightweightSearchResult>[];
+    if (_isQuotaExceeded) return results;
+
+    final variants = LyricsService.youtubeLyricSearchVariants(query, maxQueries: 6);
+    final seen = <String>{};
+    final pool = <Map<String, dynamic>>[];
+
+    for (final q in variants) {
+      try {
+        final list = await _youtube.searchSongs(q);
+        for (final item in list) {
+          final id = item['id'] as String? ?? '';
+          if (id.isEmpty || !seen.add(id)) continue;
+          pool.add(item);
+        }
+      } catch (_) {
+        // Quota / network — try next variant.
+      }
+      if (pool.length >= 22) break;
+    }
+
+    if (pool.isEmpty) return results;
+
+    pool.sort((a, b) => LyricsService.scoreYoutubeCandidateForLyricLine(b, query)
+        .compareTo(LyricsService.scoreYoutubeCandidateForLyricLine(a, query)));
+
+    for (final picked in pool.take(3)) {
+      final videoId = picked['id'] as String? ?? '';
+      final title = picked['title'] as String? ?? '';
+      final channel = picked['artist'] as String? ?? '';
+      if (videoId.isEmpty) continue;
+
+      final score = LyricsService.scoreYoutubeCandidateForLyricLine(picked, query);
+
       results.add(LightweightSearchResult(
         videoId: videoId,
-        trackName: match.trackName,
-        artistName: match.artistName,
-        startTimeSeconds: startTime,
-        confidence: _calculateConfidence(match.syncedLyrics, query),
+        trackName: _trackFromYoutubeTitle(title, channel),
+        artistName: _artistFromYoutubeTitle(title, channel),
+        startTimeSeconds: 0,
+        confidence: score.clamp(0, 1),
+        source: 'yt-lyric-fallback',
       ));
     }
 
-    // Sort by confidence
-    results.sort((a, b) => b.confidence.compareTo(a.confidence));
     return results;
+  }
+
+  String _trackFromYoutubeTitle(String title, String channel) {
+    final sep = title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
+    if (sep != null) {
+      final parts = title.split(sep).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+      if (parts.length >= 2) return parts[0];
+    }
+    return title;
+  }
+
+  String _artistFromYoutubeTitle(String title, String channel) {
+    final sep = title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
+    if (sep != null) {
+      final parts = title.split(sep).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+      if (parts.length >= 2) return parts[1];
+    }
+    return channel;
   }
 
   /// Get video ID with aggressive caching

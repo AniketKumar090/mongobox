@@ -1,5 +1,6 @@
-// Orchestrates: lyric line -> LRCLIB -> YouTube -> (videoId, startSeconds).
+// Orchestrates: lyric line -> LRCLIB + Genius + YouTube (parallel) -> (videoId, startSeconds).
 
+import 'genius_search_service.dart';
 import 'lyrics_service.dart';
 import 'semantic_reranker_service.dart';
 import 'youtube_mobile_service.dart';
@@ -35,6 +36,7 @@ class PlaybackOption {
 class PlaybackServiceMobile {
   final LyricsService _lyrics = LyricsService();
   final YoutubeMobileService _youtube = YoutubeMobileService();
+  final GeniusSearchService _genius = GeniusSearchService();
   final SemanticRerankerService _reranker = SemanticRerankerService();
   static const int _linePrerollSeconds = 8;
 
@@ -73,23 +75,6 @@ class PlaybackServiceMobile {
     'vevo',
   ];
 
-  static const _lyricsHintKeywords = [
-    'lyrics',
-    'lyric video',
-    'song lyrics',
-    'official lyrics',
-    'hindi lyrics',
-    'english translation',
-    'translated lyrics',
-    'गीत',
-    'गाना',
-    'letra',
-    'paroles',
-    'testo',
-    '가사',
-    '歌詞',
-  ];
-
   Future<PlaybackResult?> resolveAndSearch(String lyricLine) async {
     final options = await resolveCandidates(lyricLine, limit: 1);
     if (options.isEmpty) return null;
@@ -108,13 +93,22 @@ class PlaybackServiceMobile {
 
     final byVideoId = <String, PlaybackOption>{};
 
-    final lyricOptions = await _resolveFromLyricsOptions(trimmed, maxCandidates: 4);
-    for (final option in lyricOptions) {
+    final parallel = await Future.wait([
+      _resolveFromLyricsOptions(trimmed, maxCandidates: 4),
+      _resolveFromGlobalYoutubeOptions(trimmed, maxCandidates: 5),
+      _resolveFromGeniusOptions(trimmed, maxCandidates: 3),
+    ]);
+
+    for (final option in parallel[0]) {
       byVideoId.putIfAbsent(option.result.videoId, () => option);
     }
-
-    final youtubeOptions = await _resolveFromGlobalYoutubeOptions(trimmed, maxCandidates: 5);
-    for (final option in youtubeOptions) {
+    for (final option in parallel[1]) {
+      final existing = byVideoId[option.result.videoId];
+      if (existing == null || option.confidence > existing.confidence) {
+        byVideoId[option.result.videoId] = option;
+      }
+    }
+    for (final option in parallel[2]) {
       final existing = byVideoId[option.result.videoId];
       if (existing == null || option.confidence > existing.confidence) {
         byVideoId[option.result.videoId] = option;
@@ -155,7 +149,7 @@ class PlaybackServiceMobile {
     final matches = await _searchLyricsAcrossVariants(lyricLine);
     if (matches.isEmpty) return const [];
 
-    final top = matches.take(10).toList();
+    final top = matches.take(18).toList();
     final hydrated = await Future.wait(top.map((m) async {
       if ((m.syncedLyrics ?? '').isNotEmpty) return m;
       return await _lyrics.getById(m.id) ?? m;
@@ -218,6 +212,50 @@ class PlaybackServiceMobile {
           evidenceText: first.syncedLyrics,
         ));
       }
+    }
+
+    return options;
+  }
+
+  Future<List<PlaybackOption>> _resolveFromGeniusOptions(String lyricLine, {int maxCandidates = 3}) async {
+    final hits = await _genius.searchLyricLine(lyricLine);
+    if (hits.isEmpty) return const [];
+
+    final options = <PlaybackOption>[];
+    final seen = <String>{};
+
+    for (final hit in hits) {
+      if (hit.artistName.trim().isEmpty) continue;
+
+      final key = '${hit.title.toLowerCase()}::${hit.artistName.toLowerCase()}';
+      if (!seen.add(key)) continue;
+
+      final videoId = await _searchBestVideoIdForSong(hit.title, hit.artistName);
+      if (videoId == null || videoId.isEmpty) continue;
+
+      final blob = '${hit.title} ${hit.artistName}';
+      final snippet = hit.snippet ?? hit.fullTitle ?? '';
+      double conf;
+      if (snippet.isNotEmpty) {
+        conf = (0.5 * LyricsService.scoreTextMatch(blob, lyricLine)) +
+            (0.5 * LyricsService.scoreTextMatch(snippet, lyricLine));
+      } else {
+        conf = LyricsService.scoreTextMatch(blob, lyricLine) * 0.5 + 0.35;
+      }
+
+      options.add(PlaybackOption(
+        result: PlaybackResult(
+          videoId: videoId,
+          startTimeSeconds: 0,
+          trackName: hit.title,
+          artistName: hit.artistName,
+        ),
+        confidence: conf.clamp(0, 1).toDouble(),
+        source: 'genius',
+        evidenceText: snippet.isNotEmpty ? snippet : hit.fullTitle,
+      ));
+
+      if (options.length >= maxCandidates) break;
     }
 
     return options;
@@ -336,81 +374,14 @@ class PlaybackServiceMobile {
     return options;
   }
 
-  List<String> _buildLyricQueries(String line) {
-    final trimmed = line.trim();
-    final normalized = trimmed
-        .replaceAll(RegExp(r'[\s]+'), ' ')
-        .replaceAll(RegExp(r'[\"]|[“”‘’]'), '')
-        .trim();
+  List<String> _buildLyricQueries(String line) =>
+      LyricsService.lyricSearchQueryVariants(line, maxQueries: 16);
 
-    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final shortHead = words.take(8).join(' ');
-    final midWindow = words.length > 10
-        ? words.skip((words.length / 3).floor()).take(8).join(' ')
-        : '';
-    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
+  List<String> _buildYoutubeQueries(String line) =>
+      LyricsService.youtubeLyricSearchVariants(line);
 
-    final queries = <String>[trimmed, normalized];
-    if (shortHead.isNotEmpty && shortHead != normalized) queries.add(shortHead);
-    if (midWindow.isNotEmpty && midWindow != normalized) queries.add(midWindow);
-    if (tailWindow.isNotEmpty && tailWindow != normalized) queries.add(tailWindow);
-    queries.addAll(_lyricsHintKeywords.map((hint) => '$normalized $hint'));
-
-    final seen = <String>{};
-    return queries.where((q) => q.isNotEmpty && seen.add(q.toLowerCase())).toList();
-  }
-
-  List<String> _buildYoutubeQueries(String line) {
-    final trimmed = line.trim();
-    final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final shortHead = words.take(8).join(' ');
-    final midWindow = words.length > 10
-        ? words.skip((words.length / 3).floor()).take(8).join(' ')
-        : '';
-    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
-
-    final queries = <String>[
-      '"$trimmed" lyrics',
-      '$trimmed lyrics',
-      trimmed,
-      for (final hint in _lyricsHintKeywords) '$trimmed $hint',
-    ];
-
-    if (shortHead.isNotEmpty && shortHead != trimmed) {
-      queries.add('$shortHead lyrics');
-      queries.addAll(_lyricsHintKeywords.map((hint) => '$shortHead $hint'));
-    }
-    if (midWindow.isNotEmpty && midWindow != trimmed) {
-      queries.add('$midWindow lyrics');
-    }
-    if (tailWindow.isNotEmpty && tailWindow != trimmed) {
-      queries.add('$tailWindow lyrics');
-    }
-
-    final seen = <String>{};
-    return queries.where((q) => q.isNotEmpty && seen.add(q.toLowerCase())).toList();
-  }
-
-  double _scoreYoutubeCandidate(Map<String, dynamic> song, String lyricLine) {
-    final title = song['title'] as String? ?? '';
-    final artist = song['artist'] as String? ?? '';
-    final description = song['description'] as String? ?? '';
-    final durationSeconds = (song['durationSeconds'] as num?)?.toInt() ?? 0;
-    final text = '$title $artist';
-
-    var score = LyricsService.scoreTextMatch(text, lyricLine);
-
-    final loweredTitle = title.toLowerCase();
-    final loweredDescription = description.toLowerCase();
-    if (loweredTitle.contains('lyrics')) score += 0.08;
-    if (loweredTitle.contains('official')) score += 0.05;
-    if (_containsAny(loweredTitle, _badVersionKeywords)) score -= 0.28;
-    if (_containsAny(loweredDescription, _badVersionKeywords)) score -= 0.2;
-    if (_containsAny(loweredTitle, _goodVersionKeywords)) score += 0.12;
-    if (durationSeconds >= 150) score += 0.08;
-
-    return score;
-  }
+  double _scoreYoutubeCandidate(Map<String, dynamic> song, String lyricLine) =>
+      LyricsService.scoreYoutubeCandidateForLyricLine(song, lyricLine);
 
   double _scoreOriginalSongCandidate({
     required Map<String, dynamic> song,
