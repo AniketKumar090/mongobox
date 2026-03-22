@@ -20,5 +20,15 @@ class AppAudioSessionService {
       debugPrint('Audio session config failed: $e');
     }
   }
+
+  /// Call before starting playback (e.g. after other audio or route changes).
+  static Future<void> activatePlayback() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('Audio session activate failed: $e');
+    }
+  }
 }
 

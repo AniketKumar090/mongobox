@@ -2,6 +2,7 @@
 // + Claude AI: generate unique personal song lyrics from user's listening history.
 
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'env_config.dart';
 
@@ -298,6 +299,433 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     }
   }
 
+  /// One-edit and typo-style alternates to help LRCLIB when speech-to-text or typing is wrong.
+  static List<String> typoExpandedQueries(String line, {int maxVariants = 6}) {
+    final normalized = line.trim().replaceAll(RegExp(r'[\s]+'), ' ').trim();
+    if (normalized.isEmpty) return const [];
+
+    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final out = <String>[];
+    final seen = <String>{normalized.toLowerCase()};
+
+    void add(String s) {
+      final t = s.trim();
+      if (t.isEmpty) return;
+      final k = t.toLowerCase();
+      if (!seen.add(k)) return;
+      out.add(t);
+    }
+
+    // One deletion in the middle of long tokens (common STT glitch).
+    for (var wi = 0; wi < words.length; wi++) {
+      final w = words[wi];
+      if (w.length < 6) continue;
+      final idx = w.length ~/ 2;
+      final oneLess = w.substring(0, idx) + w.substring(idx + 1);
+      if (oneLess.length < 3) continue;
+      add([...words.sublist(0, wi), oneLess, ...words.sublist(wi + 1)].join(' '));
+      if (out.length >= maxVariants) return out;
+    }
+
+    // Transposition of adjacent characters in the first long token.
+    for (var wi = 0; wi < words.length; wi++) {
+      final w = words[wi];
+      if (w.length < 4) continue;
+      final i = w.length ~/ 2;
+      if (i + 1 >= w.length) continue;
+      final swapped = w.substring(0, i) + w[i + 1] + w[i] + w.substring(i + 2);
+      add([...words.sublist(0, wi), swapped, ...words.sublist(wi + 1)].join(' '));
+      if (out.length >= maxVariants) return out;
+      break;
+    }
+
+    // Single QWERTY-neighbor substitution in the first eligible token.
+    for (var wi = 0; wi < words.length; wi++) {
+      final w = words[wi];
+      if (w.length < 5) continue;
+      final i = w.length ~/ 2;
+      final ch = w[i];
+      final lower = ch.toLowerCase();
+      final alt = _keyboardNeighborChar(lower);
+      if (alt == null) continue;
+      final nw = w.replaceRange(i, i + 1, ch == lower ? alt : alt.toUpperCase());
+      add([...words.sublist(0, wi), nw, ...words.sublist(wi + 1)].join(' '));
+      if (out.length >= maxVariants) return out;
+      break;
+    }
+
+    // Collapse accidental double letters ("committ" → "comitt" path).
+    for (var wi = 0; wi < words.length; wi++) {
+      final w = words[wi];
+      for (var i = 0; i < w.length - 1; i++) {
+        if (w[i].toLowerCase() == w[i + 1].toLowerCase()) {
+          final collapsed = w.substring(0, i) + w.substring(i + 1);
+          add([...words.sublist(0, wi), collapsed, ...words.sublist(wi + 1)].join(' '));
+          if (out.length >= maxVariants) return out;
+          break;
+        }
+      }
+    }
+
+    // Duplicate a character once (helps when user omits a double letter).
+    for (var wi = 0; wi < words.length; wi++) {
+      final w = words[wi];
+      if (w.length < 6) continue;
+      final i = w.length ~/ 2;
+      final c = w[i];
+      final doubled = w.substring(0, i) + c + c + w.substring(i + 1);
+      add([...words.sublist(0, wi), doubled, ...words.sublist(wi + 1)].join(' '));
+      if (out.length >= maxVariants) return out;
+      break;
+    }
+
+    return out;
+  }
+
+  static String? _keyboardNeighborChar(String ch) {
+    const neighbors = {
+      'a': 's',
+      'b': 'v',
+      'c': 'x',
+      'd': 's',
+      'e': 'r',
+      'f': 'd',
+      'g': 'f',
+      'h': 'j',
+      'i': 'o',
+      'j': 'k',
+      'k': 'j',
+      'l': 'k',
+      'm': 'n',
+      'n': 'm',
+      'o': 'p',
+      'p': 'o',
+      'q': 'w',
+      'r': 't',
+      's': 'a',
+      't': 'y',
+      'u': 'y',
+      'v': 'c',
+      'w': 'q',
+      'x': 'z',
+      'y': 'u',
+      'z': 'x',
+    };
+    return neighbors[ch];
+  }
+
+  /// Prioritized LRCLIB search strings for one user line (rap/long lines get extra windows).
+  static List<String> lyricSearchQueryVariants(String line, {int maxQueries = 22}) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return const [];
+
+    final normalized = trimmed
+        .replaceAll(RegExp(r'[\s]+'), ' ')
+        .replaceAll(RegExp(r'[\"]|[“”‘’]'), '')
+        .trim();
+
+    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final out = <String>[];
+    final seen = <String>{};
+
+    void add(String? s) {
+      if (s == null) return;
+      final t = s.trim();
+      if (t.isEmpty) return;
+      final k = t.toLowerCase();
+      if (!seen.add(k)) return;
+      out.add(t);
+    }
+
+    add(trimmed);
+    add(normalized);
+
+    if (words.length >= 5) {
+      add(words.take(8).join(' '));
+    }
+    if (words.length > 10) {
+      add(words.skip((words.length / 3).floor()).take(8).join(' '));
+      add(words.skip(words.length - 8).join(' '));
+    }
+
+    if (words.length >= 12) {
+      for (var i = 0; i + 8 <= words.length && i <= 28; i += 4) {
+        add(words.skip(i).take(8).join(' '));
+      }
+    }
+
+    final distinct = _distinctiveWords(words, maxWords: 8);
+    if (distinct.length >= 4) {
+      add(distinct.join(' '));
+    }
+
+    for (final typo in typoExpandedQueries(normalized)) {
+      add(typo);
+    }
+
+    const lrclibSuffixes = [
+      'lyrics',
+      'song lyrics',
+      'lyric video',
+      'official lyrics',
+      'hindi lyrics',
+      'english translation',
+      'translated lyrics',
+      'गीत',
+      'गाना',
+      'letra',
+      'paroles',
+      'testo',
+      '가사',
+      '歌詞',
+    ];
+    for (final h in lrclibSuffixes) {
+      add('$normalized $h');
+    }
+
+    return out.take(math.max(1, maxQueries)).toList();
+  }
+
+  /// YouTube search query variants when resolving a lyric line (LRCLIB miss / rap depth).
+  static List<String> youtubeLyricSearchVariants(String line, {int maxQueries = 32}) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return const [];
+
+    final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final shortHead = words.take(8).join(' ');
+    final midWindow = words.length > 10
+        ? words.skip((words.length / 3).floor()).take(8).join(' ')
+        : '';
+    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
+
+    final out = <String>[];
+    final seen = <String>{};
+
+    void add(String? s) {
+      if (s == null) return;
+      final t = s.trim();
+      if (t.isEmpty) return;
+      final k = t.toLowerCase();
+      if (!seen.add(k)) return;
+      out.add(t);
+    }
+
+    add('"$trimmed" lyrics');
+    add('$trimmed lyrics');
+    add(trimmed);
+    add('$trimmed song');
+    add('$trimmed full song');
+
+    const ytHints = [
+      'lyrics',
+      'lyric video',
+      'song lyrics',
+      'official lyrics',
+      'full song',
+      'hindi lyrics',
+      'english translation',
+      'translated lyrics',
+      'गीत',
+      'गाना',
+      'letra',
+      'paroles',
+      'testo',
+      '가사',
+      '歌詞',
+    ];
+    for (final h in ytHints) {
+      add('$trimmed $h');
+    }
+
+    if (shortHead.isNotEmpty && shortHead != trimmed) {
+      add('$shortHead lyrics');
+      for (final h in ytHints) {
+        add('$shortHead $h');
+      }
+    }
+    if (midWindow.isNotEmpty && midWindow != trimmed) {
+      add('$midWindow lyrics');
+      add('$midWindow song');
+    }
+    if (tailWindow.isNotEmpty && tailWindow != trimmed) {
+      add('$tailWindow lyrics');
+    }
+
+    if (words.length >= 12) {
+      for (var i = 0; i + 8 <= words.length && i <= 28; i += 4) {
+        add('${words.skip(i).take(8).join(' ')} lyrics');
+      }
+    }
+
+    final distinct = _distinctiveWords(
+      words.map((w) => w.toLowerCase()).toList(),
+      maxWords: 8,
+    );
+    if (distinct.length >= 4) {
+      add('${distinct.join(' ')} lyrics');
+    }
+
+    final latinHeavy = _looksLatinLyricLine(trimmed);
+    if (latinHeavy && words.length >= 8) {
+      add('$trimmed rap lyrics');
+      add('$trimmed hip hop lyrics');
+    }
+
+    for (final typo in typoExpandedQueries(trimmed, maxVariants: 3)) {
+      add('$typo lyrics');
+      add(typo);
+    }
+
+    return out.take(math.max(1, maxQueries)).toList();
+  }
+
+  /// Short phrases derived from [line] — take max [scoreTextMatch] vs metadata for ranking.
+  static List<String> lyricLineScoringPhrases(String line) {
+    final normalized = _normalizeLine(line);
+    if (normalized.isEmpty) return const [];
+
+    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final out = <String>[normalized];
+    final seen = <String>{normalized};
+
+    void add(String s) {
+      if (s.isEmpty || !seen.add(s)) return;
+      out.add(s);
+    }
+
+    if (words.length >= 12) {
+      add(words.take(8).join(' '));
+      add(words.skip(words.length - 8).join(' '));
+      add(words.skip((words.length / 3).floor()).take(8).join(' '));
+    } else if (words.length >= 6) {
+      add(words.take(8).join(' '));
+      add(words.skip(words.length - 6).join(' '));
+    }
+
+    if (words.length >= 5) {
+      add(words.take(6).join(' '));
+    }
+
+    final distinct = _distinctiveWords(words, maxWords: 8);
+    if (distinct.length >= 4) {
+      add(distinct.join(' '));
+    }
+
+    return out;
+  }
+
+  /// Best fuzzy match of any scoring phrase against title + channel + description.
+  static double bestTextMatchForLyricLine(
+    String title,
+    String artist,
+    String description,
+    String lyricLine,
+  ) {
+    final blob = '$title $artist $description';
+    var best = 0.0;
+    for (final phrase in lyricLineScoringPhrases(lyricLine)) {
+      best = math.max(best, scoreTextMatch(blob, phrase));
+    }
+    return best;
+  }
+
+  static const List<String> youtubeBadVersionKeywords = [
+    'remix',
+    'reel',
+    'shorts',
+    '#shorts',
+    'sped up',
+    'slowed',
+    'nightcore',
+    'lofi',
+    'mashup',
+    'edit',
+    'dj',
+    '8d',
+    'bass boosted',
+    'fanmade',
+    'cover',
+    'karaoke',
+    'instrumental',
+    'live',
+    'short video',
+    'status',
+  ];
+
+  static const List<String> youtubeGoodVersionKeywords = [
+    'official audio',
+    'official video',
+    'audio',
+    'lyric video',
+    'topic',
+    'vevo',
+  ];
+
+  /// Rank a YouTube search result against a user lyric line (shared by playback + lightweight search).
+  static double scoreYoutubeCandidateForLyricLine(Map<String, dynamic> song, String lyricLine) {
+    final title = song['title'] as String? ?? '';
+    final artist = song['artist'] as String? ?? '';
+    final description = song['description'] as String? ?? '';
+    final durationSeconds = (song['durationSeconds'] as num?)?.toInt() ?? 0;
+
+    var score = bestTextMatchForLyricLine(title, artist, description, lyricLine);
+
+    final loweredTitle = title.toLowerCase();
+    final loweredDescription = description.toLowerCase();
+    if (loweredTitle.contains('lyrics')) score += 0.08;
+    if (loweredTitle.contains('official')) score += 0.05;
+    if (_containsAnyKeyword(loweredTitle, youtubeBadVersionKeywords)) score -= 0.28;
+    if (_containsAnyKeyword(loweredDescription, youtubeBadVersionKeywords)) score -= 0.2;
+    if (_containsAnyKeyword(loweredTitle, youtubeGoodVersionKeywords)) score += 0.12;
+    if (durationSeconds >= 150) score += 0.08;
+
+    return score;
+  }
+
+  static bool _containsAnyKeyword(String value, List<String> terms) {
+    for (final t in terms) {
+      if (value.contains(t)) return true;
+    }
+    return false;
+  }
+
+  static bool _looksLatinLyricLine(String s) {
+    var latin = 0;
+    var total = 0;
+    for (final r in s.runes) {
+      final ch = String.fromCharCode(r);
+      if (ch.trim().isEmpty) continue;
+      total++;
+      if (RegExp(r'[A-Za-z]').hasMatch(ch)) latin++;
+    }
+    return total == 0 || (latin / total) >= 0.62;
+  }
+
+  static List<String> _distinctiveWords(List<String> words, {int maxWords = 8}) {
+    final out = <String>[];
+    for (final w in words) {
+      final lw = w.toLowerCase();
+      if (lw.length <= 1) continue;
+      if (_englishStopWords.contains(lw)) continue;
+      out.add(w);
+      if (out.length >= maxWords) break;
+    }
+    return out;
+  }
+
+  static const Set<String> _englishStopWords = {
+    'the', 'a', 'an', 'to', 'and', 'or', 'but', 'in', 'on', 'at', 'for', 'of', 'with', 'by',
+    'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+    'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
+    'can', 'need', 'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'we',
+    'they', 'them', 'me', 'my', 'your', 'his', 'her', 'our', 'their', 'what', 'which', 'who',
+    'when', 'where', 'why', 'how', 'if', 'then', 'so', 'than', 'too', 'very', 'just', 'not',
+    'no', 'yes', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such',
+    'only', 'same', 'own', 'into', 'out', 'up', 'down', 'about', 'over', 'under', 'again',
+    'after', 'before', 'once', 'here', 'there', 'now', 'im', 'dont', 'gonna', 'wanna', 'got',
+    'get', 'like', 'know', 'yeah', 'oh', 'uh', 'na',
+  };
+
   /// Find the best matching line in LRC text and return its start time in seconds.
   /// LRC format: [MM:SS.xx] or [MM:SS] line text
   /// Returns 0 if no confident match was found.
@@ -308,8 +736,12 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final normalizedUser = _normalizeLine(userLine);
     final queryTokens = _splitTokens(normalizedUser);
 
-    // Keep a quality bar, but allow slightly looser matching for transliterated lines.
-    final threshold = queryTokens.length >= 6 ? 0.46 : 0.40;
+    // Long dense lines (rap): slightly looser bar; short lines stay strict.
+    final threshold = queryTokens.length >= 12
+        ? 0.42
+        : queryTokens.length >= 6
+            ? 0.46
+            : 0.40;
     return best.score >= threshold ? best.seconds : 0;
   }
 
@@ -565,6 +997,14 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     "tryna": "trying to",
     "ya": "you",
     "yall": "you all",
+    "finna": "going to",
+    "bout": "about",
+    "cuz": "because",
+    "cos": "because",
+    "til": "until",
+    "wit": "with",
+    "dat": "that",
+    "dem": "them",
   };
 
   /// Build a [LyricPlayResult] from a [LyricsMatch] and the user's line (to compute start time).
