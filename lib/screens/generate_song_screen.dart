@@ -270,8 +270,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                 {
                   'role': 'system',
                   'content':
-                      'You are a bilingual Hindi-English hip-hop / rap songwriter. '
-                      'Write lyrics with clear rhythm, rhyme, and poetic imagery (metaphor, wordplay, punchlines). '
+                      'You are a bilingual Hindi-English songwriter. '
                       'Always respond with valid JSON only. No markdown.',
                 },
                 {'role': 'user', 'content': prompt},
@@ -367,23 +366,22 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     required String mood,
     required String trackList,
   }) {
-    return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
+    return 'You are a bilingual Hindi-English songwriter.\n\n'
         'Listening history:\n$trackList\n\n'
         'Requested mood: $mood\n\n'
         'Rules:\n'
-        '- Write COMPLETELY ORIGINAL bilingual lyrics in a rap style: strong rhythm, end rhymes, internal rhymes where natural, and vivid poetry (imagery, wordplay, punchlines).\n'
-        '- Use a consistent bar feel: similar syllable counts per line within each verse (not strict counting, but read aloud with a steady pocket).\n'
+        '- Write COMPLETELY ORIGINAL bilingual lyrics inspired by the listening style above\n'
         '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
-        '- Keep meaning, rhyme scheme, and section structure aligned across Devanagari and Hinglish.\n'
-        '- Hinglish should be natural and rap-ready (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
-        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] instead of [Chorus] for the main refrain.\n'
+        '- Keep meaning, rhyme, and section structure aligned across Devanagari and Hinglish.\n'
+        '- Hinglish should be natural and singable (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
+        '- Section headers ([Verse 1], [Chorus], [Bridge], [Outro]) always in English\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
         '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
-        '{"title":"...","mood":"$mood","genre":"Hip-hop",'
-        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Hook]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
-        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Hook]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
-        '"english_lyrics":"[Verse 1]\\nline\\n\\n[Hook]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
+        '{"title":"...","mood":"$mood","genre":"Genre",'
+        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Chorus]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
+        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Chorus]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
+        '"english_lyrics":"[Verse 1]\\nline\\n\\n[Chorus]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
   String _buildSingleSongPrompt({
@@ -391,27 +389,26 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     required RecentTrack reference,
   }) {
     final snippet = reference.lyricSnippet.trim();
-    return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
+    return 'You are a bilingual Hindi-English songwriter.\n\n'
         'Reference song: ${reference.trackName} by ${reference.artistName}\n'
         '${snippet.isEmpty ? '' : 'Lyric snippet: $snippet\n'}\n'
         'Requested mood: $mood\n\n'
         'Rules:\n'
         '- Study the emotional tone, imagery, pacing and genre of the reference\n'
-        '- Write a COMPLETELY ORIGINAL bilingual rap inspired by that reference: rhythm, rhyme, and poetry (metaphor, wordplay, punchlines).\n'
-        '- Use a consistent bar feel: similar syllable counts per line within each verse so it flows over a beat.\n'
+        '- Write a COMPLETELY ORIGINAL bilingual song inspired by that reference\n'
         '- Do NOT copy, translate, or closely mimic any line from the reference\n'
         '- Do NOT mention the reference song or artist name\n'
         '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
-        '- Keep meaning, rhyme scheme, and section structure aligned across Devanagari and Hinglish.\n'
-        '- Hinglish should be natural and rap-ready (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
-        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] for the main refrain.\n'
+        '- Keep meaning, rhyme, and section structure aligned across Devanagari and Hinglish.\n'
+        '- Hinglish should be natural and singable (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
+        '- Section headers ([Verse 1], [Chorus], [Bridge], [Outro]) always in English\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
         '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
-        '{"title":"...","mood":"$mood","genre":"Hip-hop",'
-        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Hook]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
-        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Hook]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
-        '"english_lyrics":"[Verse 1]\\nline\\n\\n[Hook]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
+        '{"title":"...","mood":"$mood","genre":"Genre",'
+        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Chorus]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
+        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Chorus]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
+        '"english_lyrics":"[Verse 1]\\nline\\n\\n[Chorus]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
   @override

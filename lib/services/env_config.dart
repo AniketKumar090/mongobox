@@ -75,26 +75,6 @@ class EnvConfig {
     );
   }
 
-  /// Optional. Enables Genius API as a parallel lyric search alongside LRCLIB.
-  /// Create a client at https://genius.com/api-clients — use the access token (not secret).
-  static String get geniusAccessToken {
-    try {
-      final envFileKey = _clean(dotenv.env['GENIUS_ACCESS_TOKEN']);
-      if (envFileKey.isNotEmpty) {
-        return envFileKey;
-      }
-    } catch (e) {
-      print('⚠️  Error reading GENIUS_ACCESS_TOKEN from .env: $e');
-    }
-
-    final envVarKey = _clean(const String.fromEnvironment('GENIUS_ACCESS_TOKEN'));
-    if (envVarKey.isNotEmpty) {
-      return envVarKey;
-    }
-
-    return '';
-  }
-
   static String get grokApiKey {
     // Try .env file first
     try {

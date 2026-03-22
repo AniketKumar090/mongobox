@@ -1,23 +1,25 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/song_reference.dart';
-import '../services/audio_session_service.dart';
 import '../services/background_music_service.dart';
 import '../services/voice_clone_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VoiceSongScreen
 //
-// Clones the user's voice in the dominant language only, then plays it back.
+// Clones the user's voice in BOTH Hindi and English in parallel.
+// Once both are ready, shows a language preference picker so the user
+// chooses which version to play. The dominant language (higher wordplay score)
+// is pre-selected as the default.
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum _CloneStep { cloning, ready, error }
+enum _CloneStep { cloning, pickLanguage, ready, error }
+enum _LyricsTab { hindi, english }
 
 class VoiceSongScreen extends StatefulWidget {
   const VoiceSongScreen({
@@ -25,7 +27,7 @@ class VoiceSongScreen extends StatefulWidget {
     required this.songTitle,
     required this.hindiLyrics,
     required this.englishLyrics,
-    required this.dominantLanguage, // 'Hindi' or 'English'
+    required this.dominantLanguage,   // 'Hindi' or 'English'
     required this.mood,
     required this.genre,
     this.referenceSong,
@@ -51,8 +53,17 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   final _cloneService = VoiceCloneService();
   final _bgMusicService = BackgroundMusicService();
 
-  // ── Clone result ───────────────────────────────────────────────────────────
-  String? _clonePath;
+  // ── Clone results ──────────────────────────────────────────────────────────
+  String? _hindiClonePath;
+  String? _englishClonePath;
+  String? _hindiCloneError;
+  String? _englishCloneError;
+  bool _hindiDone = false;
+  bool _englishDone = false;
+
+  // ── User's chosen language for playback ───────────────────────────────────
+  String? _chosenLanguage;   // 'Hindi' or 'English', set after picker
+  String? _activeClonePath;  // path of the chosen clone
 
   // ── Background music ───────────────────────────────────────────────────────
   String? _musicSourceUrl;
@@ -64,35 +75,21 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   String? _errorMessage;
   StreamSubscription<PlayerState>? _voiceStateSub;
   double _voiceSpeed = 1.2;
-  double _voiceVolume = 0.6;
+  double _voiceVolume = 0.75;
   double _musicVolume = 1.0;
 
-  double get _maxVoiceCap => _musicVolume > 1.0 ? 1.0 : _musicVolume;
-
-  void _reconcileVoiceToMusicCap() {
-    final cap = _maxVoiceCap;
-    if (_voiceVolume > cap) _voiceVolume = cap;
-  }
-
-  Future<void> _applyVoiceVolume(double v) async {
-    final clamped = v.clamp(0.4, _maxVoiceCap);
-    setState(() => _voiceVolume = clamped);
-    await _voicePlayer.setVolume(_voiceVolume);
-  }
-
-  Future<void> _applyMusicVolume(double v) async {
-    setState(() {
-      _musicVolume = v;
-      _reconcileVoiceToMusicCap();
-    });
-    await _musicPlayer.setVolume(_musicVolume);
-    await _voicePlayer.setVolume(_voiceVolume);
-  }
+  // ── Lyrics tab (for display only) ─────────────────────────────────────────
+  late _LyricsTab _lyricsTab;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startCloning());
+    _lyricsTab = widget.dominantLanguage == 'Hindi'
+        ? _LyricsTab.hindi
+        : _LyricsTab.english;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startParallelCloning();
+    });
   }
 
   @override
@@ -104,20 +101,71 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     super.dispose();
   }
 
-  // ── CLONING ───────────────────────────────────────────────────────────────
-  Future<void> _startCloning() async {
+  // ── PARALLEL CLONING ──────────────────────────────────────────────────────
+  Future<void> _startParallelCloning() async {
     setState(() {
       _step = _CloneStep.cloning;
-      _clonePath = null;
+      _hindiDone = false;
+      _englishDone = false;
+      _hindiClonePath = null;
+      _englishClonePath = null;
+      _hindiCloneError = null;
+      _englishCloneError = null;
+      _chosenLanguage = null;
+      _activeClonePath = null;
       _musicSourceUrl = null;
       _errorMessage = null;
       _isPlaying = false;
     });
 
-    final language = widget.dominantLanguage;
-    final lyrics =
-        language == 'Hindi' ? widget.hindiLyrics : widget.englishLyrics;
+    final dominant = widget.dominantLanguage;
+    final cloneHindiFirst = dominant == 'Hindi';
 
+    if (cloneHindiFirst) {
+      // Only clone Hindi; mark English as "skipped" so the backend isn't hit twice.
+      _englishDone = true;
+      _englishCloneError = 'Skipped (dominant language is Hindi)';
+      await _cloneLanguage(
+        lyrics: widget.hindiLyrics,
+        language: 'Hindi',
+        onDone: (path) => setState(() {
+          _hindiClonePath = path;
+          _hindiDone = true;
+          _checkIfBothDone();
+        }),
+        onError: (e) => setState(() {
+          _hindiCloneError = e;
+          _hindiDone = true;
+          _checkIfBothDone();
+        }),
+      );
+    } else {
+      // Default: clone English only; skip Hindi clone.
+      _hindiDone = true;
+      _hindiCloneError = 'Skipped (dominant language is not Hindi)';
+      await _cloneLanguage(
+        lyrics: widget.englishLyrics,
+        language: 'English',
+        onDone: (path) => setState(() {
+          _englishClonePath = path;
+          _englishDone = true;
+          _checkIfBothDone();
+        }),
+        onError: (e) => setState(() {
+          _englishCloneError = e;
+          _englishDone = true;
+          _checkIfBothDone();
+        }),
+      );
+    }
+  }
+
+  Future<void> _cloneLanguage({
+    required String lyrics,
+    required String language,
+    required void Function(String path) onDone,
+    required void Function(String error) onError,
+  }) async {
     try {
       final file = await _cloneService.cloneVoice(
         voiceSamplePath: widget.voiceSamplePath,
@@ -127,20 +175,68 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         language: language,
         referenceSong: widget.referenceSong,
       );
-      if (!mounted) return;
-      await _finalise(file.path);
+      if (mounted) onDone(file.path);
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _step = _CloneStep.error;
-        _errorMessage = e.toString().replaceFirst('Exception: ', '');
-      });
+      if (mounted) onError(e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
-  Future<void> _finalise(String path) async {
-    final language = widget.dominantLanguage;
+  void _checkIfBothDone() {
+    if (!_hindiDone || !_englishDone) return;
 
+    // If BOTH failed → error state
+    if (_hindiClonePath == null && _englishClonePath == null) {
+      setState(() {
+        _step = _CloneStep.error;
+        _errorMessage =
+            'Both voice clones failed.\n'
+            'Hindi: ${_hindiCloneError ?? 'unknown'}\n'
+            'English: ${_englishCloneError ?? 'unknown'}';
+      });
+      return;
+    }
+
+    // If only one succeeded, skip the picker and use it directly
+    if (_hindiClonePath != null && _englishClonePath == null) {
+      _finaliseChoice('Hindi');
+      return;
+    }
+    if (_englishClonePath != null && _hindiClonePath == null) {
+      _finaliseChoice('English');
+      return;
+    }
+
+    // Both succeeded → show language picker
+    setState(() => _step = _CloneStep.pickLanguage);
+    _showLanguagePicker();
+  }
+
+  /// Show a bottom sheet asking which language the user wants to hear.
+  Future<void> _showLanguagePicker() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => _LanguagePickerSheet(
+        dominantLanguage: widget.dominantLanguage,
+        songTitle: widget.songTitle,
+      ),
+    );
+
+    if (!mounted) return;
+    // If user dismissed without choosing, default to dominant
+    _finaliseChoice(choice ?? widget.dominantLanguage);
+  }
+
+  Future<void> _finaliseChoice(String language) async {
+    final path =
+        language == 'Hindi' ? _hindiClonePath : _englishClonePath;
+
+    // Option B: when reference song has videoId, backend returns voice+instrumental mixed.
+    // Skip fetching separate background music.
     String? musicUrl;
     String? musicLabel;
     if ((widget.referenceSong?.videoId ?? '').isEmpty) {
@@ -159,16 +255,20 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
     if (!mounted) return;
     setState(() {
-      _clonePath = path;
+      _chosenLanguage = language;
+      _activeClonePath = path;
       _musicSourceUrl = musicUrl;
       _musicSourceLabel = musicLabel;
       _step = _CloneStep.ready;
+      _lyricsTab =
+          language == 'Hindi' ? _LyricsTab.hindi : _LyricsTab.english;
     });
   }
 
   // ── PLAYBACK ──────────────────────────────────────────────────────────────
   Future<void> _play() async {
-    if (_clonePath == null) return;
+    final path = _activeClonePath;
+    if (path == null) return;
 
     if (_isPlaying) {
       await _voicePlayer.pause();
@@ -177,105 +277,91 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       return;
     }
 
-    final absPath = File(_clonePath!).absolute.path;
-    if (!File(absPath).existsSync()) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Audio file is missing. Try generating the clone again.'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+    await _voicePlayer.setFilePath(path);
+    await _voicePlayer.setSpeed(_voiceSpeed);
+    await _voicePlayer.setVolume(_voiceVolume);
+
+    var canPlayMusic = _musicSourceUrl != null;
+    if (canPlayMusic) {
+      try {
+        await _musicPlayer.setUrl(_musicSourceUrl!);
+        await _musicPlayer.setSpeed(_voiceSpeed);
+        await _musicPlayer.setVolume(_musicVolume);
+        await _musicPlayer.setLoopMode(LoopMode.all);
+      } catch (_) {
+        canPlayMusic = false;
+        if (mounted) {
+          setState(() {
+            _musicSourceUrl = null;
+            _musicSourceLabel = null;
+          });
+        }
       }
-      return;
     }
 
-    try {
-      await AppAudioSessionService.activatePlayback();
-
-      // Reset player state so replay after "completed" starts from the beginning
-      // (just_audio can otherwise stay at the end and play() is silent).
-      await _voicePlayer.stop();
-      await _voicePlayer.setFilePath(absPath);
-      await _voicePlayer.setSpeed(_voiceSpeed);
-      _reconcileVoiceToMusicCap();
-      await _voicePlayer.setVolume(_voiceVolume);
-      await _voicePlayer.seek(Duration.zero);
-
-      var canPlayMusic = _musicSourceUrl != null;
-      if (canPlayMusic) {
-        try {
-          await _musicPlayer.stop();
-          await _musicPlayer.setUrl(_musicSourceUrl!);
-          await _musicPlayer.setSpeed(_voiceSpeed);
-          await _musicPlayer.setVolume(_musicVolume);
-          await _musicPlayer.setLoopMode(LoopMode.all);
-          await _musicPlayer.seek(Duration.zero);
-        } catch (_) {
-          canPlayMusic = false;
-          if (mounted) {
-            setState(() {
-              _musicSourceUrl = null;
-              _musicSourceLabel = null;
-            });
-          }
-        }
-      }
-
-      await _voiceStateSub?.cancel();
-      _voiceStateSub = _voicePlayer.playerStateStream.listen((s) {
-        if (s.processingState == ProcessingState.completed && mounted) {
-          _musicPlayer.stop();
-          setState(() => _isPlaying = false);
-        }
-      });
-
-      setState(() => _isPlaying = true);
-      await Future.wait([
-        _voicePlayer.play(),
-        if (canPlayMusic) _musicPlayer.play(),
-      ]);
-    } catch (e, st) {
-      debugPrint('VoiceSongScreen._play failed: $e\n$st');
-      if (mounted) {
+    await _voiceStateSub?.cancel();
+    _voiceStateSub = _voicePlayer.playerStateStream.listen((s) {
+      if (s.processingState == ProcessingState.completed && mounted) {
+        _musicPlayer.stop();
         setState(() => _isPlaying = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not play: $e'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
       }
-    }
+    });
+
+    setState(() => _isPlaying = true);
+    await Future.wait([
+      _voicePlayer.play(),
+      if (canPlayMusic) _musicPlayer.play(),
+    ]);
+  }
+
+  /// Let the user switch to the other language without re-cloning.
+  void _switchLanguage() {
+    final other =
+        _chosenLanguage == 'Hindi' ? 'English' : 'Hindi';
+    final path =
+        other == 'Hindi' ? _hindiClonePath : _englishClonePath;
+    if (path == null) return; // that clone failed — nothing to switch to
+
+    _voicePlayer.stop();
+    _musicPlayer.stop();
+    setState(() {
+      _isPlaying = false;
+      _chosenLanguage = other;
+      _activeClonePath = path;
+      _lyricsTab =
+          other == 'Hindi' ? _LyricsTab.hindi : _LyricsTab.english;
+    });
   }
 
   // ── SHARE / DOWNLOAD ──────────────────────────────────────────────────────
   Future<void> _share() async {
-    if (_clonePath == null) return;
+    final path = _activeClonePath;
+    if (path == null) return;
     await Share.shareXFiles(
-      [XFile(_clonePath!)],
-      subject:
-          '"${widget.songTitle}" — AI voice cover (${widget.dominantLanguage})',
+      [XFile(path)],
+      subject: '"${widget.songTitle}" — AI voice cover ($_chosenLanguage)',
       text:
-          'My AI song "${widget.songTitle}" (${widget.dominantLanguage} version) in my cloned voice 🎤',
+          'My AI song "${widget.songTitle}" ($_chosenLanguage version) in my cloned voice 🎤',
     );
   }
 
   Future<void> _download() async {
-    if (_clonePath == null) return;
+    final path = _activeClonePath;
+    if (path == null) return;
     final docsDir = await getApplicationDocumentsDirectory();
     final safeName = widget.songTitle
         .replaceAll(RegExp(r'[^\w\s]'), '')
         .replaceAll(' ', '_');
-    final lang = widget.dominantLanguage.toLowerCase();
-    final dest = File('${docsDir.path}/${safeName}_$lang.wav');
-    await File(_clonePath!).copy(dest.path);
+    final lang = _chosenLanguage?.toLowerCase() ?? 'voice';
+    final dest = File('${docsDir.path}/${safeName}_${lang}.wav');
+    await File(path).copy(dest.path);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Saved to Documents/${safeName}_$lang.wav'),
+        content: Text('Saved to Documents/${safeName}_${lang}.wav'),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -289,8 +375,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
-        title:
-            Text('"${widget.songTitle}"', style: const TextStyle(fontSize: 16)),
+        title: Text('"${widget.songTitle}"',
+            style: const TextStyle(fontSize: 16)),
         centerTitle: true,
         backgroundColor: cs.inverseSurface,
         foregroundColor: cs.onInverseSurface,
@@ -302,7 +388,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── Song info card ───────────────────────────────────────────
+              // ── Song info card ─────────────────────────────────────────
               _SongInfoCard(
                 songTitle: widget.songTitle,
                 mood: widget.mood,
@@ -315,52 +401,97 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
               const SizedBox(height: 28),
 
-              // ── Pipeline step ────────────────────────────────────────────
-              _StepRow(
-                icon: widget.dominantLanguage == 'Hindi'
-                    ? Icons.translate_rounded
-                    : Icons.language_rounded,
-                title:
-                    '${widget.dominantLanguage} voice clone',
-                subtitle: _step == _CloneStep.error
-                    ? 'Failed: ${_errorMessage ?? 'unknown'}'
-                    : _step == _CloneStep.ready
-                        ? 'Cloned successfully'
-                        : 'Cloning in ${widget.dominantLanguage}…',
-                isDone: _step == _CloneStep.ready,
-                isFailed: _step == _CloneStep.error,
-                isActive: _step == _CloneStep.cloning,
+              // ── Pipeline steps ─────────────────────────────────────────
+              _PipelineSteps(
+                hindiDone: _hindiDone,
+                englishDone: _englishDone,
+                hindiError: _hindiCloneError,
+                englishError: _englishCloneError,
+                step: _step,
                 cs: cs,
                 tt: tt,
               ),
 
-              if (_step == _CloneStep.ready) ...[
-                const SizedBox(height: 10),
-                _StepRow(
-                  icon: Icons.auto_awesome_rounded,
-                  title: 'Preview ready',
-                  subtitle: 'Your cloned vocal is ready to play',
-                  isDone: true,
-                  isFailed: false,
-                  isActive: false,
-                  cs: cs,
-                  tt: tt,
-                ),
-              ],
-
-              // ── Error ────────────────────────────────────────────────────
+              // ── Error ──────────────────────────────────────────────────
               if (_step == _CloneStep.error) ...[
                 const SizedBox(height: 16),
                 _ErrorCard(
                   message: _errorMessage ?? 'Unknown error',
-                  onRetry: _startCloning,
+                  onRetry: _startParallelCloning,
                   cs: cs,
                   tt: tt,
                 ),
               ],
 
-              // ── Ready ────────────────────────────────────────────────────
+              // ── Picking language (intermediate) ────────────────────────
+              if (_step == _CloneStep.pickLanguage) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: cs.primary),
+                      ),
+                      const SizedBox(width: 14),
+                      Text('Waiting for your language preference…',
+                          style: tt.bodyMedium),
+                    ],
+                  ),
+                ),
+              ],
+
+              // ── Ready ──────────────────────────────────────────────────
               if (_step == _CloneStep.ready) ...[
+                const SizedBox(height: 8),
+
+                // Active language banner + switch button
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: cs.primary.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle_outline_rounded,
+                          color: cs.primary, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Playing: $_chosenLanguage version'
+                          '${_chosenLanguage == widget.dominantLanguage ? '  ★ dominant' : ''}',
+                          style: tt.labelMedium?.copyWith(
+                            color: cs.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      // Only show switch if the other clone succeeded
+                      if ((_chosenLanguage == 'Hindi' &&
+                              _englishClonePath != null) ||
+                          (_chosenLanguage == 'English' &&
+                              _hindiClonePath != null))
+                        TextButton(
+                          onPressed: _switchLanguage,
+                          child: Text(
+                            'Switch to '
+                            '${_chosenLanguage == 'Hindi' ? 'English' : 'Hindi'}',
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
                 const SizedBox(height: 16),
 
                 // Play button
@@ -369,7 +500,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                   child: FilledButton.icon(
                     onPressed: _play,
                     style: FilledButton.styleFrom(
-                      backgroundColor: _isPlaying ? cs.error : cs.primary,
+                      backgroundColor:
+                          _isPlaying ? cs.error : cs.primary,
                       foregroundColor: cs.onPrimary,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20)),
@@ -399,8 +531,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
                 // Music status
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                     color: _musicSourceUrl != null
                         ? cs.surfaceContainerHighest
@@ -414,8 +546,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                             ? Icons.music_note_rounded
                             : Icons.music_off_rounded,
                         size: 18,
-                        color:
-                            _musicSourceUrl != null ? cs.primary : cs.error,
+                        color: _musicSourceUrl != null
+                            ? cs.primary
+                            : cs.error,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -436,22 +569,23 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
                 const SizedBox(height: 12),
 
-                // Speed + mix controls
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: cs.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                        color: cs.outline.withValues(alpha: 0.2)),
+                      color: cs.outline.withValues(alpha: 0.2),
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         'Vocal speed ${_voiceSpeed.toStringAsFixed(2)}x',
-                        style: tt.labelLarge
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                        style: tt.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       Slider(
                         value: _voiceSpeed,
@@ -466,60 +600,55 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                         },
                       ),
                       Text(
-                        'Mix balance — vocal level cannot exceed music (same-scale); music boosts up to 200%',
-                        style: tt.bodySmall
-                            ?.copyWith(color: cs.onSurfaceVariant),
+                        'Mix balance (music supports boost up to 200%)',
+                        style: tt.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
-                      Builder(builder: (context) {
-                        final voiceCap = math.min(1.0, _maxVoiceCap);
-                        final voiceSliderMax = math.max(0.401, voiceCap);
-                        final voiceSliderValue =
-                            _voiceVolume.clamp(0.4, voiceSliderMax);
-                        final voiceRange = voiceSliderMax - 0.4;
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Vocals', style: tt.labelSmall),
-                                  Slider(
-                                    value: voiceSliderValue,
-                                    min: 0.4,
-                                    max: voiceSliderMax,
-                                    divisions: voiceRange < 0.02
-                                        ? null
-                                        : math.max(
-                                            1, (voiceRange / 0.1).round()),
-                                    label:
-                                        '${(100 * voiceSliderValue).round()}%',
-                                    onChanged: (v) async =>
-                                        _applyVoiceVolume(v),
-                                  ),
-                                ],
-                              ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Vocals', style: tt.labelSmall),
+                                Slider(
+                                  value: _voiceVolume,
+                                  min: 0.4,
+                                  max: 1.0,
+                                  divisions: 6,
+                                  label:
+                                      '${(100 * _voiceVolume).round()}%',
+                                  onChanged: (v) async {
+                                    setState(() => _voiceVolume = v);
+                                    await _voicePlayer.setVolume(v);
+                                  },
+                                ),
+                              ],
                             ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Music', style: tt.labelSmall),
-                                  Slider(
-                                    value: _musicVolume,
-                                    min: 0.4,
-                                    max: 2.0,
-                                    divisions: 16,
-                                    label:
-                                        '${(100 * _musicVolume).round()}%',
-                                    onChanged: (v) async =>
-                                        _applyMusicVolume(v),
-                                  ),
-                                ],
-                              ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Music', style: tt.labelSmall),
+                                Slider(
+                                  value: _musicVolume,
+                                  min: 0.4,
+                                  max: 2.0,
+                                  divisions: 16,
+                                  label:
+                                      '${(100 * _musicVolume).round()}%',
+                                  onChanged: (v) async {
+                                    setState(() => _musicVolume = v);
+                                    await _musicPlayer.setVolume(v);
+                                  },
+                                ),
+                              ],
                             ),
-                          ],
-                        );
-                      }),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -561,12 +690,12 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
                 const SizedBox(height: 24),
 
-                // ── Lyrics section ─────────────────────────────────────────
+                // ── Lyrics section ───────────────────────────────────────
                 _LyricsSection(
-                  lyrics: widget.dominantLanguage == 'Hindi'
-                      ? widget.hindiLyrics
-                      : widget.englishLyrics,
-                  language: widget.dominantLanguage,
+                  hindiLyrics: widget.hindiLyrics,
+                  englishLyrics: widget.englishLyrics,
+                  activeTab: _lyricsTab,
+                  onTabChanged: (t) => setState(() => _lyricsTab = t),
                   cs: cs,
                   tt: tt,
                 ),
@@ -575,6 +704,202 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
               const SizedBox(height: 40),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── LANGUAGE PICKER BOTTOM SHEET ─────────────────────────────────────────────
+class _LanguagePickerSheet extends StatelessWidget {
+  const _LanguagePickerSheet({
+    required this.dominantLanguage,
+    required this.songTitle,
+  });
+  final String dominantLanguage;
+  final String songTitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final secondary = dominantLanguage == 'Hindi' ? 'English' : 'Hindi';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Handle
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: cs.onSurfaceVariant.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          Text(
+            'Which version do you want to hear?',
+            style: tt.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '"$songTitle" has been cloned in both languages.',
+            style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            textAlign: TextAlign.center,
+          ),
+
+          const SizedBox(height: 28),
+
+          // Dominant language card
+          _PickerCard(
+            language: dominantLanguage,
+            badge: '★ More wordplay',
+            badgeColor: cs.primary,
+            description: dominantLanguage == 'Hindi'
+                ? 'Devanagari lyrics with higher rhyme density from the reference'
+                : 'English lyrics with richer vocabulary from the reference',
+            onTap: () => Navigator.of(context).pop(dominantLanguage),
+            cs: cs,
+            tt: tt,
+            isPrimary: true,
+          ),
+
+          const SizedBox(height: 12),
+
+          // Secondary language card
+          _PickerCard(
+            language: secondary,
+            badge: null,
+            badgeColor: cs.secondary,
+            description: secondary == 'Hindi'
+                ? 'Hindi Devanagari version of the song'
+                : 'English version of the song',
+            onTap: () => Navigator.of(context).pop(secondary),
+            cs: cs,
+            tt: tt,
+            isPrimary: false,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PickerCard extends StatelessWidget {
+  const _PickerCard({
+    required this.language,
+    required this.badge,
+    required this.badgeColor,
+    required this.description,
+    required this.onTap,
+    required this.cs,
+    required this.tt,
+    required this.isPrimary,
+  });
+  final String language;
+  final String? badge;
+  final Color badgeColor;
+  final String description;
+  final VoidCallback onTap;
+  final ColorScheme cs;
+  final TextTheme tt;
+  final bool isPrimary;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: isPrimary
+              ? cs.primaryContainer.withValues(alpha: 0.4)
+              : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isPrimary
+                ? cs.primary.withValues(alpha: 0.5)
+                : cs.outline.withValues(alpha: 0.25),
+            width: isPrimary ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isPrimary
+                    ? cs.primary.withValues(alpha: 0.15)
+                    : cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                language == 'Hindi'
+                    ? Icons.translate_rounded
+                    : Icons.language_rounded,
+                color: isPrimary ? cs.primary : cs.onSurfaceVariant,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        language == 'Hindi' ? 'हिंदी (Hindi)' : 'English',
+                        style: tt.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: isPrimary ? cs.primary : cs.onSurface,
+                        ),
+                      ),
+                      if (badge != null) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: badgeColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            badge!,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: badgeColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    description,
+                    style: tt.bodySmall
+                        ?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.play_circle_rounded,
+              color: isPrimary ? cs.primary : cs.onSurfaceVariant,
+              size: 28,
+            ),
+          ],
         ),
       ),
     );
@@ -620,8 +945,8 @@ class _SongInfoCard extends StatelessWidget {
               color: cs.primary.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(14),
             ),
-            child:
-                Icon(Icons.graphic_eq_rounded, color: cs.primary, size: 28),
+            child: Icon(Icons.graphic_eq_rounded,
+                color: cs.primary, size: 28),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -642,9 +967,11 @@ class _SongInfoCard extends StatelessWidget {
                   children: [
                     _SmallChip(label: mood, cs: cs),
                     _SmallChip(label: genre, cs: cs),
-                    _SmallChip(label: dominantLanguage, cs: cs),
+                    _SmallChip(
+                        label: '★ $dominantLanguage dominant', cs: cs),
                     if (referenceSong != null)
-                      _SmallChip(label: referenceSong!.artistName, cs: cs),
+                      _SmallChip(
+                          label: referenceSong!.artistName, cs: cs),
                   ],
                 ),
               ],
@@ -656,7 +983,76 @@ class _SongInfoCard extends StatelessWidget {
   }
 }
 
-// ─── STEP ROW ─────────────────────────────────────────────────────────────────
+// ─── PIPELINE STEPS ───────────────────────────────────────────────────────────
+class _PipelineSteps extends StatelessWidget {
+  const _PipelineSteps({
+    required this.hindiDone,
+    required this.englishDone,
+    required this.hindiError,
+    required this.englishError,
+    required this.step,
+    required this.cs,
+    required this.tt,
+  });
+  final bool hindiDone;
+  final bool englishDone;
+  final String? hindiError;
+  final String? englishError;
+  final _CloneStep step;
+  final ColorScheme cs;
+  final TextTheme tt;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _StepRow(
+          icon: Icons.translate_rounded,
+          title: 'Hindi voice clone',
+          subtitle: hindiError != null
+              ? 'Failed: $hindiError'
+              : hindiDone
+                  ? 'Cloned successfully'
+                  : 'Cloning in Hindi (Devanagari)…',
+          isDone: hindiDone && hindiError == null,
+          isFailed: hindiError != null,
+          isActive: !hindiDone,
+          cs: cs,
+          tt: tt,
+        ),
+        const SizedBox(height: 10),
+        _StepRow(
+          icon: Icons.language_rounded,
+          title: 'English voice clone',
+          subtitle: englishError != null
+              ? 'Failed: $englishError'
+              : englishDone
+                  ? 'Cloned successfully'
+                  : 'Cloning in English…',
+          isDone: englishDone && englishError == null,
+          isFailed: englishError != null,
+          isActive: !englishDone,
+          cs: cs,
+          tt: tt,
+        ),
+        if (step == _CloneStep.ready) ...[
+          const SizedBox(height: 10),
+          _StepRow(
+            icon: Icons.auto_awesome_rounded,
+            title: 'Preview ready',
+            subtitle: 'Your cloned vocal is ready to play',
+            isDone: true,
+            isFailed: false,
+            isActive: false,
+            cs: cs,
+            tt: tt,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _StepRow extends StatelessWidget {
   const _StepRow({
     required this.icon,
@@ -694,7 +1090,8 @@ class _StepRow extends StatelessWidget {
               ? cs.primary.withValues(alpha: 0.3)
               : isFailed
                   ? cs.error.withValues(alpha: 0.3)
-                  : cs.outline.withValues(alpha: isActive ? 0.3 : 0.1),
+                  : cs.outline
+                      .withValues(alpha: isActive ? 0.3 : 0.1),
         ),
       ),
       child: Row(
@@ -774,13 +1171,17 @@ class _StepRow extends StatelessWidget {
 // ─── LYRICS SECTION ───────────────────────────────────────────────────────────
 class _LyricsSection extends StatelessWidget {
   const _LyricsSection({
-    required this.lyrics,
-    required this.language,
+    required this.hindiLyrics,
+    required this.englishLyrics,
+    required this.activeTab,
+    required this.onTabChanged,
     required this.cs,
     required this.tt,
   });
-  final String lyrics;
-  final String language;
+  final String hindiLyrics;
+  final String englishLyrics;
+  final _LyricsTab activeTab;
+  final ValueChanged<_LyricsTab> onTabChanged;
   final ColorScheme cs;
   final TextTheme tt;
 
@@ -796,14 +1197,85 @@ class _LyricsSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Lyrics — $language',
-            style: tt.labelLarge
-                ?.copyWith(fontWeight: FontWeight.bold, color: cs.primary),
+          // ── Tab row ──────────────────────────────────────────────────
+          Row(
+            children: [
+              Text('Lyrics',
+                  style: tt.labelLarge?.copyWith(
+                      fontWeight: FontWeight.bold, color: cs.primary)),
+              const SizedBox(width: 12),
+              _TabButton(
+                label: 'Hindi',
+                isActive: activeTab == _LyricsTab.hindi,
+                onTap: () => onTabChanged(_LyricsTab.hindi),
+                cs: cs,
+                tt: tt,
+              ),
+              const SizedBox(width: 6),
+              _TabButton(
+                label: 'English',
+                isActive: activeTab == _LyricsTab.english,
+                onTap: () => onTabChanged(_LyricsTab.english),
+                cs: cs,
+                tt: tt,
+              ),
+            ],
           ),
+
           const SizedBox(height: 14),
-          _PlainLines(lines: lyrics.split('\n'), cs: cs, tt: tt),
+
+          // ── Lyrics body (Hindi for Hindi tab, English for English tab) ─
+          _PlainLines(
+            lines: (activeTab == _LyricsTab.english
+                    ? englishLyrics
+                    : hindiLyrics)
+                .split('\n'),
+            cs: cs,
+            tt: tt,
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _TabButton extends StatelessWidget {
+  const _TabButton({
+    required this.label,
+    required this.isActive,
+    required this.onTap,
+    required this.cs,
+    required this.tt,
+  });
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
+  final ColorScheme cs;
+  final TextTheme tt;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isActive ? cs.primary : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: isActive
+                  ? cs.primary
+                  : cs.outline.withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          label,
+          style: tt.labelMedium?.copyWith(
+            color: isActive ? cs.onPrimary : cs.onSurface,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
@@ -837,8 +1309,8 @@ class _PlainLines extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Text(line,
-              style:
-                  tt.bodyMedium?.copyWith(color: cs.onSurface, height: 1.65)),
+              style: tt.bodyMedium
+                  ?.copyWith(color: cs.onSurface, height: 1.65)),
         );
       }).toList(),
     );

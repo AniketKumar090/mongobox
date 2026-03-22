@@ -438,15 +438,11 @@ def _mix_vocal_with_instrumental(
     vocal_path: str,
     instrumental_path: str,
     out_path: str,
-    vocal_gain: float = 0.64,
-    instrumental_gain: float = 1.18,
+    instrumental_gain: float = 0.95,
 ) -> None:
     """
     Mix cloned vocal with extracted instrumental.
     Trims instrumental to vocal length. Output 44100 Hz mono.
-
-    Keeps the bed at least as present as the vocal: attenuate the clone slightly
-    and boost the instrumental before amix (plain amix tends to sound vocal-heavy).
     """
     duration = _get_wav_duration_seconds(vocal_path)
     if duration <= 0:
@@ -457,7 +453,7 @@ def _mix_vocal_with_instrumental(
     vocal_44 = out_path + ".vocal_44.wav"
     _run_ffmpeg_wav_convert(vocal_path, vocal_44, sample_rate=44100, channels=1)
 
-    # Trim instrumental to vocal length, convert to 44100 mono (gain applied in filter graph)
+    # Trim instrumental to vocal length, convert to 44100 mono
     inst_44 = out_path + ".inst_44.wav"
     cmd = [
         "ffmpeg", "-y",
@@ -465,23 +461,19 @@ def _mix_vocal_with_instrumental(
         "-t", str(duration),
         "-ar", "44100",
         "-ac", "1",
+        "-af", f"volume={instrumental_gain}",
         "-c:a", "pcm_s16le",
         inst_44,
         "-loglevel", "error",
     ]
     subprocess.run(cmd, check=True, capture_output=True, timeout=60)
 
-    # Mix: weighted amix so background is not quieter than the cloned vocal
-    mix = (
-        f"[0:a]volume={vocal_gain}[v];"
-        f"[1:a]volume={instrumental_gain}[i];"
-        "[v][i]amix=inputs=2:duration=first:dropout_transition=0"
-    )
+    # Mix: amix with duration=first
     cmd = [
         "ffmpeg", "-y",
         "-i", vocal_44,
         "-i", inst_44,
-        "-filter_complex", mix,
+        "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0",
         "-ac", "1",
         "-c:a", "pcm_s16le",
         out_path,
