@@ -16,6 +16,8 @@ class VoiceCloneService {
     SongReference? referenceSong,
   }) {
     final lang = language.trim().toLowerCase();
+    if (lang == 'english') return 'british';
+
     const southAsianLangs = {
       'hindi',
       'urdu',
@@ -64,14 +66,14 @@ class VoiceCloneService {
     ];
     if (southAsianMarkers.any(artist.contains)) return 'indian';
 
-    // Very coarse fallbacks for Western artists. If we can’t infer, default Indian.
+    // Very coarse fallbacks for Western artists. If we can’t infer, default British for English.
     const britishMarkers = ['adele', 'ed sheeran', 'coldplay', 'dua lipa', 'sam smith'];
     if (britishMarkers.any(artist.contains)) return 'british';
 
     const americanMarkers = ['taylor swift', 'drake', 'kanye', 'weeknd', 'billie eilish'];
     if (americanMarkers.any(artist.contains)) return 'american';
 
-    return 'indian';
+    return 'british';
   }
 
   Future<File> cloneVoice({

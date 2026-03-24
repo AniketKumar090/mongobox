@@ -253,9 +253,23 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     final selectedReference = _selectedTrack;
     final moodPrompt = _customMoodPrompt;
 
+    final isEnglishDominant = _generationMode == _GenerationMode.singleSong
+        ? _isEnglishDominantTrack(selectedReference!)
+        : _isEnglishDominantTracks(referenceTracks);
+
     final prompt = _generationMode == _GenerationMode.singleSong
-        ? _buildSingleSongPrompt(mood: mood, moodPrompt: moodPrompt, reference: selectedReference!)
-        : _buildHistoryPrompt(mood: mood, moodPrompt: moodPrompt, trackList: trackList);
+        ? _buildSingleSongPrompt(
+            mood: mood,
+            moodPrompt: moodPrompt,
+            reference: selectedReference!,
+            isEnglishDominant: isEnglishDominant,
+          )
+        : _buildHistoryPrompt(
+            mood: mood,
+            moodPrompt: moodPrompt,
+            trackList: trackList,
+            isEnglishDominant: isEnglishDominant,
+          );
 
     try {
       final response = await http
@@ -295,18 +309,23 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           .trim();
 
       final parsed = json.decode(raw) as Map<String, dynamic>;
-      final hindiLyrics =
-          (parsed['hindi_lyrics'] ?? parsed['hinglish_lyrics']) as String? ?? '';
-      final hinglishLyrics =
-          (parsed['hinglish_lyrics'] ?? parsed['hindi_lyrics']) as String? ?? '';
+      
+      // Determine dominant language from the generated lyrics
+      final hindiLyrics = (parsed['hindi_lyrics'] ?? '') as String? ?? '';
+      final hinglishLyrics = (parsed['hinglish_lyrics'] ?? '') as String? ?? '';
+      final englishLyrics = (parsed['english_lyrics'] ?? '') as String? ?? '';
+      
+      // If hindi_lyrics has content, it's Hindi dominant; otherwise English dominant
+      final isHindiDominant = hindiLyrics.trim().isNotEmpty;
+      final dominantLanguage = isHindiDominant ? 'Hindi' : 'English';
 
       final result = _SongResult(
         title: parsed['title'] as String? ?? 'Untitled',
         hindiLyrics: hindiLyrics,
-        englishLyrics: parsed['english_lyrics'] as String? ?? '',
+        englishLyrics: englishLyrics,
         mood: parsed['mood'] as String? ?? mood,
         genre: parsed['genre'] as String? ?? '',
-        dominantLanguage: 'Hindi',
+        dominantLanguage: dominantLanguage,
         referenceSong: selectedReference == null
             ? null
             : SongReference(
@@ -321,6 +340,23 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
       if (!mounted) return;
       setState(() { _result = result; _isLoading = false; });
+      
+      // Automatically navigate to VoiceSampleScreen with generated lyrics
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VoiceSampleScreen(
+            songTitle: result.title,
+            hindiLyrics: result.hindiLyrics,
+            englishLyrics: result.englishLyrics,
+            dominantLanguage: result.dominantLanguage,
+            mood: result.mood,
+            genre: result.genre,
+            referenceSong: result.referenceSong,
+            hinglishLyrics: result.hinglishLyrics,
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -365,20 +401,126 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     required String mood,
     required String? moodPrompt,
     required String trackList,
+    required bool isEnglishDominant,
   }) {
     final moodInfo = moodPrompt != null && moodPrompt.isNotEmpty
         ? 'Mood instructions: $moodPrompt\n'
         : 'Requested mood: $mood\n';
+
+    if (isEnglishDominant) {
+      return _buildEnglishDominantPrompt(mood: mood, moodInfo: moodInfo, trackList: trackList, isHistory: true);
+    } else {
+      return _buildHindiDominantPrompt(mood: mood, moodInfo: moodInfo, trackList: trackList, isHistory: true);
+    }
+  }
+
+  String _buildSingleSongPrompt({
+    required String mood,
+    required String? moodPrompt,
+    required RecentTrack reference,
+    required bool isEnglishDominant,
+  }) {
+    final snippet = reference.lyricSnippet.trim();
+    final moodInfo = moodPrompt != null && moodPrompt.isNotEmpty
+        ? 'Mood instructions: $moodPrompt\n'
+        : 'Requested mood: $mood\n';
+
+    if (isEnglishDominant) {
+      return _buildEnglishDominantPrompt(
+        mood: mood,
+        moodInfo: moodInfo,
+        trackList: '${reference.trackName} – ${reference.artistName}',
+        isHistory: false,
+        snippet: snippet,
+      );
+    } else {
+      return _buildHindiDominantPrompt(
+        mood: mood,
+        moodInfo: moodInfo,
+        trackList: '${reference.trackName} – ${reference.artistName}',
+        isHistory: false,
+        snippet: snippet,
+      );
+    }
+  }
+
+  bool _containsSouthAsianScript(String text) {
+    for (final rune in text.runes) {
+      if ((rune >= 0x0900 && rune <= 0x097F) ||
+          (rune >= 0x0600 && rune <= 0x06FF)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _looksHindiOrUrduText(String text) {
+    if (text.trim().isEmpty) return false;
+    if (_containsSouthAsianScript(text)) return true;
+
+    final lower = text.toLowerCase();
+    const southAsianMarkers = [
+      'mohabbat',
+      'ishq',
+      'dil',
+      'zindagi',
+      'safar',
+      'yaad',
+      'tere',
+      'meri',
+      'tujhe',
+      'tum',
+      'hum',
+      'khuda',
+      'junoon',
+      'raat',
+      'pyaar',
+      'bina',
+      'aankhon',
+      'jaan',
+    ];
+    return southAsianMarkers.any(lower.contains);
+  }
+
+  bool _isEnglishDominantTrack(RecentTrack track) {
+    final combined = [
+      track.trackName,
+      track.artistName,
+      track.lyricSnippet,
+    ].join(' ');
+    return !_looksHindiOrUrduText(combined);
+  }
+
+  bool _isEnglishDominantTracks(List<RecentTrack> tracks) {
+    if (tracks.isEmpty) return false;
+    final englishCount =
+        tracks.where(_isEnglishDominantTrack).length;
+    return englishCount >= ((tracks.length + 1) ~/ 2);
+  }
+
+  String _buildHindiDominantPrompt({
+    required String mood,
+    required String moodInfo,
+    required String trackList,
+    required bool isHistory,
+    String? snippet,
+  }) {
+    final referenceInfo = isHistory 
+        ? 'Listening history:\n$trackList\n\n'
+        : 'Reference song: $trackList\n${snippet != null && snippet.isNotEmpty ? 'Lyric snippet: $snippet\n' : ''}';
+    
     return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
-        'Listening history:\n$trackList\n\n'
+        '$referenceInfo'
         '$moodInfo\n'
         'Rules:\n'
-        '- Write COMPLETELY ORIGINAL bilingual lyrics in a rap style: strong rhythm, end rhymes, internal rhymes where natural, and vivid poetry (imagery, wordplay, punchlines).\n'
-        '- Use a consistent bar feel: similar syllable counts per line within each verse (not strict counting, but read aloud with a steady pocket).\n'
-        '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
-        '- Keep meaning, rhyme scheme, and section structure aligned across Devanagari and Hinglish.\n'
-        '- Hinglish should be natural and rap-ready (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
-        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] instead of [Chorus] for the main refrain.\n'
+        '- Write COMPLETELY ORIGINAL bilingual lyrics with HINDI as the dominant language\n'
+        '- Strong rhythm, end rhymes, internal rhymes where natural, and vivid poetry (imagery, wordplay, punchlines)\n'
+        '- Use a consistent bar feel: similar syllable counts per line within each verse\n'
+        '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi)\n'
+        '- Keep meaning, rhyme scheme, and section structure aligned across Devanagari and Hinglish\n'
+        '- Hinglish should be natural and rap-ready (e.g., "Meri jaan", "Tere bina adhoora hoon")\n'
+        '- You can include some English words/phrases for flavor, but Hindi should dominate (70-80% Hindi)\n'
+        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] instead of [Chorus] for the main refrain\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
         '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
@@ -388,36 +530,34 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         '"english_lyrics":"[Verse 1]\\nline\\n\\n[Hook]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
-  String _buildSingleSongPrompt({
+  String _buildEnglishDominantPrompt({
     required String mood,
-    required String? moodPrompt,
-    required RecentTrack reference,
+    required String moodInfo,
+    required String trackList,
+    required bool isHistory,
+    String? snippet,
   }) {
-    final snippet = reference.lyricSnippet.trim();
-    final moodInfo = moodPrompt != null && moodPrompt.isNotEmpty
-        ? 'Mood instructions: $moodPrompt\n'
-        : 'Requested mood: $mood\n';
-    return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
-        'Reference song: ${reference.trackName} by ${reference.artistName}\n'
-        '${snippet.isEmpty ? '' : 'Lyric snippet: $snippet\n'}\n'
+    final referenceInfo = isHistory 
+        ? 'Listening history:\n$trackList\n\n'
+        : 'Reference song: $trackList\n${snippet != null && snippet.isNotEmpty ? 'Lyric snippet: $snippet\n' : ''}';
+    
+    return 'You are an English hip-hop / rap songwriter with British accent and flow.\n\n'
+        '$referenceInfo'
         '$moodInfo\n'
         'Rules:\n'
-        '- Study the emotional tone, imagery, pacing and genre of the reference\n'
-        '- Write a COMPLETELY ORIGINAL bilingual rap inspired by that reference: rhythm, rhyme, and poetry (metaphor, wordplay, punchlines).\n'
-        '- Use a consistent bar feel: similar syllable counts per line within each verse so it flows over a beat.\n'
-        '- Do NOT copy, translate, or closely mimic any line from the reference\n'
-        '- Do NOT mention the reference song or artist name\n'
-        '- Write TWO Hindi versions of the same lyrics: (1) Devanagari Hindi and (2) Hinglish (Romanized Hindi).\n'
-        '- Keep meaning, rhyme scheme, and section structure aligned across Devanagari and Hinglish.\n'
-        '- Hinglish should be natural and rap-ready (e.g., "Meri jaan", "Tere bina adhoora hoon").\n'
-        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] for the main refrain.\n'
+        '- Write COMPLETELY ORIGINAL lyrics in PURE ENGLISH only\n'
+        '- Use British English spelling, vocabulary, and accent (e.g., "colour" not "color", "favourite" not "favorite")\n'
+        '- Strong rhythm, end rhymes, internal rhymes where natural, and vivid poetry (imagery, wordplay, punchlines)\n'
+        '- Use a consistent bar feel: similar syllable counts per line within each verse\n'
+        '- NO Hindi words, NO Hinglish, NO Indian language mixing — pure English only\n'
+        '- Section headers ([Intro], [Verse 1], [Hook], [Verse 2], [Bridge], [Outro]) always in English — use [Hook] instead of [Chorus] for the main refrain\n'
         '- Lyrics must be vivid, emotional, specific — no generic filler\n'
-        '- Title: 2–4 words, bilingual style (e.g. "Dil ki Beat" or "Roshan Nights")\n\n'
+        '- Title: 2–4 words, English style (e.g. "London Nights" or "Mid rain")\n\n'
         'Respond ONLY with this JSON (no markdown):\n'
         '{"title":"...","mood":"$mood","genre":"Hip-hop",'
-        '"hindi_lyrics":"[Verse 1]\\nदेवनागरी पंक्ति\\n\\n[Hook]\\nदेवनागरी पंक्ति\\n\\n[Verse 2]\\nदेवनागरी पंक्ति\\n\\n[Bridge]\\nदेवनागरी पंक्ति\\n\\n[Outro]\\nदेवनागरी पंक्ति",'
-        '"hinglish_lyrics":"[Verse 1]\\nHinglish line\\n\\n[Hook]\\nHinglish line\\n\\n[Verse 2]\\nHinglish line\\n\\n[Bridge]\\nHinglish line\\n\\n[Outro]\\nHinglish line",'
-        '"english_lyrics":"[Verse 1]\\nline\\n\\n[Hook]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
+        '"hindi_lyrics":"","'
+        '"hinglish_lyrics":"",'
+        '"english_lyrics":"[Verse 1]\\nBritish English line\\n\\n[Hook]\\nBritish English line\\n\\n[Verse 2]\\nBritish English line\\n\\n[Bridge]\\nBritish English line\\n\\n[Outro]\\nBritish English line"}';
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -1040,6 +1180,32 @@ class _MoodSelectorState extends State<_MoodSelector> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: widget.cs.secondaryContainer.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: widget.cs.secondary.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 14, color: widget.cs.secondary),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Prompt edits change style and imagery, but the song language follows your reference song.',
+                          style: widget.tt.bodySmall?.copyWith(
+                            color: widget.cs.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _promptController,
@@ -1128,9 +1294,7 @@ class _LoadingStepsState extends State<_LoadingSteps> {
 }
 
 // ─── RESULT CARD ──────────────────────────────────────────────────────────────
-enum _LyricsTab { hindi, english }
-
-class _ResultCard extends StatefulWidget {
+class _ResultCard extends StatelessWidget {
   const _ResultCard({
     required this.result,
     required this.onCopy,
@@ -1143,35 +1307,14 @@ class _ResultCard extends StatefulWidget {
   final TextTheme tt;
 
   @override
-  State<_ResultCard> createState() => _ResultCardState();
-}
-
-class _ResultCardState extends State<_ResultCard> {
-  late _LyricsTab _activeTab;
-
-  @override
-  void initState() {
-    super.initState();
-    _activeTab = widget.result.dominantLanguage == 'Hindi'
-        ? _LyricsTab.hindi
-        : _LyricsTab.english;
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final result = widget.result;
-    final cs = widget.cs;
-    final tt = widget.tt;
-    final isDominantHindi = result.dominantLanguage == 'Hindi';
-
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: cs.surfaceContainerHighest,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius: BorderRadius.circular(20),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1189,12 +1332,12 @@ class _ResultCardState extends State<_ResultCard> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.copy_rounded),
-                    onPressed: widget.onCopy,
+                    onPressed: onCopy,
                     color: cs.primary,
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 4,
@@ -1232,176 +1375,35 @@ class _ResultCardState extends State<_ResultCard> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  _LangTab(
-                    label: 'Hinglish',
-                    sublabel: isDominantHindi ? 'dominant' : null,
-                    isActive: _activeTab == _LyricsTab.hindi,
-                    onTap: () =>
-                        setState(() => _activeTab = _LyricsTab.hindi),
-                    cs: cs,
-                    tt: tt,
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: cs.primary.withValues(alpha: 0.3),
                   ),
-                  const SizedBox(width: 8),
-                  _LangTab(
-                    label: 'English',
-                    sublabel: !isDominantHindi ? 'dominant' : null,
-                    isActive: _activeTab == _LyricsTab.english,
-                    onTap: () =>
-                        setState(() => _activeTab = _LyricsTab.english),
-                    cs: cs,
-                    tt: tt,
-                  ),
-                ],
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 18, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Lyrics will be shown in the recording screen',
+                        style: tt.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
-          ),
-        ),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-            borderRadius:
-                const BorderRadius.vertical(bottom: Radius.circular(20)),
-            border: Border(
-                top: BorderSide(
-                    color: cs.outline.withValues(alpha: 0.15))),
-          ),
-          child: _LyricsLines(
-            lines: (_activeTab == _LyricsTab.english
-                    ? result.englishLyrics
-                    : (result.hinglishLyrics?.isNotEmpty == true
-                        ? result.hinglishLyrics!
-                        : result.hindiLyrics))
-                .split('\n'),
-            cs: cs,
-            tt: tt,
           ),
         ),
       ],
-    );
-  }
-}
-
-// ─── LANG TAB ─────────────────────────────────────────────────────────────────
-class _LangTab extends StatelessWidget {
-  const _LangTab({
-    required this.label,
-    required this.sublabel,
-    required this.isActive,
-    required this.onTap,
-    required this.cs,
-    required this.tt,
-  });
-  final String label;
-  final String? sublabel;
-  final bool isActive;
-  final VoidCallback onTap;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isActive ? cs.primary : cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isActive
-                ? cs.primary
-                : cs.outline.withValues(alpha: 0.3),
-            width: isActive ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: tt.labelLarge?.copyWith(
-                color: isActive ? cs.onPrimary : cs.onSurface,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            if (sublabel != null) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isActive
-                      ? Colors.white.withValues(alpha: 0.25)
-                      : cs.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  sublabel!,
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: isActive ? cs.onPrimary : cs.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── LYRICS LINES ─────────────────────────────────────────────────────────────
-class _LyricsLines extends StatelessWidget {
-  const _LyricsLines({
-    required this.lines,
-    required this.cs,
-    required this.tt,
-  });
-  final List<String> lines;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: lines.map((line) {
-        if (line.trim().isEmpty) return const SizedBox(height: 4);
-        final isHeader = RegExp(
-          r'^\[(Verse|Hook|Chorus|Bridge|Outro|Pre-Chorus|Intro)',
-          caseSensitive: false,
-        ).hasMatch(line.trim());
-        if (isHeader) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 20, bottom: 4),
-            child: Text(
-              line.trim(),
-              style: tt.labelLarge?.copyWith(
-                color: cs.primary,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
-          );
-        }
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Text(
-            line,
-            style: tt.bodyMedium
-                ?.copyWith(color: cs.onSurface, height: 1.7),
-          ),
-        );
-      }).toList(),
     );
   }
 }
