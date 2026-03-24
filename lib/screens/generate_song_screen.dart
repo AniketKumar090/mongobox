@@ -309,13 +309,11 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           .trim();
 
       final parsed = json.decode(raw) as Map<String, dynamic>;
-      
-      // Determine dominant language from the generated lyrics
+
       final hindiLyrics = (parsed['hindi_lyrics'] ?? '') as String? ?? '';
       final hinglishLyrics = (parsed['hinglish_lyrics'] ?? '') as String? ?? '';
       final englishLyrics = (parsed['english_lyrics'] ?? '') as String? ?? '';
-      
-      // If hindi_lyrics has content, it's Hindi dominant; otherwise English dominant
+
       final isHindiDominant = hindiLyrics.trim().isNotEmpty;
       final dominantLanguage = isHindiDominant ? 'Hindi' : 'English';
 
@@ -340,8 +338,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
       if (!mounted) return;
       setState(() { _result = result; _isLoading = false; });
-      
-      // Automatically navigate to VoiceSampleScreen with generated lyrics
+
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -460,24 +457,9 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
     final lower = text.toLowerCase();
     const southAsianMarkers = [
-      'mohabbat',
-      'ishq',
-      'dil',
-      'zindagi',
-      'safar',
-      'yaad',
-      'tere',
-      'meri',
-      'tujhe',
-      'tum',
-      'hum',
-      'khuda',
-      'junoon',
-      'raat',
-      'pyaar',
-      'bina',
-      'aankhon',
-      'jaan',
+      'mohabbat', 'ishq', 'dil', 'zindagi', 'safar', 'yaad',
+      'tere', 'meri', 'tujhe', 'tum', 'hum', 'khuda', 'junoon',
+      'raat', 'pyaar', 'bina', 'aankhon', 'jaan',
     ];
     return southAsianMarkers.any(lower.contains);
   }
@@ -493,8 +475,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
   bool _isEnglishDominantTracks(List<RecentTrack> tracks) {
     if (tracks.isEmpty) return false;
-    final englishCount =
-        tracks.where(_isEnglishDominantTrack).length;
+    final englishCount = tracks.where(_isEnglishDominantTrack).length;
     return englishCount >= ((tracks.length + 1) ~/ 2);
   }
 
@@ -505,10 +486,10 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     required bool isHistory,
     String? snippet,
   }) {
-    final referenceInfo = isHistory 
+    final referenceInfo = isHistory
         ? 'Listening history:\n$trackList\n\n'
         : 'Reference song: $trackList\n${snippet != null && snippet.isNotEmpty ? 'Lyric snippet: $snippet\n' : ''}';
-    
+
     return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
         '$referenceInfo'
         '$moodInfo\n'
@@ -537,10 +518,10 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     required bool isHistory,
     String? snippet,
   }) {
-    final referenceInfo = isHistory 
+    final referenceInfo = isHistory
         ? 'Listening history:\n$trackList\n\n'
         : 'Reference song: $trackList\n${snippet != null && snippet.isNotEmpty ? 'Lyric snippet: $snippet\n' : ''}';
-    
+
     return 'You are an English hip-hop / rap songwriter with British accent and flow.\n\n'
         '$referenceInfo'
         '$moodInfo\n'
@@ -583,25 +564,18 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
             ),
         ],
       ),
-
-      // ────────────────────────────────────────────────────────────────────────
-      // KEY LAYOUT: scrollable content above + fixed generate button below
-      // ────────────────────────────────────────────────────────────────────────
       body: GestureDetector(
-        // Tap anywhere outside the TextField → dismiss keyboard / unfocus
         onTap: () => FocusScope.of(context).unfocus(),
         behavior: HitTestBehavior.opaque,
         child: SafeArea(
           child: Column(
             children: [
-              // ── All scrollable content lives here ──────────────────────────
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Header card
                       _HeaderCard(
                         recentTracks: _recentTracks,
                         mode: _generationMode,
@@ -614,7 +588,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
                       const SizedBox(height: 24),
 
-                      // Mood selector
                       _MoodSelector(
                         aiSuggestedMood: _aiSuggestedMood,
                         selectedMood: _selectedMood,
@@ -629,13 +602,11 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                         tt: tt,
                       ),
 
-                      // Loading steps
                       if (_isLoading) ...[
                         const SizedBox(height: 16),
                         const _LoadingSteps(),
                       ],
 
-                      // Error
                       if (_errorMessage != null) ...[
                         const SizedBox(height: 16),
                         Container(
@@ -662,7 +633,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                         ),
                       ],
 
-                      // Result card + post-generation actions
                       if (_result != null) ...[
                         const SizedBox(height: 28),
                         _ResultCard(
@@ -703,7 +673,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                 ),
               ),
 
-              // ── FIXED GENERATE BUTTON — pinned to bottom, always visible ──
+              // ── FIXED GENERATE BUTTON ──────────────────────────────────────
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
                 decoration: BoxDecoration(
@@ -923,12 +893,12 @@ class _HeaderCard extends StatelessWidget {
             if (mode == _GenerationMode.singleSong &&
                 selectedTrack != null) ...[
               const SizedBox(height: 10),
-              Text(
-                'Reference: ${selectedTrack!.trackName} by ${selectedTrack!.artistName}',
-                style: tt.bodySmall?.copyWith(
-                  color: cs.onPrimaryContainer.withValues(alpha: 0.85),
-                ),
-              ),
+              // Text(
+              //   'Reference: ${selectedTrack!.trackName} by ${selectedTrack!.artistName}',
+              //   style: tt.bodySmall?.copyWith(
+              //     color: cs.onPrimaryContainer.withValues(alpha: 0.85),
+              //   ),
+              // ),
             ],
           ] else ...[
             const SizedBox(height: 12),
@@ -1054,7 +1024,6 @@ class _MoodSelectorState extends State<_MoodSelector> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Label row
         Row(
           children: [
             Text(
@@ -1102,7 +1071,6 @@ class _MoodSelectorState extends State<_MoodSelector> {
         ),
         const SizedBox(height: 12),
 
-        // Mood chips
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -1127,9 +1095,6 @@ class _MoodSelectorState extends State<_MoodSelector> {
                     width: isActive ? 2 : 1,
                   ),
                 ),
-                // ── EMOJI FIX: render emoji in a plain TextStyle with no
-                //    dependence on the pixel font. Twemoji gives us a
-                //    consistent emoji widget while the mood label stays themed.
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1152,7 +1117,6 @@ class _MoodSelectorState extends State<_MoodSelector> {
           }).toList(),
         ),
 
-        // Custom prompt editor
         if (activeMood != null) ...[
           const SizedBox(height: 12),
           Container(
@@ -1308,93 +1272,60 @@ class _ResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '"${result.title}"',
-                      style: tt.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy_rounded),
-                    onPressed: onCopy,
-                    color: cs.primary,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  _Chip(icon: Icons.mood, label: result.mood, cs: cs),
-                  _Chip(
-                      icon: Icons.library_music,
-                      label: result.genre,
-                      cs: cs),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: cs.primary.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: cs.primary.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.star_rounded,
-                            size: 12, color: cs.primary),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${result.dominantLanguage} dominant',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: cs.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cs.primaryContainer.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: cs.primary.withValues(alpha: 0.3),
+              Expanded(
+                child: Text(
+                  '"${result.title}"',
+                  style: tt.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: cs.onSurface,
                   ),
                 ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy_rounded),
+                onPressed: onCopy,
+                color: cs.primary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              _Chip(icon: Icons.mood, label: result.mood, cs: cs),
+              _Chip(icon: Icons.library_music, label: result.genre, cs: cs),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: cs.primary.withValues(alpha: 0.4)),
+                ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.info_outline, size: 18, color: cs.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Lyrics will be shown in the recording screen',
-                        style: tt.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
+                    Icon(Icons.star_rounded, size: 12, color: cs.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${result.dominantLanguage} dominant',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.primary,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
@@ -1402,16 +1333,15 @@ class _ResultCard extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
 // ─── CHIP ─────────────────────────────────────────────────────────────────────
 class _Chip extends StatelessWidget {
-  const _Chip(
-      {required this.icon, required this.label, required this.cs});
+  const _Chip({required this.icon, required this.label, required this.cs});
   final IconData icon;
   final String label;
   final ColorScheme cs;
@@ -1420,8 +1350,7 @@ class _Chip extends StatelessWidget {
   Widget build(BuildContext context) {
     if (label.isEmpty) return const SizedBox.shrink();
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: cs.secondaryContainer,
         borderRadius: BorderRadius.circular(20),

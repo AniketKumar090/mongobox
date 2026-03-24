@@ -292,7 +292,7 @@ class PixelLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       '> $text',
-      style: PixelFonts.pressStart(size: 5, color: color, letterSpacing: 1),
+      style: PixelFonts.pressStart(size: 10, color: color, letterSpacing: 1),
     );
   }
 }

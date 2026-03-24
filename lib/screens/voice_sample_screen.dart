@@ -4,7 +4,6 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
-
 import '../models/song_reference.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
@@ -42,8 +41,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
   final _bpmService = BpmService();
-  final _scrollController = ScrollController();
-
+  late ScrollController _scrollController; // ← Changed to late
   String? _recordedPath;
   bool _isRecording = false;
   bool _isPlaying = false;
@@ -64,7 +62,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   late final String _targetLyrics;
   late final List<String> _preparedFlowPromptLines;
   late final int _fallbackTargetWpm;
-
   late AnimationController _waveController;
   final _lyricsService = LyricsService();
 
@@ -75,6 +72,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
+    _scrollController = ScrollController(); // ← Initialize here
     _prepareRecordingAssets();
     _fetchReferenceTempo();
   }
@@ -143,7 +141,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _recorder.dispose();
     _player.dispose();
     _waveController.dispose();
-    _scrollController.dispose();
+    _scrollController.dispose(); // ← Dispose controller
     super.dispose();
   }
 
@@ -157,8 +155,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         ),
         content: Text(
           'Microphone is off.\nEnable it in Settings.',
-          style:
-              PixelFonts.vt323(size: 16, color: PixelColors.textPrimary),
+          style: PixelFonts.vt323(size: 16, color: PixelColors.textPrimary),
         ),
         actions: [
           TextButton(
@@ -198,7 +195,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       }
       return;
     }
-
     try {
       if (mounted) {
         setState(() {
@@ -207,17 +203,16 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
           _paceFeedback = null;
         });
       }
-
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_sample.m4a';
       await _recorder.start(
         const RecordConfig(
-            encoder: AudioEncoder.aacLc,
-            bitRate: 128000,
-            sampleRate: 44100),
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
         path: path,
       );
-
       _timer?.cancel();
       _recordingSeconds = 0;
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -225,7 +220,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         setState(() => _recordingSeconds++);
         if (_recordingSeconds >= 30) _stopRecording();
       });
-
       final targetWpm = _referenceMsPerWord != null
           ? (60000 / _referenceMsPerWord!).round().clamp(90, 150)
           : _fallbackTargetWpm;
@@ -330,21 +324,18 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             l.isNotEmpty &&
             !l.startsWith('[') &&
             l
-                    .replaceAll(
-                        RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
-                    .length >=
+                .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
+                .length >=
                 8)
         .toList();
   }
 
   List<String> _extractFlowPromptLines(String lyrics,
       {required bool isHindiDominant}) {
-    final filtered =
-        _linesForDominantLanguage(lyrics, isHindiDominant);
+    final filtered = _linesForDominantLanguage(lyrics, isHindiDominant);
     if (filtered.isEmpty) return const [];
     filtered.sort((a, b) => a.length.compareTo(b.length));
-    final picked =
-        filtered.where((l) => l.length <= 90).take(4).toList();
+    final picked = filtered.where((l) => l.length <= 90).take(4).toList();
     return picked.isNotEmpty ? picked : filtered.take(3).toList();
   }
 
@@ -363,8 +354,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       }
       final sectionMatch =
           _hindiSections.any((s) => currentSection.contains(s)) ||
-              _englishSections
-                  .any((s) => currentSection.contains(s));
+              _englishSections.any((s) => currentSection.contains(s));
       if (sectionMatch && trimmed.length >= 8) {
         result.add(trimmed);
       } else if (trimmed.length >= 5) {
@@ -397,7 +387,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _karaokeCurrentLine = 0;
     _activeLineProgress = 0;
     _paceFeedback = null;
-
     final starts = <int>[];
     final words = <String>[];
     var cursor = 0;
@@ -409,23 +398,18 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     }
     _karaokeLineWordStart = starts;
     _karaokeWords = words;
-
     _karaokeTicker?.cancel();
     _karaokeWatch
       ..reset()
       ..start();
-
-    _karaokeTicker =
-        Timer.periodic(const Duration(milliseconds: 120), (_) {
+    _karaokeTicker = Timer.periodic(const Duration(milliseconds: 120), (_) {
       if (!mounted || _karaokeWords.isEmpty) return;
       final msPerWord = _referenceMsPerWord ??
           (60000 / _karaokeTargetWpm).round().clamp(220, 900);
       final rawIndex =
           (_karaokeWatch.elapsedMilliseconds / msPerWord).floor();
-      final safeIndex =
-          rawIndex.clamp(0, _karaokeWords.length - 1);
+      final safeIndex = rawIndex.clamp(0, _karaokeWords.length - 1);
       if (safeIndex == _karaokeCurrentWord) return;
-
       var lineIndex = 0;
       for (var i = 0; i < _karaokeLineWordStart.length; i++) {
         final start = _karaokeLineWordStart[i];
@@ -437,7 +421,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
           break;
         }
       }
-
       setState(() {
         _karaokeCurrentWord = safeIndex;
         _karaokeCurrentLine = lineIndex;
@@ -448,8 +431,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             ? _karaokeLineWordStart[lineIndex + 1]
             : _karaokeWords.length;
         final lineWordCount = (lineEnd - lineStart).clamp(1, 9999);
-        final inLine =
-            (safeIndex - lineStart).clamp(0, lineWordCount - 1);
+        final inLine = (safeIndex - lineStart).clamp(0, lineWordCount - 1);
         _activeLineProgress = (inLine + 1) / lineWordCount;
       });
     });
@@ -466,8 +448,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     required List<String> flowLines,
   }) {
     if (spokenSeconds <= 0 || flowLines.isEmpty) return '';
-    final targetWords =
-        flowLines.expand(_splitWords).length.clamp(1, 9999);
+    final targetWords = flowLines.expand(_splitWords).length.clamp(1, 9999);
     final ratio = spokenSeconds / (targetWords * 60 / targetWpm);
     if (ratio < 0.85) return 'TOO FAST — slow down to stay on beat.';
     if (ratio > 1.2) return 'TOO SLOW — tighten delivery to match flow.';
@@ -490,8 +471,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       appBar: AppBar(
         title: Text(
           '// RECORD VOICE //',
-          style:
-              PixelFonts.pressStart(size: 7, color: PixelColors.green),
+          style: PixelFonts.pressStart(size: 7, color: PixelColors.green),
         ),
         centerTitle: true,
         backgroundColor: PixelColors.card,
@@ -501,109 +481,77 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
           bottom: BorderSide(color: PixelColors.green, width: 2),
         ),
       ),
-      // ── Body: Stack with floating button pinned to bottom ───────────────
+      // ── Replace the entire body: property in your build() method with this ──────
+
       body: SafeArea(
-        child: Stack(
+        child: Column(
           children: [
-            // ── Scrollable content ───────────────────────────────────────
-            SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // ── Info card ────────────────────────────────────────────
-                  _PixelInfoCard(
-                    songTitle: widget.songTitle,
-                    referenceSong: widget.referenceSong,
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // ── Before recording ──────────────────────────────────────
-                  if (!_isRecording && !hasRecording) ...[
-                    const _HintBanner(
-                      text:
-                          'Record yourself reading the lyrics aloud (10-15 seconds)',
-                      color: PixelColors.blue,
-                    ),
-                    const SizedBox(height: 12),
-
-                    _SpeakingLinesDropdown(
-                      targetLyrics: targetLyrics,
-                      isHindiDominant: isHindiDominant,
-                    ),
-                    const SizedBox(height: 16),
-
-                    Row(
-                      children: [
-                        PixelLabel('LYRICS TO RECORD:'),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: () {
-                            setState(
-                                () => _showFullLyrics = !_showFullLyrics);
-                          },
-                          icon: AnimatedRotation(
-                            turns: _showFullLyrics ? 0.5 : 0,
-                            duration: const Duration(milliseconds: 200),
-                            child: const Icon(
-                              Icons.keyboard_arrow_down,
-                              size: 20,
-                              color: PixelColors.blue,
-                            ),
-                          ),
-                          label: Text(
-                            _showFullLyrics ? 'HIDE' : 'SHOW',
-                            style: PixelFonts.pressStart(
-                                size: 5, color: PixelColors.blue),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                      constraints: BoxConstraints(
-                        maxHeight: _showFullLyrics ? 300 : 0,
+            // ── Scrollable content fills remaining space ─────────────────
+            if (hasRecording && !_isRecording)
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _PixelInfoCard(
+                        songTitle: widget.songTitle,
+                        referenceSong: widget.referenceSong,
                       ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
+                      const SizedBox(height: 16),
+                      Expanded(
                         child: Container(
                           decoration: BoxDecoration(
                             color: PixelColors.card,
-                            border: Border.all(
-                                color: PixelColors.blue, width: 2),
+                            border:
+                                Border.all(color: PixelColors.blue, width: 2),
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0xFF1A5A99),
+                                offset: Offset(3, 3),
+                                blurRadius: 0,
+                              ),
+                            ],
                           ),
-                          child: Scrollbar(
-                            controller: _scrollController,
-                            thumbVisibility: true,
-                            child: SingleChildScrollView(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '📖 Read these lyrics while recording',
-                                    style: PixelFonts.pressStart(
-                                      size: 5,
-                                      color: PixelColors.blue,
-                                      letterSpacing: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.lyrics_outlined,
+                                        size: 13, color: PixelColors.blue),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'GENERATED LYRICS',
+                                      style: PixelFonts.pressStart(
+                                          size: 5, color: PixelColors.blue),
                                     ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  ..._getAllLyricsLines(targetLyrics)
-                                      .map((line) => Padding(
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                height: 1,
+                                color: PixelColors.blue.withValues(alpha: 0.3),
+                              ),
+                              Expanded(
+                                child: Scrollbar(
+                                  controller: _scrollController,
+                                  thumbVisibility: true,
+                                  child: SingleChildScrollView(
+                                    controller: _scrollController,
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        ..._getAllLyricsLines(targetLyrics).map(
+                                          (line) => Padding(
                                             padding:
-                                                const EdgeInsets.only(
-                                                    bottom: 6),
+                                                const EdgeInsets.only(bottom: 6),
                                             child: Text(
                                               line.startsWith('[')
                                                   ? line
@@ -614,79 +562,243 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                                                     : 15,
                                                 color: line.startsWith('[')
                                                     ? PixelColors.blue
-                                                    : PixelColors
-                                                        .textPrimary,
+                                                    : PixelColors.textPrimary,
                                               ),
                                             ),
-                                          )),
-                                ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // ── Info card ──────────────────────────────────────────
+                      _PixelInfoCard(
+                        songTitle: widget.songTitle,
+                        referenceSong: widget.referenceSong,
+                      ),
+                      const SizedBox(height: 16),
+                      // ── Before recording ────────────────────────────────────
+                      if (!_isRecording && !hasRecording) ...[
+                        const _HintBanner(
+                          text:
+                              'Record yourself reading the lyrics aloud (10-15 seconds)',
+                          color: PixelColors.blue,
+                        ),
+                        const SizedBox(height: 12),
+                        _SpeakingLinesDropdown(
+                          targetLyrics: targetLyrics,
+                          isHindiDominant: isHindiDominant,
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            PixelLabel('LYRICS TO RECORD:'),
+                            const Spacer(),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(
+                                    () => _showFullLyrics = !_showFullLyrics);
+                              },
+                              icon: AnimatedRotation(
+                                turns: _showFullLyrics ? 0.5 : 0,
+                                duration: const Duration(milliseconds: 200),
+                                child: const Icon(
+                                  Icons.keyboard_arrow_down,
+                                  size: 20,
+                                  color: PixelColors.blue,
+                                ),
+                              ),
+                              label: Text(
+                                _showFullLyrics ? 'HIDE' : 'SHOW',
+                                style: PixelFonts.pressStart(
+                                    size: 8, color: PixelColors.blue),
+                              ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                          constraints: BoxConstraints(
+                            maxHeight: _showFullLyrics ? 300 : 0,
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: PixelColors.card,
+                                border: Border.all(
+                                    color: PixelColors.blue, width: 2),
+                              ),
+                              child: Scrollbar(
+                                controller: _scrollController,
+                                thumbVisibility: true,
+                                child: SingleChildScrollView(
+                                  controller: _scrollController,
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      ..._getAllLyricsLines(targetLyrics).map(
+                                        (line) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 6),
+                                          child: Text(
+                                            line.startsWith('[')
+                                                ? line
+                                                : '  $line',
+                                            style: PixelFonts.vt323(
+                                              size:
+                                                  line.startsWith('[') ? 14 : 15,
+                                              color: line.startsWith('[')
+                                                  ? PixelColors.blue
+                                                  : PixelColors.textPrimary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
-
-                  // ── During recording: Wave + Karaoke guide ───────────────
-                  if (_isRecording) ...[
-                    _PixelWaveBar(
-                      controller: _waveController,
-                      seconds: _recordingSeconds,
-                    ),
-                    const SizedBox(height: 16),
-
-                    if (_karaokeFlowLines.isNotEmpty) ...[
-                      Text(
-                        'Follow the highlighted words',
-                        style: PixelFonts.pressStart(
-                            size: 5, color: PixelColors.green),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 12),
-                      _KaraokeBox(
-                        flowLines: _karaokeFlowLines,
-                        lineWordStart: _karaokeLineWordStart,
-                        currentWord: _karaokeCurrentWord,
-                        currentLine: _karaokeCurrentLine,
-                        activeLineProgress: _activeLineProgress,
-                        targetWpm: _karaokeTargetWpm,
-                        referenceMsPerWord: _referenceMsPerWord,
-                        splitWords: _splitWords,
-                      ),
+                        const SizedBox(height: 20),
+                      ],
+                      // ── During recording: Wave + Karaoke guide ─────────────
+                      if (_isRecording) ...[
+                        _PixelWaveBar(
+                          controller: _waveController,
+                          seconds: _recordingSeconds,
+                        ),
+                        const SizedBox(height: 16),
+                        if (_karaokeFlowLines.isNotEmpty) ...[
+                          Text(
+                            'Follow the highlighted words',
+                            style: PixelFonts.pressStart(
+                                size: 5, color: PixelColors.green),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 12),
+                          _KaraokeBox(
+                            flowLines: _karaokeFlowLines,
+                            lineWordStart: _karaokeLineWordStart,
+                            currentWord: _karaokeCurrentWord,
+                            currentLine: _karaokeCurrentLine,
+                            activeLineProgress: _activeLineProgress,
+                            targetWpm: _karaokeTargetWpm,
+                            referenceMsPerWord: _referenceMsPerWord,
+                            splitWords: _splitWords,
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                      ],
                     ],
-                    const SizedBox(height: 20),
-                  ],
-                ],
+                  ),
+                ),
               ),
-            ),
 
-            // ── Floating button panel pinned to bottom ───────────────────
-            Positioned(
-              left: 28,
-              right: 28,
-              bottom: 16,
+            // ── Bottom panel always pinned to bottom ──────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              color: PixelColors.bg,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Post-recording extras shown above the main button
+                  // ── Post-recording section ───────────────────────────────
                   if (hasRecording && !_isRecording) ...[
-                    // Pace feedback
+
+                    // ── Speaking lines review card ─────────────────────────
+                    if (_karaokeFlowLines.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: PixelColors.card,
+                          border: Border.all(color: PixelColors.green, width: 2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.article_outlined,
+                                    size: 13, color: PixelColors.green),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'LINES YOU RECORDED',
+                                  style: PixelFonts.pressStart(
+                                      size: 5, color: PixelColors.green),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            ..._karaokeFlowLines.map(
+                              (line) => Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('›  ',
+                                        style: PixelFonts.vt323(
+                                            size: 15,
+                                            color: PixelColors.green)),
+                                    Expanded(
+                                      child: Text(
+                                        line,
+                                        style: PixelFonts.vt323(
+                                            size: 15,
+                                            color: PixelColors.textPrimary),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+
+                    // ── Pace feedback ──────────────────────────────────────
                     if ((_paceFeedback ?? '').isNotEmpty) ...[
                       _PaceBanner(text: _paceFeedback!),
                       const SizedBox(height: 8),
                     ],
 
-                    // Playback + too-short warning
+                    // ── Playback row + too-short warning ───────────────────
                     Row(
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed: _playback,
                             style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 12),
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 12),
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(28)),
                               side: BorderSide(
@@ -741,30 +853,49 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     ),
                     const SizedBox(height: 8),
 
-                    PixelPurpleButton(
-                      label: 'USE THIS RECORDING',
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => VoiceSongScreen(
-                              songTitle: widget.songTitle,
-                              hindiLyrics: widget.hindiLyrics,
-                              englishLyrics: widget.englishLyrics,
-                              hinglishLyrics: widget.hinglishLyrics,
-                              dominantLanguage: widget.dominantLanguage,
-                              mood: widget.mood,
-                              genre: widget.genre,
-                              referenceSong: widget.referenceSong,
-                              voiceSamplePath: _recordedPath!,
+                    // ── USE THIS RECORDING — same style as RE-RECORD ────────
+                    SizedBox(
+                      height: 56,
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => VoiceSongScreen(
+                                songTitle: widget.songTitle,
+                                hindiLyrics: widget.hindiLyrics,
+                                englishLyrics: widget.englishLyrics,
+                                hinglishLyrics: widget.hinglishLyrics,
+                                dominantLanguage: widget.dominantLanguage,
+                                mood: widget.mood,
+                                genre: widget.genre,
+                                referenceSong: widget.referenceSong,
+                                voiceSamplePath: _recordedPath!,
+                              ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: PixelColors.purple,
+                          foregroundColor: PixelColors.bg,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(28)),
+                          side: const BorderSide(
+                              color: PixelColors.purpleDim, width: 2),
+                          elevation: 0,
+                        ),
+                        icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                        label: Text(
+                          'USE THIS RECORDING',
+                          style: PixelFonts.pressStart(
+                              size: 7, color: PixelColors.bg),
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                   ],
 
-                  // ── Record / Stop button (always at very bottom) ─────────
+                  // ── Record / Stop button (always at very bottom) ──────────
                   _isRecording
                       ? PixelStopButton(
                           label: 'STOP  (${_recordingSeconds}s)',
@@ -784,12 +915,9 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                                   color: PixelColors.greenDim, width: 2),
                               elevation: 0,
                             ),
-                            icon:
-                                const Icon(Icons.mic_rounded, size: 18),
+                            icon: const Icon(Icons.mic_rounded, size: 18),
                             label: Text(
-                              hasRecording
-                                  ? 'RE-RECORD'
-                                  : 'START RECORDING',
+                              hasRecording ? 'RE-RECORD' : 'START RECORDING',
                               style: PixelFonts.pressStart(
                                   size: 7, color: PixelColors.bg),
                             ),
@@ -812,6 +940,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
 class _PixelInfoCard extends StatelessWidget {
   const _PixelInfoCard(
       {required this.songTitle, required this.referenceSong});
+
   final String songTitle;
   final SongReference? referenceSong;
 
@@ -824,9 +953,7 @@ class _PixelInfoCard extends StatelessWidget {
         border: Border.all(color: PixelColors.purple, width: 2),
         boxShadow: const [
           BoxShadow(
-              color: PixelColors.purpleDim,
-              offset: Offset(3, 3),
-              blurRadius: 0),
+              color: PixelColors.purpleDim, offset: Offset(3, 3), blurRadius: 0),
         ],
       ),
       child: Row(
@@ -847,7 +974,8 @@ class _PixelInfoCard extends StatelessWidget {
               referenceSong != null
                   ? '${referenceSong!.trackName} — ${referenceSong!.artistName}'
                   : songTitle,
-              style: PixelFonts.vt323(size: 16, color: const Color(0xFFD0AAFF)),
+              style: PixelFonts.vt323(
+                  size: 16, color: const Color(0xFFD0AAFF)),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -859,6 +987,7 @@ class _PixelInfoCard extends StatelessWidget {
 
 class _HintBanner extends StatelessWidget {
   const _HintBanner({required this.text, required this.color});
+
   final String text;
   final Color color;
 
@@ -871,27 +1000,24 @@ class _HintBanner extends StatelessWidget {
         border: Border(
           left: BorderSide(color: color, width: 3),
           top: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
-          right:
-              BorderSide(color: color.withValues(alpha: 0.3), width: 1),
-          bottom:
-              BorderSide(color: color.withValues(alpha: 0.3), width: 1),
+          right: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
+          bottom: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
         ),
       ),
-      child: Text(text,
-          style: PixelFonts.vt323(size: 14, color: color)),
+      child: Text(text, style: PixelFonts.vt323(size: 14, color: color)),
     );
   }
 }
 
 class _PaceBanner extends StatelessWidget {
   const _PaceBanner({required this.text});
+
   final String text;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: const BoxDecoration(
         color: PixelColors.card2,
         border: Border(
@@ -902,13 +1028,12 @@ class _PaceBanner extends StatelessWidget {
         ),
       ),
       child: Row(children: [
-        const Icon(Icons.speed_rounded,
-            size: 14, color: PixelColors.green),
+        const Icon(Icons.speed_rounded, size: 14, color: PixelColors.green),
         const SizedBox(width: 8),
         Expanded(
-            child: Text(text,
-                style: PixelFonts.vt323(
-                    size: 14, color: PixelColors.green))),
+          child: Text(text,
+              style: PixelFonts.vt323(size: 14, color: PixelColors.green)),
+        ),
       ]),
     );
   }
@@ -924,18 +1049,18 @@ class _SpeakingLinesDropdown extends StatefulWidget {
   final bool isHindiDominant;
 
   @override
-  State<_SpeakingLinesDropdown> createState() =>
-      _SpeakingLinesDropdownState();
+  State<_SpeakingLinesDropdown> createState() => _SpeakingLinesDropdownState();
 }
 
-class _SpeakingLinesDropdownState
-    extends State<_SpeakingLinesDropdown> {
+class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
   bool _isExpanded = false;
   late final List<String> _speakingLines;
+  late ScrollController _scrollController; // ← Changed to late
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController(); // ← Initialize here
     _speakingLines = _extractFlowPromptLines(
       widget.targetLyrics,
       isHindiDominant: widget.isHindiDominant,
@@ -977,23 +1102,25 @@ class _SpeakingLinesDropdownState
               l.isNotEmpty &&
               !l.startsWith('[') &&
               l
-                      .replaceAll(
-                          RegExp(r'[^\p{L}\p{N}]', unicode: true),
-                          '')
-                      .length >=
+                  .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
+                  .length >=
                   8)
           .toList();
     }
     result.sort((a, b) => a.length.compareTo(b.length));
-    final picked =
-        result.where((l) => l.length <= 90).take(4).toList();
+    final picked = result.where((l) => l.length <= 90).take(4).toList();
     return picked.isNotEmpty ? picked : result.take(3).toList();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose(); // ← Dispose controller
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_speakingLines.isEmpty) return const SizedBox.shrink();
-
     return Container(
       decoration: BoxDecoration(
         color: PixelColors.card,
@@ -1003,8 +1130,7 @@ class _SpeakingLinesDropdownState
       child: Column(
         children: [
           InkWell(
-            onTap: () =>
-                setState(() => _isExpanded = !_isExpanded),
+            onTap: () => setState(() => _isExpanded = !_isExpanded),
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: const EdgeInsets.all(10),
@@ -1055,21 +1181,21 @@ class _SpeakingLinesDropdownState
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
-            constraints:
-                BoxConstraints(maxHeight: _isExpanded ? 200 : 0),
+            constraints: BoxConstraints(maxHeight: _isExpanded ? 200 : 0),
             child: ClipRRect(
               child: Container(
                 decoration: BoxDecoration(
                   border: Border(
                     top: BorderSide(
-                        color: PixelColors.green
-                            .withValues(alpha: 0.3),
+                        color: PixelColors.green.withValues(alpha: 0.3),
                         width: 1),
                   ),
                 ),
                 child: Scrollbar(
+                  controller: _scrollController, // ← Fixed
                   thumbVisibility: true,
                   child: SingleChildScrollView(
+                    controller: _scrollController, // ← Fixed
                     padding: const EdgeInsets.all(10),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1080,27 +1206,26 @@ class _SpeakingLinesDropdownState
                               size: 5, color: PixelColors.green),
                         ),
                         const SizedBox(height: 8),
-                        ..._speakingLines.map((line) => Padding(
-                              padding: const EdgeInsets.only(
-                                  bottom: 6),
-                              child: Row(
-                                children: [
-                                  Text('• ',
-                                      style: PixelFonts.vt323(
-                                          size: 14,
-                                          color: PixelColors.green)),
-                                  Expanded(
-                                    child: Text(
-                                      line,
-                                      style: PixelFonts.vt323(
-                                          size: 14,
-                                          color: PixelColors
-                                              .textPrimary),
-                                    ),
+                        ..._speakingLines.map(
+                          (line) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                Text('• ',
+                                    style: PixelFonts.vt323(
+                                        size: 14, color: PixelColors.green)),
+                                Expanded(
+                                  child: Text(
+                                    line,
+                                    style: PixelFonts.vt323(
+                                        size: 14,
+                                        color: PixelColors.textPrimary),
                                   ),
-                                ],
-                              ),
-                            )),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -1117,6 +1242,7 @@ class _SpeakingLinesDropdownState
 class _PixelWaveBar extends StatelessWidget {
   const _PixelWaveBar(
       {required this.controller, required this.seconds});
+
   final AnimationController controller;
   final int seconds;
 
@@ -1133,8 +1259,7 @@ class _PixelWaveBar extends StatelessWidget {
         const _PulsingDot(),
         const SizedBox(width: 8),
         Text('REC ${seconds}s / 30s',
-            style: PixelFonts.pressStart(
-                size: 6, color: PixelColors.red)),
+            style: PixelFonts.pressStart(size: 6, color: PixelColors.red)),
         const SizedBox(width: 10),
         Expanded(
           child: Row(
@@ -1147,15 +1272,12 @@ class _PixelWaveBar extends StatelessWidget {
                       22.0 *
                           (0.3 +
                               0.7 *
-                                  ((controller.value + i * 0.12) %
-                                      1.0));
+                                  ((controller.value + i * 0.12) % 1.0));
                   return Container(
                     width: 3,
                     height: h,
-                    margin: const EdgeInsets.symmetric(
-                        horizontal: 1),
-                    color:
-                        PixelColors.red.withValues(alpha: 0.75),
+                    margin: const EdgeInsets.symmetric(horizontal: 1),
+                    color: PixelColors.red.withValues(alpha: 0.75),
                   );
                 },
               );
@@ -1182,8 +1304,7 @@ class _PulsingDotState extends State<_PulsingDot>
   void initState() {
     super.initState();
     _c = AnimationController(
-        vsync: this,
-        duration: const Duration(milliseconds: 600))
+            vsync: this, duration: const Duration(milliseconds: 600))
       ..repeat(reverse: true);
   }
 
@@ -1200,8 +1321,7 @@ class _PulsingDotState extends State<_PulsingDot>
       builder: (_, __) => Container(
         width: 8,
         height: 8,
-        color:
-            PixelColors.red.withValues(alpha: 0.4 + 0.6 * _c.value),
+        color: PixelColors.red.withValues(alpha: 0.4 + 0.6 * _c.value),
       ),
     );
   }
@@ -1237,9 +1357,7 @@ class _KaraokeBox extends StatelessWidget {
         border: Border.all(color: PixelColors.blue, width: 2),
         boxShadow: const [
           BoxShadow(
-              color: Color(0xFF1A5A99),
-              offset: Offset(3, 3),
-              blurRadius: 0),
+              color: Color(0xFF1A5A99), offset: Offset(3, 3), blurRadius: 0),
         ],
       ),
       child: Column(
@@ -1250,19 +1368,15 @@ class _KaraokeBox extends StatelessWidget {
                 ? '> KARAOKE GUIDE (REF TEMPO)'
                 : '> KARAOKE GUIDE ($targetWpm WPM)',
             style: PixelFonts.pressStart(
-                size: 5,
-                color: PixelColors.blue,
-                letterSpacing: 1),
+                size: 5, color: PixelColors.blue, letterSpacing: 1),
           ),
           const SizedBox(height: 10),
           ...List.generate(flowLines.length, (i) {
             final line = flowLines[i];
             final lineWords = splitWords(line);
-            final start =
-                i < lineWordStart.length ? lineWordStart[i] : 0;
+            final start = i < lineWordStart.length ? lineWordStart[i] : 0;
             final currentInLine = currentWord - start;
             final activeLine = i == currentLine;
-
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Column(
@@ -1270,11 +1384,9 @@ class _KaraokeBox extends StatelessWidget {
                 children: [
                   if (activeLine) ...[
                     LayoutBuilder(builder: (ctx, c) {
-                      final width =
-                          c.maxWidth.clamp(1.0, 9999.0);
-                      final dotX =
-                          (width * activeLineProgress)
-                              .clamp(0.0, width - 6);
+                      final width = c.maxWidth.clamp(1.0, 9999.0);
+                      final dotX = (width * activeLineProgress)
+                          .clamp(0.0, width - 6);
                       return SizedBox(
                         height: 10,
                         child: Stack(children: [
@@ -1284,20 +1396,19 @@ class _KaraokeBox extends StatelessWidget {
                             top: 4,
                             child: Container(
                               height: 2,
-                              color: PixelColors.blue
-                                  .withValues(alpha: 0.25),
+                              color: PixelColors.blue.withValues(alpha: 0.25),
                             ),
                           ),
                           AnimatedPositioned(
-                            duration:
-                                const Duration(milliseconds: 120),
+                            duration: const Duration(milliseconds: 120),
                             curve: Curves.easeOut,
                             left: dotX,
                             top: 0,
                             child: Container(
-                                width: 6,
-                                height: 6,
-                                color: PixelColors.blue),
+                              width: 6,
+                              height: 6,
+                              color: PixelColors.blue,
+                            ),
                           ),
                         ]),
                       );
@@ -1307,22 +1418,17 @@ class _KaraokeBox extends StatelessWidget {
                   Wrap(
                     spacing: 3,
                     runSpacing: 4,
-                    children:
-                        List.generate(lineWords.length, (wi) {
-                      final isPast =
-                          activeLine && wi < currentInLine;
-                      final isCurrent =
-                          activeLine && wi == currentInLine;
+                    children: List.generate(lineWords.length, (wi) {
+                      final isPast = activeLine && wi < currentInLine;
+                      final isCurrent = activeLine && wi == currentInLine;
                       return AnimatedContainer(
-                        duration:
-                            const Duration(milliseconds: 100),
+                        duration: const Duration(milliseconds: 100),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 4, vertical: 1),
                         color: isCurrent
                             ? PixelColors.blue
                             : isPast
-                                ? PixelColors.blue
-                                    .withValues(alpha: 0.15)
+                                ? PixelColors.blue.withValues(alpha: 0.15)
                                 : Colors.transparent,
                         child: Text(
                           lineWords[wi],
