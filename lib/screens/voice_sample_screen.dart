@@ -606,6 +606,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                           songTitle: widget.songTitle,
                           hindiLyrics: widget.hindiLyrics,
                           englishLyrics: widget.englishLyrics,
+                          hinglishLyrics: widget.hinglishLyrics,
                           dominantLanguage: widget.dominantLanguage,
                           mood: widget.mood,
                           genre: widget.genre,

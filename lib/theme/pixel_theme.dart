@@ -17,9 +17,9 @@ class PixelColors {
   static const blue       = Color(0xFF4DA6FF); // karaoke / info accent
   static const purple     = Color(0xFFB57AFF); // header card / reference accent
   static const purpleDim  = Color(0xFF6A3AAA); // purple shadow
-  static const muted      = Color(0xFF5A5A8A); // inactive text / borders
+  static const muted      = Color(0xFF8E8EBA); // inactive text / borders
   static const textPrimary  = Color(0xFFE8E8FF); // near-white body text
-  static const textSecondary = Color(0xFF9090B0); // secondary labels
+  static const textSecondary = Color(0xFFC2C2E8); // secondary labels
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,6 +75,7 @@ class PixelTheme {
         cardTheme: _cardTheme,
         snackBarTheme: _snackBarTheme,
         dialogTheme: _dialogTheme,
+        inputDecorationTheme: _inputDecorationTheme,
         dividerTheme: const DividerThemeData(
           color: PixelColors.card2,
           thickness: 2,
@@ -88,15 +89,15 @@ class PixelTheme {
     primary:          PixelColors.green,
     onPrimary:        PixelColors.bg,
     primaryContainer: PixelColors.card,
-    onPrimaryContainer: PixelColors.green,
+    onPrimaryContainer: PixelColors.textPrimary,
     secondary:        PixelColors.purple,
     onSecondary:      PixelColors.bg,
     secondaryContainer: PixelColors.card2,
-    onSecondaryContainer: PixelColors.purple,
+    onSecondaryContainer: PixelColors.textPrimary,
     tertiary:         PixelColors.blue,
     onTertiary:       PixelColors.bg,
     tertiaryContainer: PixelColors.card2,
-    onTertiaryContainer: PixelColors.blue,
+    onTertiaryContainer: PixelColors.textPrimary,
     error:            PixelColors.red,
     onError:          PixelColors.bg,
     errorContainer:   Color(0xFF2A0D12),
@@ -107,31 +108,31 @@ class PixelTheme {
     onSurfaceVariant: PixelColors.textSecondary,
     outline:          PixelColors.muted,
     inverseSurface:   PixelColors.card,
-    onInverseSurface: PixelColors.green,
+    onInverseSurface: PixelColors.textPrimary,
   );
 
   // ── TextTheme  (maps Flutter's named styles → pixel fonts) ────────────────
   static TextTheme get _textTheme => TextTheme(
         // Titles → Press Start 2P
-        titleLarge:  PixelFonts.pressStart(size: 10),
-        titleMedium: PixelFonts.pressStart(size: 8),
-        titleSmall:  PixelFonts.pressStart(size: 7),
+        titleLarge:  PixelFonts.pressStart(size: 11),
+        titleMedium: PixelFonts.pressStart(size: 9),
+        titleSmall:  PixelFonts.pressStart(size: 8),
         // Labels → Press Start 2P (small pixel labels)
-        labelLarge:  PixelFonts.pressStart(size: 7),
-        labelMedium: PixelFonts.pressStart(size: 6),
-        labelSmall:  PixelFonts.pressStart(size: 5),
+        labelLarge:  PixelFonts.pressStart(size: 8),
+        labelMedium: PixelFonts.pressStart(size: 7),
+        labelSmall:  PixelFonts.pressStart(size: 6),
         // Body → VT323 (lyric / reading text)
-        bodyLarge:   PixelFonts.vt323(size: 18),
-        bodyMedium:  PixelFonts.vt323(size: 15),
-        bodySmall:   PixelFonts.vt323(size: 13, color: PixelColors.textSecondary),
+        bodyLarge:   PixelFonts.vt323(size: 19),
+        bodyMedium:  PixelFonts.vt323(size: 16),
+        bodySmall:   PixelFonts.vt323(size: 14, color: PixelColors.textSecondary),
         // Display (unused in this screen, fallback)
-        displaySmall: PixelFonts.pressStart(size: 12),
+        displaySmall: PixelFonts.pressStart(size: 13),
       );
 
   // ── AppBar ─────────────────────────────────────────────────────────────────
   static const _appBarTheme = AppBarTheme(
     backgroundColor: PixelColors.card,
-    foregroundColor: PixelColors.green,
+    foregroundColor: PixelColors.textPrimary,
     elevation: 0,
     scrolledUnderElevation: 0,
     centerTitle: true,
@@ -165,7 +166,7 @@ class PixelTheme {
   // ── OutlinedButton  (playback / ghost actions) ─────────────────────────────
   static final _outlinedButtonTheme = OutlinedButtonThemeData(
     style: ButtonStyle(
-      foregroundColor: WidgetStatePropertyAll(PixelColors.muted),
+      foregroundColor: WidgetStatePropertyAll(PixelColors.textPrimary),
       backgroundColor: WidgetStatePropertyAll(Colors.transparent),
       elevation: WidgetStatePropertyAll(0),
       side: WidgetStatePropertyAll(
@@ -174,7 +175,9 @@ class PixelTheme {
       shape: WidgetStatePropertyAll(
         const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
-      textStyle: WidgetStatePropertyAll(PixelFonts.pressStart(size: 6, color: PixelColors.muted)),
+      textStyle: WidgetStatePropertyAll(
+        PixelFonts.pressStart(size: 7, color: PixelColors.textPrimary),
+      ),
       padding: const WidgetStatePropertyAll(
         EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       ),
@@ -207,6 +210,33 @@ class PixelTheme {
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.zero,
       side: BorderSide(color: PixelColors.green, width: 2),
+    ),
+  );
+
+  static final _inputDecorationTheme = InputDecorationTheme(
+    filled: true,
+    fillColor: PixelColors.card2,
+    hintStyle: PixelFonts.vt323(
+      size: 16,
+      color: PixelColors.textSecondary,
+    ),
+    labelStyle: PixelFonts.pressStart(
+      size: 7,
+      color: PixelColors.textSecondary,
+    ),
+    prefixIconColor: PixelColors.green,
+    suffixIconColor: PixelColors.textPrimary,
+    border: const OutlineInputBorder(
+      borderRadius: BorderRadius.zero,
+      borderSide: BorderSide(color: PixelColors.muted, width: 2),
+    ),
+    enabledBorder: const OutlineInputBorder(
+      borderRadius: BorderRadius.zero,
+      borderSide: BorderSide(color: PixelColors.muted, width: 2),
+    ),
+    focusedBorder: const OutlineInputBorder(
+      borderRadius: BorderRadius.zero,
+      borderSide: BorderSide(color: PixelColors.green, width: 2),
     ),
   );
 }

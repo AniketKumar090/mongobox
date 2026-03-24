@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_twemoji/flutter_twemoji.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/song_reference.dart';
@@ -8,16 +9,34 @@ import '../services/local_suggestions_service.dart';
 import 'voice_sample_screen.dart';
 
 // ─── MOOD OPTIONS ─────────────────────────────────────────────────────────────
-const _moods = [
-  ('🔥', 'Energetic'),
-  ('💜', 'Melancholic'),
-  ('✨', 'Euphoric'),
-  ('🌙', 'Dreamy'),
-  ('💔', 'Heartbreak'),
-  ('😤', 'Intense'),
-  ('🌊', 'Chill'),
-  ('🥰', 'Romantic'),
-];
+const _moodData = <String, _MoodInfo>{
+  'Energetic':  _MoodInfo(emoji: '⚡',  prompt: 'High-energy vibes: upbeat tempo, powerful delivery, motivational or hype lyrics with strong rhythmic punchlines'),
+  'Melancholic':_MoodInfo(emoji: '🌧️', prompt: 'Reflective and somber: introspective lyrics about loss, longing, or sadness with emotional depth'),
+  'Euphoric':   _MoodInfo(emoji: '🌟', prompt: 'Uplifting and triumphant: celebratory lyrics about success, joy, or breakthrough moments with soaring energy'),
+  'Dreamy':     _MoodInfo(emoji: '☁️', prompt: 'Ethereal and atmospheric: abstract imagery, soft flow, surreal or poetic expressions about aspirations or fantasies'),
+  'Heartbreak': _MoodInfo(emoji: '💔', prompt: 'Raw emotional pain: lyrics about betrayal, separation, or unrequited love with vulnerable storytelling'),
+  'Intense':    _MoodInfo(emoji: '🔥', prompt: 'Aggressive and hard-hitting: bold lyrics with sharp wordplay, confrontation, or raw emotion delivered with force'),
+  'Chill':      _MoodInfo(emoji: '🍃', prompt: 'Laid-back and relaxed: smooth flow, mellow vibes, lyrics about unwinding, reflection, or easy-going moments'),
+  'Romantic':   _MoodInfo(emoji: '💕', prompt: 'Love and affection: tender lyrics about connection, intimacy, devotion, or relationship warmth'),
+};
+
+class _MoodInfo {
+  const _MoodInfo({required this.emoji, required this.prompt});
+  final String emoji;
+  final String prompt;
+}
+
+List<String> get _moods => _moodData.keys.toList();
+String _getMoodEmoji(String mood) => _moodData[mood]?.emoji ?? '🎵';
+String _getMoodPrompt(String mood) => _moodData[mood]?.prompt ?? '';
+
+Widget _emojiBadge(String emoji, {double size = 18}) {
+  return Twemoji(
+    emoji: emoji,
+    width: size,
+    height: size,
+  );
+}
 
 // ─── RESULT MODEL ─────────────────────────────────────────────────────────────
 class _SongResult {
@@ -33,13 +52,13 @@ class _SongResult {
   });
 
   final String title;
-  final String hindiLyrics;       // Hindi (Devanagari) lyrics for Hindi cloning
-  final String englishLyrics;     // English
+  final String hindiLyrics;
+  final String englishLyrics;
   final String mood;
   final String genre;
-  final String dominantLanguage;  // 'Hindi' or 'English'
+  final String dominantLanguage;
   final SongReference? referenceSong;
-  final String? hinglishLyrics;   // Romanised Hindi for readable voice-sample prompts
+  final String? hinglishLyrics;
 
   String get primaryLyrics =>
       dominantLanguage == 'Hindi' ? hindiLyrics : englishLyrics;
@@ -69,9 +88,9 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
   RecentTrack? _selectedTrack;
   _GenerationMode _generationMode = _GenerationMode.singleSong;
 
-  // Mood — AI-suggested or user-overridden
   String? _aiSuggestedMood;
   String? _selectedMood;
+  String? _customMoodPrompt;
 
   _SongResult? _result;
   bool _isLoading = false;
@@ -96,7 +115,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     super.dispose();
   }
 
-  // ── Load tracks + auto-detect mood via Groq ───────────────────────────────
   Future<void> _loadTracksAndSuggestMood() async {
     final service = await LocalSuggestionsService.create();
     if (!mounted) return;
@@ -125,13 +143,11 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       return;
     }
     if (mounted) setState(() { _isMoodLoading = true; _aiSuggestedMood = null; });
-
     try {
       final mood = await _detectMood(tracks);
       if (mounted) setState(() => _aiSuggestedMood = mood);
-    } catch (_) {
-      // Mood is optional — swallow errors
-    } finally {
+    } catch (_) {}
+    finally {
       if (mounted) setState(() => _isMoodLoading = false);
     }
   }
@@ -162,7 +178,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     }
   }
 
-  // ── Groq: detect mood ─────────────────────────────────────────────────────
   Future<String> _detectMood(List<RecentTrack> tracks) async {
     final apiKey = dotenv.env['GROQ_API_KEY'] ?? '';
     if (apiKey.isEmpty) throw Exception('GROQ_API_KEY not set');
@@ -200,17 +215,14 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         .timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) throw Exception('Mood detection failed');
-
     final data = json.decode(response.body);
     final raw = (data['choices'][0]['message']['content'] as String).trim();
-    final valid = _moods.map((m) => m.$2).toList();
-    return valid.firstWhere(
+    return _moods.firstWhere(
       (m) => raw.toLowerCase().contains(m.toLowerCase()),
       orElse: () => 'Chill',
     );
   }
 
-  // ── GENERATE BILINGUAL SONG ───────────────────────────────────────────────
   Future<void> _generate() async {
     if (_isLoading) return;
     final referenceTracks = _analysisTracks;
@@ -232,27 +244,18 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _result = null;
-    });
+    setState(() { _isLoading = true; _errorMessage = null; _result = null; });
 
     final trackList = referenceTracks
         .take(20)
         .map((t) => '${t.trackName} – ${t.artistName}')
         .join('\n');
     final selectedReference = _selectedTrack;
+    final moodPrompt = _customMoodPrompt;
 
     final prompt = _generationMode == _GenerationMode.singleSong
-        ? _buildSingleSongPrompt(
-            mood: mood,
-            reference: selectedReference!,
-          )
-        : _buildHistoryPrompt(
-            mood: mood,
-            trackList: trackList,
-          );
+        ? _buildSingleSongPrompt(mood: mood, moodPrompt: moodPrompt, reference: selectedReference!)
+        : _buildHistoryPrompt(mood: mood, moodPrompt: moodPrompt, trackList: trackList);
 
     try {
       final response = await http
@@ -317,10 +320,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       );
 
       if (!mounted) return;
-      setState(() {
-        _result = result;
-        _isLoading = false;
-      });
+      setState(() { _result = result; _isLoading = false; });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -361,15 +361,17 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     );
   }
 
-  // ── Bilingual prompt builders ─────────────────────────────────────────────
-
   String _buildHistoryPrompt({
     required String mood,
+    required String? moodPrompt,
     required String trackList,
   }) {
+    final moodInfo = moodPrompt != null && moodPrompt.isNotEmpty
+        ? 'Mood instructions: $moodPrompt\n'
+        : 'Requested mood: $mood\n';
     return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
         'Listening history:\n$trackList\n\n'
-        'Requested mood: $mood\n\n'
+        '$moodInfo\n'
         'Rules:\n'
         '- Write COMPLETELY ORIGINAL bilingual lyrics in a rap style: strong rhythm, end rhymes, internal rhymes where natural, and vivid poetry (imagery, wordplay, punchlines).\n'
         '- Use a consistent bar feel: similar syllable counts per line within each verse (not strict counting, but read aloud with a steady pocket).\n'
@@ -388,13 +390,17 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
   String _buildSingleSongPrompt({
     required String mood,
+    required String? moodPrompt,
     required RecentTrack reference,
   }) {
     final snippet = reference.lyricSnippet.trim();
+    final moodInfo = moodPrompt != null && moodPrompt.isNotEmpty
+        ? 'Mood instructions: $moodPrompt\n'
+        : 'Requested mood: $mood\n';
     return 'You are a bilingual Hindi-English hip-hop / rap songwriter.\n\n'
         'Reference song: ${reference.trackName} by ${reference.artistName}\n'
         '${snippet.isEmpty ? '' : 'Lyric snippet: $snippet\n'}\n'
-        'Requested mood: $mood\n\n'
+        '$moodInfo\n'
         'Rules:\n'
         '- Study the emotional tone, imagery, pacing and genre of the reference\n'
         '- Write a COMPLETELY ORIGINAL bilingual rap inspired by that reference: rhythm, rhyme, and poetry (metaphor, wordplay, punchlines).\n'
@@ -414,6 +420,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         '"english_lyrics":"[Verse 1]\\nline\\n\\n[Hook]\\nline\\n\\n[Verse 2]\\nline\\n\\n[Bridge]\\nline\\n\\n[Outro]\\nline"}';
   }
 
+  // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -436,152 +443,182 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
             ),
         ],
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+
+      // ────────────────────────────────────────────────────────────────────────
+      // KEY LAYOUT: scrollable content above + fixed generate button below
+      // ────────────────────────────────────────────────────────────────────────
+      body: GestureDetector(
+        // Tap anywhere outside the TextField → dismiss keyboard / unfocus
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: SafeArea(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── Header card ─────────────────────────────────────────────
-              _HeaderCard(
-                recentTracks: _recentTracks,
-                mode: _generationMode,
-                selectedTrack: _selectedTrack,
-                onModeChanged: _setGenerationMode,
-                onTrackSelected: _selectTrack,
-                cs: cs,
-                tt: tt,
-              ),
-
-              const SizedBox(height: 24),
-
-              // ── Mood selector ───────────────────────────────────────────
-              _MoodSelector(
-                aiSuggestedMood: _aiSuggestedMood,
-                selectedMood: _selectedMood,
-                isMoodLoading: _isMoodLoading,
-                onMoodSelected: (mood) => setState(() {
-                  _selectedMood = _selectedMood == mood ? null : mood;
-                }),
-                cs: cs,
-                tt: tt,
-              ),
-
-              const SizedBox(height: 24),
-
-              // ── Generate button ─────────────────────────────────────────
-              AnimatedBuilder(
-                animation: _shimmerController,
-                builder: (context, _) => SizedBox(
-                  height: 64,
-                  child: FilledButton.icon(
-                    onPressed: _isLoading ? null : _generate,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Color.lerp(
-                        cs.primary,
-                        cs.tertiary,
-                        _isLoading ? _shimmerController.value : 0,
-                      ),
-                      foregroundColor: cs.onPrimary,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      elevation: _isLoading ? 0 : 4,
-                    ),
-                    icon: _isLoading
-                        ? SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: cs.onPrimary,
-                            ),
-                          )
-                        : const Icon(Icons.auto_awesome, size: 22),
-                    label: Text(
-                      _isLoading
-                          ? 'Writing your song…'
-                          : _generationMode == _GenerationMode.singleSong
-                              ? 'Generate From This Song'
-                              : 'Generate My Song',
-                      style: tt.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: cs.onPrimary,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              // ── Loading steps ───────────────────────────────────────────
-              if (_isLoading) ...[
-                const SizedBox(height: 16),
-                const _LoadingSteps(),
-              ],
-
-              // ── Error ───────────────────────────────────────────────────
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: cs.errorContainer,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              // ── All scrollable content lives here ──────────────────────────
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(Icons.error_outline, color: cs.error, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _errorMessage!,
-                          style: tt.bodySmall?.copyWith(
-                            color: cs.onErrorContainer,
+                      // Header card
+                      _HeaderCard(
+                        recentTracks: _recentTracks,
+                        mode: _generationMode,
+                        selectedTrack: _selectedTrack,
+                        onModeChanged: _setGenerationMode,
+                        onTrackSelected: _selectTrack,
+                        cs: cs,
+                        tt: tt,
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Mood selector
+                      _MoodSelector(
+                        aiSuggestedMood: _aiSuggestedMood,
+                        selectedMood: _selectedMood,
+                        isMoodLoading: _isMoodLoading,
+                        customPrompt: _customMoodPrompt,
+                        onMoodSelected: (mood) => setState(() {
+                          _selectedMood = _selectedMood == mood ? null : mood;
+                        }),
+                        onPromptChanged: (prompt) =>
+                            setState(() => _customMoodPrompt = prompt),
+                        cs: cs,
+                        tt: tt,
+                      ),
+
+                      // Loading steps
+                      if (_isLoading) ...[
+                        const SizedBox(height: 16),
+                        const _LoadingSteps(),
+                      ],
+
+                      // Error
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: cs.errorContainer,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.error_outline,
+                                  color: cs.error, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _errorMessage!,
+                                  style: tt.bodySmall?.copyWith(
+                                      color: cs.onErrorContainer),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
+                      ],
+
+                      // Result card + post-generation actions
+                      if (_result != null) ...[
+                        const SizedBox(height: 28),
+                        _ResultCard(
+                          result: _result!,
+                          onCopy: _copyToClipboard,
+                          cs: cs,
+                          tt: tt,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          onPressed: _isLoading ? null : _openVoiceClone,
+                          style: FilledButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: const Icon(Icons.record_voice_over_rounded),
+                          label: const Text('Record My Voice'),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _isLoading ? null : _generate,
+                          style: OutlinedButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Generate Another'),
+                        ),
+                      ],
+
+                      const SizedBox(height: 16),
                     ],
                   ),
                 ),
-              ],
+              ),
 
-              // ── Result ──────────────────────────────────────────────────
-              if (_result != null) ...[
-                const SizedBox(height: 28),
-                _ResultCard(
-                  result: _result!,
-                  onCopy: _copyToClipboard,
-                  cs: cs,
-                  tt: tt,
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: _isLoading ? null : _openVoiceClone,
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+              // ── FIXED GENERATE BUTTON — pinned to bottom, always visible ──
+              Container(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
+                decoration: BoxDecoration(
+                  color: cs.surface,
+                  border: Border(
+                    top: BorderSide(
+                      color: cs.outline.withValues(alpha: 0.15),
+                      width: 1,
                     ),
                   ),
-                  icon: const Icon(Icons.record_voice_over_rounded),
-                  label: const Text('Record My Voice'),
                 ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _generate,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+                child: AnimatedBuilder(
+                  animation: _shimmerController,
+                  builder: (context, _) => SizedBox(
+                    height: 64,
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _isLoading ? null : _generate,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Color.lerp(
+                          cs.primary,
+                          cs.tertiary,
+                          _isLoading ? _shimmerController.value : 0,
+                        ),
+                        foregroundColor: cs.onPrimary,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        elevation: _isLoading ? 0 : 4,
+                      ),
+                      icon: _isLoading
+                          ? SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: cs.onPrimary,
+                              ),
+                            )
+                          : const Icon(Icons.auto_awesome, size: 22),
+                      label: Text(
+                        _isLoading
+                            ? 'Writing your song…'
+                            : _generationMode == _GenerationMode.singleSong
+                                ? 'Generate From This Song'
+                                : 'Generate My Song',
+                        style: tt.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: cs.onPrimary,
+                        ),
+                      ),
                     ),
                   ),
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Generate Another'),
                 ),
-              ],
-
-              const SizedBox(height: 40),
+              ),
             ],
           ),
         ),
@@ -611,6 +648,10 @@ class _HeaderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final visibleTracks = mode == _GenerationMode.singleSong
+        ? recentTracks.take(3).toList()
+        : recentTracks;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -680,29 +721,40 @@ class _HeaderCard extends StatelessWidget {
           ),
           if (recentTracks.isNotEmpty) ...[
             const SizedBox(height: 14),
-            Text(
-              mode == _GenerationMode.singleSong
-                  ? 'Choose a reference song'
-                  : 'Using ${recentTracks.length} tracks from your history',
-              style: tt.labelMedium?.copyWith(
-                color: cs.onPrimaryContainer.withValues(alpha: 0.8),
-              ),
+            Row(
+              children: [
+                _emojiBadge(
+                  mode == _GenerationMode.singleSong ? '🎧' : '📚',
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    mode == _GenerationMode.singleSong
+                        ? 'Choose a reference song'
+                        : 'Using ${recentTracks.length} tracks from your history',
+                    style: tt.labelMedium?.copyWith(
+                      color: cs.onPrimaryContainer.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 6,
               runSpacing: 6,
-              children: recentTracks.take(6).map((t) {
+              children: visibleTracks.map((t) {
                 final isSelected = mode == _GenerationMode.singleSong &&
                     selectedTrack?.trackName == t.trackName &&
                     selectedTrack?.artistName == t.artistName;
                 return GestureDetector(
-                  onTap: () => onTrackSelected(t),
+                  onTap: mode == _GenerationMode.singleSong
+                      ? () => onTrackSelected(t)
+                      : null,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
+                        horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: isSelected
                           ? cs.primary.withValues(alpha: 0.2)
@@ -728,7 +780,8 @@ class _HeaderCard extends StatelessWidget {
                 );
               }).toList(),
             ),
-            if (mode == _GenerationMode.singleSong && selectedTrack != null) ...[
+            if (mode == _GenerationMode.singleSong &&
+                selectedTrack != null) ...[
               const SizedBox(height: 10),
               Text(
                 'Reference: ${selectedTrack!.trackName} by ${selectedTrack!.artistName}',
@@ -777,7 +830,9 @@ class _ModeChip extends StatelessWidget {
           color: isActive ? cs.primary : cs.primary.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: isActive ? cs.primary : cs.primary.withValues(alpha: 0.18),
+            color: isActive
+                ? cs.primary
+                : cs.primary.withValues(alpha: 0.18),
           ),
         ),
         child: Text(
@@ -793,61 +848,111 @@ class _ModeChip extends StatelessWidget {
 }
 
 // ─── MOOD SELECTOR ────────────────────────────────────────────────────────────
-class _MoodSelector extends StatelessWidget {
+class _MoodSelector extends StatefulWidget {
   const _MoodSelector({
     required this.aiSuggestedMood,
     required this.selectedMood,
     required this.isMoodLoading,
+    required this.customPrompt,
     required this.onMoodSelected,
+    required this.onPromptChanged,
     required this.cs,
     required this.tt,
   });
   final String? aiSuggestedMood;
   final String? selectedMood;
   final bool isMoodLoading;
+  final String? customPrompt;
   final void Function(String) onMoodSelected;
+  final void Function(String) onPromptChanged;
   final ColorScheme cs;
   final TextTheme tt;
 
   @override
+  State<_MoodSelector> createState() => _MoodSelectorState();
+}
+
+class _MoodSelectorState extends State<_MoodSelector> {
+  final _promptController = TextEditingController();
+  String? _lastActiveMood;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialMood = widget.selectedMood ?? widget.aiSuggestedMood;
+    if (initialMood != null) {
+      _promptController.text =
+          widget.customPrompt ?? _getMoodPrompt(initialMood);
+    }
+  }
+
+  @override
+  void dispose() {
+    _promptController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_MoodSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final activeMood = widget.selectedMood ?? widget.aiSuggestedMood;
+    if (activeMood != _lastActiveMood) {
+      _lastActiveMood = activeMood;
+      if (activeMood != null) {
+        _promptController.text =
+            widget.customPrompt ?? _getMoodPrompt(activeMood);
+      }
+    } else if (widget.customPrompt != null &&
+        _promptController.text != widget.customPrompt) {
+      _promptController.text = widget.customPrompt!;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final activeMood = selectedMood ?? aiSuggestedMood;
+    final activeMood = widget.selectedMood ?? widget.aiSuggestedMood;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Label row
         Row(
           children: [
             Text(
               'Mood',
-              style: tt.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+              style: widget.tt.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(width: 8),
-            if (isMoodLoading)
+            if (widget.isMoodLoading)
               SizedBox(
                 width: 12,
                 height: 12,
-                child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: widget.cs.primary),
               )
-            else if (aiSuggestedMood != null && selectedMood == null)
+            else if (widget.aiSuggestedMood != null &&
+                widget.selectedMood == null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: cs.primaryContainer,
+                  color: widget.cs.primaryContainer,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
                   'AI picked',
-                  style: tt.labelSmall?.copyWith(color: cs.onPrimaryContainer),
+                  style: widget.tt.labelSmall
+                      ?.copyWith(color: widget.cs.onPrimaryContainer),
                 ),
               ),
-            if (selectedMood != null) ...[
+            if (widget.selectedMood != null) ...[
               const Spacer(),
               GestureDetector(
-                onTap: () => onMoodSelected(selectedMood!),
+                onTap: () => widget.onMoodSelected(widget.selectedMood!),
                 child: Text(
                   'Reset to AI',
-                  style: tt.labelSmall?.copyWith(
-                    color: cs.primary,
+                  style: widget.tt.labelSmall?.copyWith(
+                    color: widget.cs.primary,
                     decoration: TextDecoration.underline,
                   ),
                 ),
@@ -856,35 +961,120 @@ class _MoodSelector extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+
+        // Mood chips
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: _moods.map((m) {
-            final isActive = activeMood == m.$2;
+          children: _moods.map((mood) {
+            final emoji = _getMoodEmoji(mood);
+            final isActive = activeMood == mood;
             return GestureDetector(
-              onTap: () => onMoodSelected(m.$2),
+              onTap: () => widget.onMoodSelected(mood),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: isActive ? cs.primary : cs.surfaceContainerHighest,
+                  color: isActive
+                      ? widget.cs.primary
+                      : widget.cs.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
-                    color: isActive ? cs.primary : cs.outline.withValues(alpha: 0.3),
+                    color: isActive
+                        ? widget.cs.primary
+                        : widget.cs.outline.withValues(alpha: 0.3),
                     width: isActive ? 2 : 1,
                   ),
                 ),
-                child: Text(
-                  '${m.$1} ${m.$2}',
-                  style: tt.labelMedium?.copyWith(
-                    color: isActive ? cs.onPrimary : cs.onSurface,
-                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                  ),
+                // ── EMOJI FIX: render emoji in a plain TextStyle with no
+                //    dependence on the pixel font. Twemoji gives us a
+                //    consistent emoji widget while the mood label stays themed.
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _emojiBadge(emoji, size: 10),
+                    const SizedBox(width: 8),
+                    Text(
+                      mood,
+                      style: widget.tt.labelMedium?.copyWith(
+                        color: isActive
+                            ? widget.cs.onPrimary
+                            : widget.cs.onSurface,
+                        fontWeight:
+                            isActive ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             );
           }).toList(),
         ),
+
+        // Custom prompt editor
+        if (activeMood != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: widget.cs.primaryContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: widget.cs.primary.withValues(alpha: 0.2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.edit_note,
+                        size: 16, color: widget.cs.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Customize prompt',
+                      style: widget.tt.labelSmall?.copyWith(
+                        color: widget.cs.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _promptController,
+                  maxLines: 3,
+                  minLines: 2,
+                  onChanged: widget.onPromptChanged,
+                  style: widget.tt.bodySmall
+                      ?.copyWith(color: widget.cs.onSurface),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: widget.cs.outline
+                              .withValues(alpha: 0.3)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: widget.cs.outline
+                              .withValues(alpha: 0.3)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: widget.cs.primary, width: 2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -929,9 +1119,9 @@ class _LoadingStepsState extends State<_LoadingSteps> {
         key: ValueKey(_step),
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontStyle: FontStyle.italic,
-        ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+            ),
       ),
     );
   }
@@ -976,12 +1166,12 @@ class _ResultCardState extends State<_ResultCard> {
 
     return Column(
       children: [
-        // ── Header ────────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
           decoration: BoxDecoration(
             color: cs.surfaceContainerHighest,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1010,7 +1200,10 @@ class _ResultCardState extends State<_ResultCard> {
                 runSpacing: 4,
                 children: [
                   _Chip(icon: Icons.mood, label: result.mood, cs: cs),
-                  _Chip(icon: Icons.library_music, label: result.genre, cs: cs),
+                  _Chip(
+                      icon: Icons.library_music,
+                      label: result.genre,
+                      cs: cs),
                   Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 10, vertical: 5),
@@ -1039,8 +1232,6 @@ class _ResultCardState extends State<_ResultCard> {
                   ),
                 ],
               ),
-
-              // ── Language tabs ────────────────────────────────────────────
               const SizedBox(height: 14),
               Row(
                 children: [
@@ -1048,7 +1239,8 @@ class _ResultCardState extends State<_ResultCard> {
                     label: 'Hinglish',
                     sublabel: isDominantHindi ? 'dominant' : null,
                     isActive: _activeTab == _LyricsTab.hindi,
-                    onTap: () => setState(() => _activeTab = _LyricsTab.hindi),
+                    onTap: () =>
+                        setState(() => _activeTab = _LyricsTab.hindi),
                     cs: cs,
                     tt: tt,
                   ),
@@ -1067,8 +1259,6 @@ class _ResultCardState extends State<_ResultCard> {
             ],
           ),
         ),
-
-        // ── Lyrics body ────────────────────────────────────────────────────
         Container(
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
@@ -1077,12 +1267,15 @@ class _ResultCardState extends State<_ResultCard> {
             borderRadius:
                 const BorderRadius.vertical(bottom: Radius.circular(20)),
             border: Border(
-                top: BorderSide(color: cs.outline.withValues(alpha: 0.15))),
+                top: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.15))),
           ),
           child: _LyricsLines(
             lines: (_activeTab == _LyricsTab.english
                     ? result.englishLyrics
-                    : result.hindiLyrics)
+                    : (result.hinglishLyrics?.isNotEmpty == true
+                        ? result.hinglishLyrics!
+                        : result.hindiLyrics))
                 .split('\n'),
             cs: cs,
             tt: tt,
@@ -1093,7 +1286,7 @@ class _ResultCardState extends State<_ResultCard> {
   }
 }
 
-// ── Language tab button ────────────────────────────────────────────────────────
+// ─── LANG TAB ─────────────────────────────────────────────────────────────────
 class _LangTab extends StatelessWidget {
   const _LangTab({
     required this.label,
@@ -1116,7 +1309,8 @@ class _LangTab extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: isActive ? cs.primary : cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(12),
@@ -1165,7 +1359,7 @@ class _LangTab extends StatelessWidget {
   }
 }
 
-// ─── PLAIN LYRICS LINES (English) ─────────────────────────────────────────────
+// ─── LYRICS LINES ─────────────────────────────────────────────────────────────
 class _LyricsLines extends StatelessWidget {
   const _LyricsLines({
     required this.lines,
@@ -1183,7 +1377,7 @@ class _LyricsLines extends StatelessWidget {
       children: lines.map((line) {
         if (line.trim().isEmpty) return const SizedBox(height: 4);
         final isHeader = RegExp(
-          r'^\[(Verse|Chorus|Bridge|Outro|Pre-Chorus)',
+          r'^\[(Verse|Hook|Chorus|Bridge|Outro|Pre-Chorus|Intro)',
           caseSensitive: false,
         ).hasMatch(line.trim());
         if (isHeader) {
@@ -1203,7 +1397,8 @@ class _LyricsLines extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Text(
             line,
-            style: tt.bodyMedium?.copyWith(color: cs.onSurface, height: 1.7),
+            style: tt.bodyMedium
+                ?.copyWith(color: cs.onSurface, height: 1.7),
           ),
         );
       }).toList(),
@@ -1213,7 +1408,8 @@ class _LyricsLines extends StatelessWidget {
 
 // ─── CHIP ─────────────────────────────────────────────────────────────────────
 class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.label, required this.cs});
+  const _Chip(
+      {required this.icon, required this.label, required this.cs});
   final IconData icon;
   final String label;
   final ColorScheme cs;
@@ -1222,7 +1418,8 @@ class _Chip extends StatelessWidget {
   Widget build(BuildContext context) {
     if (label.isEmpty) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: cs.secondaryContainer,
         borderRadius: BorderRadius.circular(20),

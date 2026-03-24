@@ -33,11 +33,13 @@ class VoiceSongScreen extends StatefulWidget {
     required this.genre,
     this.referenceSong,
     required this.voiceSamplePath,
+    this.hinglishLyrics,
   });
 
   final String songTitle;
   final String hindiLyrics;
   final String englishLyrics;
+  final String? hinglishLyrics;
   final String dominantLanguage;
   final String mood;
   final String genre;
@@ -635,7 +637,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 // ── Lyrics section ─────────────────────────────────────────
                 _LyricsSection(
                   lyrics: widget.dominantLanguage == 'Hindi'
-                      ? widget.hindiLyrics
+                      ? (widget.hinglishLyrics?.isNotEmpty == true
+                          ? widget.hinglishLyrics!
+                          : widget.hindiLyrics)
                       : widget.englishLyrics,
                   language: widget.dominantLanguage,
                   cs: cs,

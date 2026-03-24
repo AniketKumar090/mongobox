@@ -644,7 +644,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        title: const Text('Lyric Play'),
+        title: const Text('Lyricqsk'),
         centerTitle: true,
         elevation: 0,
         backgroundColor: Theme.of(context).colorScheme.inverseSurface,
@@ -1077,91 +1077,91 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                     ),
                   ],
 
-                  if (_recentSearches.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Text(
-                          'Recent searches',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelLarge
-                              ?.copyWith(
-                                color: colorScheme.onSurface,
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () async {
-                            await _suggestions?.clearRecentSearches();
-                            if (!mounted) return;
-                            setState(_syncRecentFromService);
-                          },
-                          child: const Text('Clear'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    ..._recentSearches.take(6).map((s) => ListTile(
-                          dense: true,
-                          leading: Icon(
-                            s.success
-                                ? Icons.check_circle_outline
-                                : Icons.search_off,
-                            size: 20,
-                            color: s.success
-                                ? colorScheme.primary
-                                : colorScheme.error,
-                          ),
-                          title: Text(s.query,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                          subtitle: Text(
-                            s.success
-                                ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
-                                : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () {
-                            _lyricController.text = s.query;
-                            _lyricController.selection =
-                                TextSelection.collapsed(
-                                    offset: s.query.length);
-                          },
-                        )),
-                  ],
+                  // if (_recentSearches.isNotEmpty) ...[
+                  //   const SizedBox(height: 16),
+                  //   Row(
+                  //     children: [
+                  //       Text(
+                  //         'Recent searches',
+                  //         style: Theme.of(context)
+                  //             .textTheme
+                  //             .labelLarge
+                  //             ?.copyWith(
+                  //               color: colorScheme.onSurface,
+                  //               fontWeight: FontWeight.w600,
+                  //             ),
+                  //       ),
+                  //       const Spacer(),
+                  //       TextButton(
+                  //         onPressed: () async {
+                  //           await _suggestions?.clearRecentSearches();
+                  //           if (!mounted) return;
+                  //           setState(_syncRecentFromService);
+                  //         },
+                  //         child: const Text('Clear'),
+                  //       ),
+                  //     ],
+                  //   ),
+                  //   const SizedBox(height: 8),
+                  //   ..._recentSearches.take(6).map((s) => ListTile(
+                  //         dense: true,
+                  //         leading: Icon(
+                  //           s.success
+                  //               ? Icons.check_circle_outline
+                  //               : Icons.search_off,
+                  //           size: 20,
+                  //           color: s.success
+                  //               ? colorScheme.primary
+                  //               : colorScheme.error,
+                  //         ),
+                  //         title: Text(s.query,
+                  //             maxLines: 1,
+                  //             overflow: TextOverflow.ellipsis),
+                  //         subtitle: Text(
+                  //           s.success
+                  //               ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
+                  //               : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
+                  //           maxLines: 1,
+                  //           overflow: TextOverflow.ellipsis,
+                  //         ),
+                  //         onTap: () {
+                  //           _lyricController.text = s.query;
+                  //           _lyricController.selection =
+                  //               TextSelection.collapsed(
+                  //                   offset: s.query.length);
+                  //         },
+                  //       )),
+                  // ],
 
-                  if (_recentTracks.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      'Recent tracks',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            color: colorScheme.onSurface,
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._recentTracks.take(5).map((t) => ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.history),
-                          title: Text(t.trackName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                          subtitle: Text(t.artistName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                          onTap: () {
-                            _lyricController.text = t.lyricSnippet.isNotEmpty
-                                ? t.lyricSnippet
-                                : '${t.trackName} ${t.artistName}';
-                            _lyricController.selection =
-                                TextSelection.collapsed(
-                                    offset: _lyricController.text.length);
-                          },
-                        )),
-                  ],
+                  // if (_recentTracks.isNotEmpty) ...[
+                  //   const SizedBox(height: 16),
+                  //   Text(
+                  //     'Recent tracks',
+                  //     style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  //           color: colorScheme.onSurface,
+                  //           fontWeight: FontWeight.w600,
+                  //         ),
+                  //   ),
+                  //   const SizedBox(height: 8),
+                  //   ..._recentTracks.take(5).map((t) => ListTile(
+                  //         dense: true,
+                  //         leading: const Icon(Icons.history),
+                  //         title: Text(t.trackName,
+                  //             maxLines: 1,
+                  //             overflow: TextOverflow.ellipsis),
+                  //         subtitle: Text(t.artistName,
+                  //             maxLines: 1,
+                  //             overflow: TextOverflow.ellipsis),
+                  //         onTap: () {
+                  //           _lyricController.text = t.lyricSnippet.isNotEmpty
+                  //               ? t.lyricSnippet
+                  //               : '${t.trackName} ${t.artistName}';
+                  //           _lyricController.selection =
+                  //               TextSelection.collapsed(
+                  //                   offset: _lyricController.text.length);
+                  //         },
+                  //       )),
+                  // ],
 
                   if (_nowPlaying != null) ...[
                     const SizedBox(height: 24),
