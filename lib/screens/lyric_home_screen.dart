@@ -15,13 +15,11 @@ import '../services/youtube_quota_monitor.dart';
 import '../services/lightweight_search_service.dart';
 import '../services/tts_service.dart';
 import '../services/youtube_player_background_helper.dart';
-import '../services/jamendo_service.dart';
 import '../services/background_audio_player_service.dart';
 import '../services/soundcloud_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
-import '../screens/generate_song_screen.dart'; // ← NEW
-import 'saved_voice_songs_screen.dart';
+import '../screens/generate_song_screen.dart';
 
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
@@ -43,11 +41,20 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   bool _isListening = false;
   bool _isQuotaSavingMode = false;
   bool _wasPlayingBeforeBackground = false;
+  bool _isLooping = false;
+  bool _isHandlingLoopRestart = false;
+  bool _backgroundMirrorFailed = false;
+  bool _foregroundAudioSuppressedForBackground = false;
+  Duration _backgroundSyncPosition = Duration.zero;
+
+  // Track the actual start position for looping
+  Duration _loopStartPosition = Duration.zero;
+
   /// 0–1 on the in-app scale (1 = "full", i.e. current system volume at init).
   double _playerVolume = 1.0;
+
   /// Snapshot of system volume when the screen initialized; app 100% maps here.
   double _volumeSystemCap = 1.0;
-  bool _volumePluginOk = false;
   StreamSubscription<dynamic>? _volumeSubscription;
 
   static const String _volumeFetchInitialKey = 'fetchInitialVolume';
@@ -60,10 +67,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
   final SpeechToText _speech = SpeechToText();
   final TtsService _tts = TtsService();
-  final JamendoService _jamendo = JamendoService();
   final SoundCloudService _soundcloud = SoundCloudService();
 
   bool _isBackgroundAudioLoading = false;
+  bool _appIsInBackground = false;
+  int _backgroundMirrorRequestId = 0;
 
   @override
   void initState() {
@@ -82,43 +90,125 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
-      _wasPlayingBeforeBackground = c.value.isPlaying;
-      // If user minimizes while YouTube is playing, try to mirror audio in a
-      // background-capable player automatically.
+      _appIsInBackground = true;
+      _wasPlayingBeforeBackground =
+          c.value.isPlaying ||
+          c.value.playerState == PlayerState.playing ||
+          c.value.playerState == PlayerState.buffering;
       if (_wasPlayingBeforeBackground) {
-        _autoStartBackgroundMirror();
+        _suppressForegroundPlaybackForBackground();
+        _autoStartBackgroundMirror(++_backgroundMirrorRequestId);
       }
       return;
     }
 
+    _appIsInBackground = false;
+    _backgroundMirrorRequestId++;
     if (state == AppLifecycleState.resumed && _wasPlayingBeforeBackground) {
       _restoreForegroundPlayback();
     }
   }
 
+  void _suppressForegroundPlaybackForBackground() {
+    final controller = _ytController;
+    if (controller == null || _foregroundAudioSuppressedForBackground) return;
+
+    _backgroundSyncPosition = controller.value.position;
+    _foregroundAudioSuppressedForBackground = true;
+    try {
+      controller.mute();
+      controller.pause();
+    } catch (_) {}
+  }
+
   void _restoreForegroundPlayback() {
     _wasPlayingBeforeBackground = false;
+    try {
+      _ytController?.mute();
+    } catch (_) {}
     unawaited(_restoreForegroundPlaybackAsync());
   }
 
   Future<void> _restoreForegroundPlaybackAsync() async {
-    if (BackgroundAudioPlayerService.instance.isPlaying) {
-      await BackgroundAudioPlayerService.instance.stop();
-    }
+    final mirroredPosition = BackgroundAudioPlayerService.instance.position;
+    await BackgroundAudioPlayerService.instance.hardStopAndReset();
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
     if (!mounted) return;
+
     final controller = _ytController;
-    if (controller == null) return;
-    YouTubePlayerBackgroundHelper.resumePlayback(controller);
-    _applyEmbeddedPlayerVolume();
+    if (controller == null) {
+      _foregroundAudioSuppressedForBackground = false;
+      _backgroundSyncPosition = Duration.zero;
+      return;
+    }
+
+    final resumePosition =
+        mirroredPosition > Duration.zero
+            ? mirroredPosition
+            : _backgroundSyncPosition;
+
+    await _resumeForegroundController(controller, resumePosition);
+
+    _foregroundAudioSuppressedForBackground = false;
+    _backgroundSyncPosition = Duration.zero;
+
+    if (_backgroundMirrorFailed) {
+      _backgroundMirrorFailed = false;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Background audio needs valid SoundCloud credentials '
+            '(set SOUNDCLOUD_CLIENT_ID and SOUNDCLOUD_CLIENT_SECRET in .env).',
+          ),
+        ),
+      );
+    }
   }
 
-  void _autoStartBackgroundMirror() {
-    // Fire-and-forget; lifecycle callback must stay sync.
-    _startBackgroundMirrorFromNowPlaying(auto: true);
+  Future<void> _resumeForegroundController(
+    YoutubePlayerController controller,
+    Duration resumePosition,
+  ) async {
+    if (resumePosition > Duration.zero) {
+      controller.seekTo(resumePosition);
+    }
+
+    await Future.delayed(const Duration(milliseconds: 180));
+    if (!mounted) return;
+
+    try {
+      controller.unMute();
+      controller.play();
+    } catch (_) {}
+    _applyEmbeddedPlayerVolume();
+
+    await Future.delayed(const Duration(milliseconds: 320));
+    if (!mounted) return;
+
+    final state = controller.value.playerState;
+    if (!controller.value.isPlaying &&
+        state != PlayerState.playing &&
+        state != PlayerState.buffering) {
+      if (resumePosition > Duration.zero) {
+        controller.seekTo(resumePosition);
+      }
+      try {
+        controller.unMute();
+        controller.play();
+      } catch (_) {}
+      _applyEmbeddedPlayerVolume();
+    }
+  }
+
+  void _autoStartBackgroundMirror(int requestId) {
+    _startBackgroundMirrorFromNowPlaying(auto: true, requestId: requestId);
   }
 
   Future<void> _startBackgroundMirrorFromNowPlaying({
     required bool auto,
+    required int requestId,
   }) async {
     if (_isBackgroundAudioLoading) return;
     if (BackgroundAudioPlayerService.instance.isPlaying) return;
@@ -128,42 +218,44 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     if (now.trackName.trim().isEmpty || now.artistName.trim().isEmpty) return;
 
     setState(() => _isBackgroundAudioLoading = true);
+    if (auto) {
+      _backgroundMirrorFailed = false;
+    }
     try {
-      // 1) Prefer SoundCloud mirror (usually closest for mainstream tracks).
+      await BackgroundAudioPlayerService.instance.setLoopEnabled(_isLooping);
+
       final sc = await _soundcloud.findMirrorStream(
         trackName: now.trackName,
         artistName: now.artistName,
       );
 
-      if (!mounted) return;
+      if (!mounted ||
+          !_appIsInBackground ||
+          requestId != _backgroundMirrorRequestId) {
+        return;
+      }
       if (sc != null && sc.confidence >= 0.62) {
-        _ytController?.pause();
-        await BackgroundAudioPlayerService.instance.playUrl(sc.streamUrl);
+        await BackgroundAudioPlayerService.instance.playSources(
+          sc.streamSources
+              .map((source) => (url: source.url, headers: source.headers))
+              .toList(),
+          _backgroundSyncPosition,
+        );
         return;
       }
 
-      // 2) Fallback to Jamendo mirror (royalty-free catalog; may be different).
-      final jm = await _jamendo.findMirrorTrack(
-        trackName: now.trackName,
-        artistName: now.artistName,
-      );
-      if (!mounted) return;
-      final jmTrack = jm?.track;
-      final jmConf = jm?.confidence ?? 0;
-
-      if (jmTrack != null && jmConf >= 0.55) {
-        _ytController?.pause();
-        await BackgroundAudioPlayerService.instance.playUrl(jmTrack.audioUrl);
-        return;
-      }
-
-      // If auto mode, keep quiet; user can manually try via the button.
       if (!auto) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Could not find a close-enough background stream.'),
+            content: Text(
+              'Could not find a usable SoundCloud background stream.',
+            ),
           ),
         );
+      }
+
+      if (auto) {
+        _backgroundMirrorFailed = true;
       }
     } catch (e) {
       if (!mounted) return;
@@ -171,6 +263,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Background audio failed: $e')));
+      }
+      if (auto) {
+        _backgroundMirrorFailed = true;
       }
     } finally {
       if (mounted) setState(() => _isBackgroundAudioLoading = false);
@@ -188,7 +283,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   Future<void> _initVolumeController() async {
     if (kIsWeb) {
       _volumeSystemCap = 1.0;
-      _volumePluginOk = false;
       return;
     }
 
@@ -198,21 +292,15 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     try {
       final cap = await volumeController.getVolume();
       _volumeSystemCap = cap.clamp(0.001, 1.0);
-      _volumePluginOk = true;
     } catch (_) {
       _volumeSystemCap = 1.0;
-      _volumePluginOk = false;
       return;
     }
 
     if (!mounted) return;
 
-    // Package listener has no onError; use our own subscription so MissingPlugin
-    // (or other stream errors) do not surface as unhandled async exceptions.
     _volumeSubscription = const EventChannel(_volumeEventChannelName)
-        .receiveBroadcastStream(<String, dynamic>{
-          _volumeFetchInitialKey: true,
-        })
+        .receiveBroadcastStream(<String, dynamic>{_volumeFetchInitialKey: true})
         .listen(
           (dynamic d) {
             if (!mounted) return;
@@ -253,26 +341,54 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     super.dispose();
   }
 
+  // ── FIX 1: Always dispose and recreate the controller in two frames ─────────
+  // This prevents the "recreating_view / view id: '0'" PlatformException on iOS
+  // that occurs when .load() is called on a controller whose UiKitView has been
+  // torn down or is mid-recreation.
   void _playResult(PlaybackResult result) {
     if (BackgroundAudioPlayerService.instance.isPlaying) {
       unawaited(BackgroundAudioPlayerService.instance.stop());
     }
+    _backgroundSyncPosition = Duration.zero;
+    _foregroundAudioSuppressedForBackground = false;
 
-    if (_ytController == null) {
-      _ytController =
+    // Store the actual start position for looping
+    _loopStartPosition = Duration(
+      seconds: result.startTimeSeconds < 0 ? 0 : result.startTimeSeconds,
+    );
+
+    // Capture and nullify old controller reference before setState.
+    final oldController = _ytController;
+    _ytController = null;
+
+    // Frame 1: Remove the YoutubePlayer widget from the tree so the platform
+    // view is fully deregistered before a new one is created.
+    setState(() {
+      _nowPlaying = result;
+      // _ytController is already null, forcing the Positioned widget to be
+      // absent this frame, which causes UiKitView to be unmounted cleanly.
+    });
+
+    // Dispose old controller after the widget has been removed from the tree.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      oldController?.dispose();
+    });
+
+    // Frame 2: Create the new controller now that the old platform view is gone.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller =
           YouTubePlayerBackgroundHelper.createBackgroundAwareController(
             videoId: result.videoId,
             startSeconds: result.startTimeSeconds,
             autoPlay: true,
+            loop: false, // We'll handle loop manually
           );
-    } else {
-      _ytController!.load(result.videoId, startAt: result.startTimeSeconds);
-    }
-
-    setState(() {
-      _nowPlaying = result;
+      _attachLoopListener(controller);
+      setState(() => _ytController = controller);
+      _applyEmbeddedPlayerVolume();
     });
-    _applyEmbeddedPlayerVolume();
+
     _lightweightService.cachePlaybackResult(
       result,
       _lyricController.text.trim(),
@@ -550,13 +666,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     );
   }
 
-  // ── NEW ──────────────────────────────────────────────────────────────────────
   void _openGenerateSong() {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => GenerateSongScreen()));
   }
-  // ─────────────────────────────────────────────────────────────────────────────
 
   void _togglePrimaryPlayback() {
     if (_isLoading) return;
@@ -573,6 +687,58 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     }
   }
 
+  void _toggleLooping() {
+    final next = !_isLooping;
+    setState(() => _isLooping = next);
+
+    if (BackgroundAudioPlayerService.instance.isPlaying) {
+      unawaited(BackgroundAudioPlayerService.instance.setLoopEnabled(next));
+    }
+  }
+
+  // FIXED: Loop restarts from 0:00 to play the full song including intro
+void _attachLoopListener(YoutubePlayerController controller) {
+  controller.addListener(() {
+    if (!_isLooping || _isHandlingLoopRestart) return;
+    final playerState = controller.value.playerState;
+    
+    if (playerState == PlayerState.ended) {
+      _isHandlingLoopRestart = true;
+      Future.microtask(() async {
+        try {
+          // FIX: Use load() with correct parameter 'startAt' (in seconds)
+          final videoId = controller.metadata.videoId;
+          if (videoId.isNotEmpty) {
+            controller.load(
+              videoId,
+              startAt: 0, // Play from beginning on loop (parameter is 'startAt', not 'startSeconds')
+            );
+          } else {
+            // Fallback if videoId is missing
+            controller.seekTo(Duration.zero);
+          }
+          
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (!mounted) {
+            _isHandlingLoopRestart = false;
+            return;
+          }
+          
+          controller.play();
+          await Future.delayed(const Duration(milliseconds: 50));
+          _applyEmbeddedPlayerVolume();
+          
+          await Future.delayed(const Duration(milliseconds: 100));
+        } catch (e) {
+          debugPrint('Loop restart error: $e');
+        } finally {
+          _isHandlingLoopRestart = false;
+        }
+      });
+    }
+  });
+}
+
   void _seekRelative(int seconds) {
     final controller = _ytController;
     if (controller == null) return;
@@ -585,9 +751,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     controller.seekTo(Duration(milliseconds: clampedMs));
   }
 
+  // ── FIX 3: Guard against calling setVolume/mute before the player is ready ──
   void _applyEmbeddedPlayerVolume() {
     final controller = _ytController;
     if (controller == null) return;
+    // Do not call volume methods if the player is not yet ready; the onReady
+    // callback will call this method again once it is safe to do so.
+    if (!controller.value.isReady) return;
 
     final volume = (_playerVolume * 100).round().clamp(0, 100);
     controller.setVolume(volume);
@@ -596,21 +766,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     } else {
       controller.unMute();
     }
-  }
-
-  void _setPlayerVolume(double value) {
-    setState(() {
-      _playerVolume = value.clamp(0.0, 1.0);
-    });
-    _applyEmbeddedPlayerVolume();
-    if (!_volumePluginOk) return;
-    final systemVol = (_playerVolume * _volumeSystemCap).clamp(0.0, 1.0);
-    unawaited(() async {
-      try {
-        VolumeController.instance.showSystemUI = false;
-        await VolumeController.instance.setVolume(systemVol);
-      } catch (_) {}
-    }());
   }
 
   void _seekToFraction(double fraction) {
@@ -777,188 +932,99 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           ),
         ),
       ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final isCompact = constraints.maxWidth < 600;
-            final horizontalPadding = isCompact ? 24.0 : 48.0;
-            return Stack(
-              children: [
-                if (_ytController != null)
-                  Positioned(
-                    left: horizontalPadding,
-                    right: horizontalPadding,
-                    top: 28,
-                    child: IgnorePointer(
-                      child: Opacity(
-                        opacity: 0.01,
-                        child: AspectRatio(
-                          aspectRatio: 16 / 9,
-                          child: YoutubePlayer(
-                            controller: _ytController!,
-                            showVideoProgressIndicator: false,
-                            onReady: _applyEmbeddedPlayerVolume,
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.translucent,
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isCompact = constraints.maxWidth < 600;
+              final horizontalPadding = isCompact ? 24.0 : 48.0;
+              return Stack(
+                children: [
+                  // ── FIX 2: ValueKey tied to videoId forces Flutter to fully
+                  // replace the YoutubePlayer widget (and its UiKitView) when
+                  // the video changes, avoiding platform-view id collisions. ──
+                  if (_ytController != null)
+                    Positioned(
+                      left: horizontalPadding,
+                      right: horizontalPadding,
+                      top: 28,
+                      child: IgnorePointer(
+                        child: Opacity(
+                          opacity: 0.01,
+                          child: AspectRatio(
+                            aspectRatio: 16 / 9,
+                            child: YoutubePlayer(
+                              key: ValueKey(
+                                _nowPlaying?.videoId ?? 'yt_player',
+                              ),
+                              controller: _ytController!,
+                              showVideoProgressIndicator: false,
+                              onReady: _applyEmbeddedPlayerVolume,
+                            ),
                           ),
                         ),
                       ),
                     ),
+                  SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: horizontalPadding,
+                      vertical: 20.0,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _SearchConsoleCard(
+                          lyricController: _lyricController,
+                          isLoading: _isLoading,
+                          isListening: _isListening,
+                          isSpeaking: _tts.isSpeaking,
+                          isQuotaSavingMode: _isQuotaSavingMode,
+                          recentLines: _recentLines,
+                          onSearch: _onSearch,
+                          onToggleSpeak: _toggleSpeakLine,
+                          onToggleListen: () {
+                            if (_isListening) {
+                              _stopListening();
+                            } else {
+                              _startListening();
+                            }
+                          },
+                          onToggleQuotaMode:
+                              (value) =>
+                                  setState(() => _isQuotaSavingMode = value),
+                          onOpenJoinParty: _openJoinParty,
+                          onOpenHostParty: _openHostParty,
+                          onSelectRecentLine: (line) {
+                            _lyricController.text = line;
+                            _lyricController.selection =
+                                TextSelection.collapsed(offset: line.length);
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        _TurntablePlayerCard(
+                          controller: _ytController,
+                          nowPlaying: _nowPlaying,
+                          savedCount: _recentLines.length,
+                          isLoading: _isLoading,
+                          isLooping: _isLooping,
+                          onToggleLoop: _toggleLooping,
+                          onSeekBackward: () => _seekRelative(-10),
+                          onPlayPause: _togglePrimaryPlayback,
+                          onSeekForward: () => _seekRelative(10),
+                          onSeekToFraction: _seekToFraction,
+                        ),
+                        const SizedBox(height: 18),
+                        const SizedBox(height: 32),
+                      ],
+                    ),
                   ),
-                SingleChildScrollView(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: horizontalPadding,
-                    vertical: 20.0,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(height: 8),
-                      _MainHeader(
-                        onOpenSavedSongs: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const SavedVoiceSongsScreen(),
-                            ),
-                          );
-                        },
-                        onOpenHostParty: _openHostParty,
-                      ),
-                      const SizedBox(height: 18),
-                      _SearchConsoleCard(
-                        lyricController: _lyricController,
-                        isLoading: _isLoading,
-                        isListening: _isListening,
-                        isSpeaking: _tts.isSpeaking,
-                        isQuotaSavingMode: _isQuotaSavingMode,
-                        recentLines: _recentLines,
-                        onSearch: _onSearch,
-                        onToggleSpeak: _toggleSpeakLine,
-                        onToggleListen: () {
-                          if (_isListening) {
-                            _stopListening();
-                          } else {
-                            _startListening();
-                          }
-                        },
-                        onToggleQuotaMode:
-                            (value) =>
-                                setState(() => _isQuotaSavingMode = value),
-                        onOpenJoinParty: _openJoinParty,
-                        onOpenHostParty: _openHostParty,
-                        onSelectRecentLine: (line) {
-                          _lyricController.text = line;
-                          _lyricController.selection = TextSelection.collapsed(
-                            offset: line.length,
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      _TurntablePlayerCard(
-                        controller: _ytController,
-                        nowPlaying: _nowPlaying,
-                        savedCount: _recentLines.length,
-                        volume: _playerVolume,
-                        isLoading: _isLoading,
-                        onSeekBackward: () => _seekRelative(-10),
-                        onPlayPause: _togglePrimaryPlayback,
-                        onSeekForward: () => _seekRelative(10),
-                        onSeekToFraction: _seekToFraction,
-                        onVolumeChanged: _setPlayerVolume,
-                      ),
-                      const SizedBox(height: 18),
-
-                      // if (_recentSearches.isNotEmpty) ...[
-                      //   const SizedBox(height: 16),
-                      //   Row(
-                      //     children: [
-                      //       Text(
-                      //         'Recent searches',
-                      //         style: Theme.of(context)
-                      //             .textTheme
-                      //             .labelLarge
-                      //             ?.copyWith(
-                      //               color: colorScheme.onSurface,
-                      //               fontWeight: FontWeight.w600,
-                      //             ),
-                      //       ),
-                      //       const Spacer(),
-                      //       TextButton(
-                      //         onPressed: () async {
-                      //           await _suggestions?.clearRecentSearches();
-                      //           if (!mounted) return;
-                      //           setState(_syncRecentFromService);
-                      //         },
-                      //         child: const Text('Clear'),
-                      //       ),
-                      //     ],
-                      //   ),
-                      //   const SizedBox(height: 8),
-                      //   ..._recentSearches.take(6).map((s) => ListTile(
-                      //         dense: true,
-                      //         leading: Icon(
-                      //           s.success
-                      //               ? Icons.check_circle_outline
-                      //               : Icons.search_off,
-                      //           size: 20,
-                      //           color: s.success
-                      //               ? colorScheme.primary
-                      //               : colorScheme.error,
-                      //         ),
-                      //         title: Text(s.query,
-                      //             maxLines: 1,
-                      //             overflow: TextOverflow.ellipsis),
-                      //         subtitle: Text(
-                      //           s.success
-                      //               ? '${s.trackName ?? ''}${(s.artistName ?? '').isNotEmpty ? ' • ${s.artistName}' : ''} • ${_formatRecentTime(s.searchedAtMs)}'
-                      //               : 'No match • ${_formatRecentTime(s.searchedAtMs)}',
-                      //           maxLines: 1,
-                      //           overflow: TextOverflow.ellipsis,
-                      //         ),
-                      //         onTap: () {
-                      //           _lyricController.text = s.query;
-                      //           _lyricController.selection =
-                      //               TextSelection.collapsed(
-                      //                   offset: s.query.length);
-                      //         },
-                      //       )),
-                      // ],
-
-                      // if (_recentTracks.isNotEmpty) ...[
-                      //   const SizedBox(height: 16),
-                      //   Text(
-                      //     'Recent tracks',
-                      //     style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      //           color: colorScheme.onSurface,
-                      //           fontWeight: FontWeight.w600,
-                      //         ),
-                      //   ),
-                      //   const SizedBox(height: 8),
-                      //   ..._recentTracks.take(5).map((t) => ListTile(
-                      //         dense: true,
-                      //         leading: const Icon(Icons.history),
-                      //         title: Text(t.trackName,
-                      //             maxLines: 1,
-                      //             overflow: TextOverflow.ellipsis),
-                      //         subtitle: Text(t.artistName,
-                      //             maxLines: 1,
-                      //             overflow: TextOverflow.ellipsis),
-                      //         onTap: () {
-                      //           _lyricController.text = t.lyricSnippet.isNotEmpty
-                      //               ? t.lyricSnippet
-                      //               : '${t.trackNamFe} ${t.artistName}';
-                      //           _lyricController.selection =
-                      //               TextSelection.collapsed(
-                      //                   offset: _lyricController.text.length);
-                      //         },
-                      //       )),
-                      // ],
-                      const SizedBox(height: 32),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -970,25 +1036,25 @@ class _TurntablePlayerCard extends StatelessWidget {
     required this.controller,
     required this.nowPlaying,
     required this.savedCount,
-    required this.volume,
     required this.isLoading,
+    required this.isLooping,
+    required this.onToggleLoop,
     required this.onSeekBackward,
     required this.onPlayPause,
     required this.onSeekForward,
     required this.onSeekToFraction,
-    required this.onVolumeChanged,
   });
 
   final YoutubePlayerController? controller;
   final PlaybackResult? nowPlaying;
   final int savedCount;
-  final double volume;
   final bool isLoading;
+  final bool isLooping;
+  final VoidCallback onToggleLoop;
   final VoidCallback onSeekBackward;
   final VoidCallback onPlayPause;
   final VoidCallback onSeekForward;
   final ValueChanged<double> onSeekToFraction;
-  final ValueChanged<double> onVolumeChanged;
 
   static const List<double> _waveformHeights = [
     10,
@@ -1098,6 +1164,14 @@ class _TurntablePlayerCard extends StatelessWidget {
                       child: _DeckScrew(),
                     ),
                     Positioned(
+                      top: 18,
+                      left: 18,
+                      child: _DeckLoopButton(
+                        isLooping: isLooping,
+                        onPressed: controller == null ? null : onToggleLoop,
+                      ),
+                    ),
+                    Positioned(
                       left: 42,
                       top: 14,
                       bottom: 14,
@@ -1179,15 +1253,6 @@ class _TurntablePlayerCard extends StatelessWidget {
                       left: 18,
                       bottom: 22,
                       child: _DeckKnob(size: 28),
-                    ),
-                    Positioned(
-                      left: 8,
-                      top: 118,
-                      bottom: 72,
-                      child: _VolumeFader(
-                        value: volume,
-                        onChanged: onVolumeChanged,
-                      ),
                     ),
                     const Positioned(
                       right: 22,
@@ -1404,91 +1469,7 @@ class _TurntablePlayerCard extends StatelessWidget {
   }
 }
 
-class _MainHeader extends StatelessWidget {
-  const _MainHeader({
-    required this.onOpenSavedSongs,
-    required this.onOpenHostParty,
-  });
-
-  final VoidCallback onOpenSavedSongs;
-  final VoidCallback onOpenHostParty;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Expanded(
-          child: Text(
-            'Lyricqsk',
-            style: TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 30,
-              fontWeight: FontWeight.w900,
-              color: Colors.black,
-              letterSpacing: -0.8,
-            ),
-          ),
-        ),
-        _HeaderActionButton(
-          icon: Icons.library_music_rounded,
-          label: 'Downloads',
-          onTap: onOpenSavedSongs,
-        ),
-        // const SizedBox(width: 10),
-        // _HeaderActionButton(
-        //   icon: Icons.qr_code_2_rounded,
-        //   label: 'Host',
-        //   onTap: onOpenHostParty,
-        // ),
-      ],
-    );
-  }
-}
-
-class _HeaderActionButton extends StatelessWidget {
-  const _HeaderActionButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Ink(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFEDE8E0),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.black, size: 18),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: Colors.black,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SearchConsoleCard extends StatelessWidget {
+class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
     required this.lyricController,
     required this.isLoading,
@@ -1518,6 +1499,42 @@ class _SearchConsoleCard extends StatelessWidget {
   final VoidCallback onOpenJoinParty;
   final VoidCallback onOpenHostParty;
   final ValueChanged<String> onSelectRecentLine;
+
+  @override
+  State<_SearchConsoleCard> createState() => _SearchConsoleCardState();
+}
+
+class _SearchConsoleCardState extends State<_SearchConsoleCard> {
+  bool _showDropdown = false;
+  final FocusNode _focusNode = FocusNode();
+
+  List<String> get _filteredLines {
+    final query = widget.lyricController.text.trim().toLowerCase();
+    if (query.isEmpty) return widget.recentLines;
+    return widget.recentLines
+        .where((l) => l.toLowerCase().contains(query))
+        .toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(() {
+      if (_focusNode.hasFocus && widget.recentLines.isNotEmpty) {
+        setState(() => _showDropdown = true);
+      } else if (!_focusNode.hasFocus) {
+        Future.delayed(const Duration(milliseconds: 150), () {
+          if (mounted) setState(() => _showDropdown = false);
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1558,41 +1575,203 @@ class _SearchConsoleCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFFEDE8E0),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: TextField(
-              controller: lyricController,
-              maxLines: 1,
-              enabled: !isLoading,
-              style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: Colors.black,
+
+          Stack(
+            children: [
+              Column(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDE8E0),
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(22),
+                        topRight: const Radius.circular(22),
+                        bottomLeft: Radius.circular(_showDropdown ? 0 : 22),
+                        bottomRight: Radius.circular(_showDropdown ? 0 : 22),
+                      ),
+                      border: Border.all(
+                        color:
+                            widget.isListening
+                                ? const Color(0xFF11F08A)
+                                : Colors.transparent,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 16),
+                        const Icon(
+                          Icons.search_rounded,
+                          color: Color(0xFF555555),
+                          size: 20,
+                        ),
+                        Expanded(
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              textSelectionTheme: const TextSelectionThemeData(
+                                cursorColor: Colors.black,
+                                selectionColor: Color(0x4411F08A),
+                                selectionHandleColor: Colors.black,
+                              ),
+                            ),
+                            child: TextField(
+                              controller: widget.lyricController,
+                              focusNode: _focusNode,
+                              maxLines: 1,
+                              enabled: !widget.isLoading,
+                              cursorColor: Colors.black,
+                              style: const TextStyle(
+                                fontFamily: 'Inter',
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                              ),
+                              decoration: const InputDecoration(
+                                hintText: 'e.g. Hello from the other side',
+                                hintStyle: TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFFAAAAAA),
+                                ),
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                filled: true,
+                                fillColor: Colors.transparent,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 18,
+                                ),
+                              ),
+                              onSubmitted: (_) => widget.onSearch(),
+                              onChanged: (_) {
+                                if (widget.recentLines.isEmpty) return;
+                                if (!_showDropdown) {
+                                  setState(() => _showDropdown = true);
+                                } else {
+                                  setState(() {});
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: widget.onToggleListen,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            margin: const EdgeInsets.only(right: 8),
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color:
+                                  widget.isListening
+                                      ? const Color(0xFF11F08A)
+                                      : const Color(0xFFD8D4CC),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              widget.isListening
+                                  ? Icons.mic_rounded
+                                  : Icons.mic_none_rounded,
+                              color:
+                                  widget.isListening
+                                      ? Colors.black
+                                      : const Color(0xFF555555),
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  if (_showDropdown && _filteredLines.isNotEmpty)
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEDE8E0),
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(22),
+                          bottomRight: Radius.circular(22),
+                        ),
+                        border: Border.all(
+                          color: const Color(0xFFD8D4CC),
+                          width: 1,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(22),
+                          bottomRight: Radius.circular(22),
+                        ),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          shrinkWrap: true,
+                          itemCount: _filteredLines.length,
+                          separatorBuilder:
+                              (_, __) => const Divider(
+                                height: 1,
+                                indent: 16,
+                                endIndent: 16,
+                                color: Color(0xFFC8C4BC),
+                              ),
+                          itemBuilder: (_, i) {
+                            final line = _filteredLines[i];
+                            return InkWell(
+                              onTap: () {
+                                widget.onSelectRecentLine(line);
+                                setState(() => _showDropdown = false);
+                                _focusNode.unfocus();
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 12,
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.history_rounded,
+                                      size: 16,
+                                      color: Color(0xFF888888),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        line,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              decoration: const InputDecoration(
-                hintText: 'e.g. Hello from the other side',
-                border: InputBorder.none,
-                prefixIcon: Icon(Icons.search_rounded, color: Colors.black),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 18,
-                ),
-              ),
-              onSubmitted: (_) => onSearch(),
-            ),
+            ],
           ),
+
           const SizedBox(height: 14),
+
           Row(
             children: [
               Expanded(
                 child: SizedBox(
                   height: 54,
                   child: FilledButton.icon(
-                    onPressed: isLoading ? null : onSearch,
+                    onPressed: widget.isLoading ? null : widget.onSearch,
                     style: FilledButton.styleFrom(
                       backgroundColor: Colors.black,
                       foregroundColor: Colors.white,
@@ -1601,7 +1780,7 @@ class _SearchConsoleCard extends StatelessWidget {
                       ),
                     ),
                     icon:
-                        isLoading
+                        widget.isLoading
                             ? const SizedBox(
                               width: 18,
                               height: 18,
@@ -1613,104 +1792,66 @@ class _SearchConsoleCard extends StatelessWidget {
                               ),
                             )
                             : const Icon(Icons.play_arrow_rounded),
-                    label: Text(isLoading ? 'Finding...' : 'Find & play'),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              const SizedBox(width: 10),
-              _HeaderActionButton(
-                icon: isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
-                label: 'Mic',
-                onTap: onToggleListen,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              // Expanded(
-              //   child: _SoftRouteButton(
-              //     icon: Icons.person_add_alt_1_rounded,
-              //     label: 'Join party',
-              //     onTap: onOpenJoinParty,
-              //   ),
-              // ),
-              // const SizedBox(width: 10),
-              // Expanded(
-              //   child: _SoftRouteButton(
-              //     icon: Icons.qr_code_2_rounded,
-              //     label: 'Host queue',
-              //     onTap: onOpenHostParty,
-              //   ),
-              // ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEDE8E0),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isQuotaSavingMode
-                      ? Icons.eco_rounded
-                      : Icons.cloud_queue_rounded,
-                  color: Colors.black,
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Quota-saving mode',
-                    style: TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.black,
+                    label: Text(
+                      widget.isLoading ? 'Finding…' : 'Find & play',
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
                     ),
                   ),
                 ),
-                Switch(value: isQuotaSavingMode, onChanged: onToggleQuotaMode),
-              ],
-            ),
-          ),
-          if (recentLines.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            const Text(
-              'Recent lines',
-              style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF666666),
               ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children:
-                  recentLines.take(8).map((line) {
-                    return ActionChip(
-                      backgroundColor: const Color(0xFFEDE8E0),
-                      side: BorderSide.none,
-                      label: Text(
-                        line.length > 34 ? '${line.substring(0, 34)}…' : line,
-                        style: const TextStyle(
+
+              const SizedBox(width: 10),
+
+              GestureDetector(
+                onTap:
+                    () => widget.onToggleQuotaMode(!widget.isQuotaSavingMode),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  height: 54,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color:
+                        widget.isQuotaSavingMode
+                            ? const Color(0xFF141414)
+                            : const Color(0xFFEDE8E0),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        widget.isQuotaSavingMode
+                            ? Icons.eco_rounded
+                            : Icons.cloud_queue_rounded,
+                        size: 20,
+                        color:
+                            widget.isQuotaSavingMode
+                                ? const Color(0xFF11F08A)
+                                : const Color(0xFF555555),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Eco',
+                        style: TextStyle(
                           fontFamily: 'Inter',
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color:
+                              widget.isQuotaSavingMode
+                                  ? Colors.white
+                                  : const Color(0xFF555555),
                         ),
                       ),
-                      onPressed: () => onSelectRecentLine(line),
-                    );
-                  }).toList(),
-            ),
-          ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1757,52 +1898,46 @@ class _DeckKnob extends StatelessWidget {
   }
 }
 
-class _VolumeFader extends StatelessWidget {
-  const _VolumeFader({required this.value, required this.onChanged});
+class _DeckLoopButton extends StatelessWidget {
+  const _DeckLoopButton({required this.isLooping, required this.onPressed});
 
-  final double value;
-  final ValueChanged<double> onChanged;
+  final bool isLooping;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 34,
-      child: Column(
-        children: [
-          const Icon(
-            Icons.volume_up_rounded,
-            size: 18,
-            color: Color(0xFF4A4A4A),
-          ),
-          const SizedBox(height: 6),
-          Expanded(
-            child: RotatedBox(
-              quarterTurns: 3,
-              child: SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 4,
-                  activeTrackColor: const Color(0xFF1A1A1A),
-                  inactiveTrackColor: const Color(0xFFE7E7E7),
-                  thumbColor: const Color(0xFFBEBEBE),
-                  overlayColor: Colors.transparent,
-                  thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 8,
-                  ),
-                ),
-                child: Slider(value: value, onChanged: onChanged),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color:
+                isLooping ? const Color(0xFF161616) : const Color(0xFFD7D7D7),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color:
+                  isLooping ? const Color(0xFF11F08A) : const Color(0xFF8A8A8A),
+              width: 1.3,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 8,
+                offset: Offset(0, 3),
               ),
-            ),
+            ],
           ),
-          Text(
-            '${(value * 100).round()}',
-            style: const TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF4A4A4A),
-            ),
+          child: Icon(
+            isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+            size: 20,
+            color:
+                isLooping ? const Color(0xFF11F08A) : const Color(0xFF4E4E4E),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1821,7 +1956,7 @@ class _ToneArm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final angle = isPlaying ? (0.46 + (progress * 0.42)) : 0.26;
+    final angle = isPlaying ? (0.2 + (progress * 0.22)) : -0.15;
     return SizedBox(
       width: 110,
       height: 190,

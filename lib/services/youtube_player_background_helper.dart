@@ -13,6 +13,7 @@ class YouTubePlayerBackgroundHelper {
     required String videoId,
     int startSeconds = 0,
     bool autoPlay = true,
+    bool loop = false,
   }) {
     final resolvedVideoId = YoutubePlayer.convertUrlToId(videoId) ?? videoId;
     final safeStartSeconds = startSeconds < 0 ? 0 : startSeconds;
@@ -24,6 +25,7 @@ class YouTubePlayerBackgroundHelper {
         mute: false,
         enableCaption: true,
         useHybridComposition: true,
+        loop: loop,
       ),
     );
   }

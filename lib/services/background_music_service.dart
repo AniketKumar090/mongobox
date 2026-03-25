@@ -22,8 +22,8 @@ class BackgroundMusicService {
   BackgroundMusicService({
     JamendoService? jamendoService,
     SoundCloudService? soundCloudService,
-  })  : _jamendoService = jamendoService ?? JamendoService(),
-        _soundCloudService = soundCloudService ?? SoundCloudService();
+  }) : _jamendoService = jamendoService ?? JamendoService(),
+       _soundCloudService = soundCloudService ?? SoundCloudService();
 
   final JamendoService _jamendoService;
   final SoundCloudService _soundCloudService;
@@ -45,14 +45,18 @@ class BackgroundMusicService {
 
     for (final query in queries) {
       final qLower = query.toLowerCase();
-      final requireInstrumental = qLower.contains('instrumental') ||
+      final requireInstrumental =
+          qLower.contains('instrumental') ||
           qLower.contains('karaoke') ||
           qLower.contains('backing') ||
           qLower.contains('beat');
 
       // ── SoundCloud first ─────────────────────────────────────────────────
       try {
-        final scTracks = await _soundCloudService.searchTracks(query, limit: 10);
+        final scTracks = await _soundCloudService.searchTracks(
+          query,
+          limit: 10,
+        );
         for (final track in scTracks) {
           if (requireInstrumental) {
             final tLower = track.title.toLowerCase();
@@ -65,10 +69,11 @@ class BackgroundMusicService {
             ].any(tLower.contains);
             if (!hits) continue;
           }
-          final streamUrl = await _soundCloudService.getBestStreamUrl(track.id);
-          if (streamUrl == null || streamUrl.isEmpty) continue;
+          final streamSources = await _soundCloudService
+              .getPlayableStreamSources(track.id);
+          if (streamSources.isEmpty) continue;
           return BackgroundMusicTrack(
-            sourceUrl: streamUrl,
+            sourceUrl: streamSources.first.url,
             label: '${track.title} • ${track.userName}',
           );
         }
@@ -80,18 +85,19 @@ class BackgroundMusicService {
       try {
         final jamTracks = await _jamendoService.searchTracks(query, limit: 10);
         if (jamTracks.isNotEmpty) {
-          final candidates = requireInstrumental
-              ? jamTracks.where((t) {
-                  final tLower = t.name.toLowerCase();
-                  return [
-                    'instrumental',
-                    'karaoke',
-                    'backing',
-                    'beat',
-                    'instrumental version',
-                  ].any(tLower.contains);
-                }).toList()
-              : jamTracks;
+          final candidates =
+              requireInstrumental
+                  ? jamTracks.where((t) {
+                    final tLower = t.name.toLowerCase();
+                    return [
+                      'instrumental',
+                      'karaoke',
+                      'backing',
+                      'beat',
+                      'instrumental version',
+                    ].any(tLower.contains);
+                  }).toList()
+                  : jamTracks;
           if (candidates.isEmpty) continue;
           final track = candidates.first;
           return BackgroundMusicTrack(
@@ -120,14 +126,19 @@ class BackgroundMusicService {
     final cleanLang = _normalize(language);
     final cleanTrack = _normalize(referenceTrackTitle);
     final cleanArtist = _normalize(referenceArtistName);
-    final refNoPunct = cleanTrack.replaceAll(RegExp(r'[^a-z0-9\s]'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final refNoPunct =
+        cleanTrack
+            .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
 
     // Genre may be slash-separated, e.g. "Bollywood / Romantic"
-    final genreParts = cleanGenre
-        .split(RegExp(r'[/,&–-]+'))
-        .map(_normalize)
-        .where((p) => p.isNotEmpty)
-        .toList();
+    final genreParts =
+        cleanGenre
+            .split(RegExp(r'[/,&–-]+'))
+            .map(_normalize)
+            .where((p) => p.isNotEmpty)
+            .toList();
 
     final queries = <String>[
       // ── Tier 1: reference song (most specific) ───────────────────────────
@@ -145,8 +156,7 @@ class BackgroundMusicService {
         '$cleanTrack karaoke instrumental',
         '$cleanTrack backing track',
       ],
-      if (cleanArtist.isNotEmpty)
-        '$cleanArtist instrumental',
+      if (cleanArtist.isNotEmpty) '$cleanArtist instrumental',
       if (cleanArtist.isNotEmpty && cleanGenre.isNotEmpty)
         '$cleanArtist $cleanGenre instrumental',
 
@@ -155,14 +165,12 @@ class BackgroundMusicService {
         '$cleanLang $cleanGenre instrumental',
       if (cleanLang == 'hindi' && cleanGenre.isNotEmpty)
         'bollywood $cleanGenre instrumental',
-      if (cleanLang == 'hindi')
-        'bollywood instrumental',
+      if (cleanLang == 'hindi') 'bollywood instrumental',
 
       // ── Tier 3: mood + genre ─────────────────────────────────────────────
       if (cleanMood.isNotEmpty && cleanGenre.isNotEmpty)
         '$cleanMood $cleanGenre instrumental',
-      if (cleanGenre.isNotEmpty)
-        '$cleanGenre instrumental',
+      if (cleanGenre.isNotEmpty) '$cleanGenre instrumental',
 
       // ── Tier 4: genre sub-parts ──────────────────────────────────────────
       for (final part in genreParts) ...[
@@ -173,8 +181,7 @@ class BackgroundMusicService {
       // ── Tier 5: mood only (broadest) ─────────────────────────────────────
       if (cleanLang.isNotEmpty && cleanMood.isNotEmpty)
         '$cleanLang $cleanMood instrumental',
-      if (cleanMood.isNotEmpty)
-        '$cleanMood instrumental beat',
+      if (cleanMood.isNotEmpty) '$cleanMood instrumental beat',
     ];
 
     // De-duplicate while preserving order
