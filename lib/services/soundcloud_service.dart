@@ -43,6 +43,16 @@ class SoundCloudService {
     'Accept': '*/*',
   };
 
+  bool _isValidStreamUrl(String? url) {
+    final trimmed = url?.trim() ?? '';
+    if (trimmed.isEmpty) return false;
+
+    final uri = Uri.tryParse(trimmed);
+    return uri != null &&
+        uri.isAbsolute &&
+        (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
   Future<String?> _getAccessToken({bool forceRefresh = false}) async {
     final clientId = EnvConfig.soundcloudClientId;
     final clientSecret = EnvConfig.soundcloudClientSecret;
@@ -226,7 +236,12 @@ class SoundCloudService {
 
       void addSource(String? url, {required bool withHeaders}) {
         final trimmed = url?.trim() ?? '';
-        if (trimmed.isEmpty) return;
+        if (!_isValidStreamUrl(trimmed)) {
+          if (trimmed.isNotEmpty) {
+            debugPrint('SoundCloud skipped invalid stream URL: $url');
+          }
+          return;
+        }
         final key = '$trimmed|$withHeaders';
         if (!seen.add(key)) return;
         sources.add(

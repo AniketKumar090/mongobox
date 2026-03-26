@@ -1,8 +1,6 @@
 // Mobile Lyric Play: single-line input (text + speech), play from that line.
-
 import 'dart:async';
 import 'dart:math' as math;
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -34,7 +32,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   final _playbackService = PlaybackServiceMobile();
   final _quotaMonitor = YouTubeQuotaMonitor();
   final _lightweightService = LightweightSearchService();
-
   YoutubePlayerController? _ytController;
   PlaybackResult? _nowPlaying;
   bool _isLoading = false;
@@ -45,15 +42,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   bool _isHandlingLoopRestart = false;
   bool _backgroundMirrorFailed = false;
   bool _foregroundAudioSuppressedForBackground = false;
+  bool _isRestoringForeground = false;
   Duration _backgroundSyncPosition = Duration.zero;
-
-  // Track the actual start position for looping
   Duration _loopStartPosition = Duration.zero;
 
-  /// 0–1 on the in-app scale (1 = "full", i.e. current system volume at init).
   double _playerVolume = 1.0;
-
-  /// Snapshot of system volume when the screen initialized; app 100% maps here.
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
 
@@ -64,11 +57,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   LocalSuggestionsService? _suggestions;
   List<String> _recentLines = [];
   List<RecentTrack> _recentTracks = [];
-
   final SpeechToText _speech = SpeechToText();
   final TtsService _tts = TtsService();
   final SoundCloudService _soundcloud = SoundCloudService();
-
   bool _isBackgroundAudioLoading = false;
   bool _appIsInBackground = false;
   int _backgroundMirrorRequestId = 0;
@@ -95,6 +86,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           c.value.isPlaying ||
           c.value.playerState == PlayerState.playing ||
           c.value.playerState == PlayerState.buffering;
+
       if (_wasPlayingBeforeBackground) {
         _suppressForegroundPlaybackForBackground();
         _autoStartBackgroundMirror(++_backgroundMirrorRequestId);
@@ -104,6 +96,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
     _appIsInBackground = false;
     _backgroundMirrorRequestId++;
+
     if (state == AppLifecycleState.resumed && _wasPlayingBeforeBackground) {
       _restoreForegroundPlayback();
     }
@@ -114,6 +107,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     if (controller == null || _foregroundAudioSuppressedForBackground) return;
 
     _backgroundSyncPosition = controller.value.position;
+    debugPrint(
+        '[Background] Saved YouTube position: ${_backgroundSyncPosition.inSeconds}s');
+
     _foregroundAudioSuppressedForBackground = true;
     try {
       controller.mute();
@@ -123,32 +119,88 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
   void _restoreForegroundPlayback() {
     _wasPlayingBeforeBackground = false;
+    _isRestoringForeground = true;
+
     try {
       _ytController?.mute();
+      _ytController?.pause();
     } catch (_) {}
-    unawaited(_restoreForegroundPlaybackAsync());
+
+    _restoreForegroundPlaybackAsync().whenComplete(() {
+      _isRestoringForeground = false;
+    });
   }
 
   Future<void> _restoreForegroundPlaybackAsync() async {
     final mirroredPosition = BackgroundAudioPlayerService.instance.position;
-    await BackgroundAudioPlayerService.instance.hardStopAndReset();
-    await Future<void>.delayed(const Duration(milliseconds: 80));
+    debugPrint(
+        '[Resume] Background player position: ${mirroredPosition.inSeconds}s');
 
-    if (!mounted) return;
+    final stoppedPosition =
+        await BackgroundAudioPlayerService.instance.hardStopAndReset();
+
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+
+    if (!mounted) {
+      _isRestoringForeground = false;
+      return;
+    }
 
     final controller = _ytController;
     if (controller == null) {
       _foregroundAudioSuppressedForBackground = false;
       _backgroundSyncPosition = Duration.zero;
+      _isRestoringForeground = false;
+      return;
+    }
+
+    await _waitForYoutubeControllerReady(controller);
+    if (!mounted || controller != _ytController) {
+      _isRestoringForeground = false;
       return;
     }
 
     final resumePosition =
-        mirroredPosition > Duration.zero
+        stoppedPosition > Duration.zero
+            ? stoppedPosition
+            : mirroredPosition > Duration.zero
             ? mirroredPosition
             : _backgroundSyncPosition;
 
-    await _resumeForegroundController(controller, resumePosition);
+    debugPrint('[Resume] Seeking YouTube to: ${resumePosition.inSeconds}s');
+
+    if (resumePosition > Duration.zero) {
+      controller.seekTo(resumePosition);
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    if (!mounted) {
+      _isRestoringForeground = false;
+      return;
+    }
+
+    try {
+      controller.unMute();
+      controller.play();
+    } catch (_) {}
+
+    _applyEmbeddedPlayerVolume();
+
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+
+    if (!controller.value.isPlaying &&
+        controller.value.playerState != PlayerState.playing &&
+        controller.value.playerState != PlayerState.buffering) {
+      if (resumePosition > Duration.zero) {
+        controller.seekTo(resumePosition);
+      }
+      try {
+        controller.unMute();
+        controller.play();
+      } catch (_) {}
+      _applyEmbeddedPlayerVolume();
+    }
 
     _foregroundAudioSuppressedForBackground = false;
     _backgroundSyncPosition = Duration.zero;
@@ -167,38 +219,34 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     }
   }
 
-  Future<void> _resumeForegroundController(
+  Future<void> _waitForYoutubeControllerReady(
     YoutubePlayerController controller,
-    Duration resumePosition,
   ) async {
-    if (resumePosition > Duration.zero) {
-      controller.seekTo(resumePosition);
-    }
+    if (controller.value.isReady) return;
 
-    await Future.delayed(const Duration(milliseconds: 180));
-    if (!mounted) return;
+    final completer = Completer<void>();
+    late VoidCallback listener;
+    Timer? timeout;
+
+    listener = () {
+      if (controller.value.isReady && !completer.isCompleted) {
+        completer.complete();
+      }
+    };
+
+    controller.addListener(listener);
+    timeout = Timer(const Duration(seconds: 5), () {
+      if (!completer.isCompleted) {
+        debugPrint('[YouTube] Controller readiness wait timed out');
+        completer.complete();
+      }
+    });
 
     try {
-      controller.unMute();
-      controller.play();
-    } catch (_) {}
-    _applyEmbeddedPlayerVolume();
-
-    await Future.delayed(const Duration(milliseconds: 320));
-    if (!mounted) return;
-
-    final state = controller.value.playerState;
-    if (!controller.value.isPlaying &&
-        state != PlayerState.playing &&
-        state != PlayerState.buffering) {
-      if (resumePosition > Duration.zero) {
-        controller.seekTo(resumePosition);
-      }
-      try {
-        controller.unMute();
-        controller.play();
-      } catch (_) {}
-      _applyEmbeddedPlayerVolume();
+      await completer.future;
+    } finally {
+      timeout.cancel();
+      controller.removeListener(listener);
     }
   }
 
@@ -218,9 +266,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     if (now.trackName.trim().isEmpty || now.artistName.trim().isEmpty) return;
 
     setState(() => _isBackgroundAudioLoading = true);
+
     if (auto) {
       _backgroundMirrorFailed = false;
     }
+
     try {
       await BackgroundAudioPlayerService.instance.setLoopEnabled(_isLooping);
 
@@ -234,7 +284,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           requestId != _backgroundMirrorRequestId) {
         return;
       }
+
       if (sc != null && sc.confidence >= 0.62) {
+        debugPrint(
+            '[Background] Starting SoundCloud stream at: ${_backgroundSyncPosition.inSeconds}s');
+
         await BackgroundAudioPlayerService.instance.playSources(
           sc.streamSources
               .map((source) => (url: source.url, headers: source.headers))
@@ -253,16 +307,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           ),
         );
       }
-
       if (auto) {
         _backgroundMirrorFailed = true;
       }
     } catch (e) {
       if (!mounted) return;
       if (!auto) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Background audio failed: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Background audio failed: $e')));
       }
       if (auto) {
         _backgroundMirrorFailed = true;
@@ -341,10 +393,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     super.dispose();
   }
 
-  // ── FIX 1: Always dispose and recreate the controller in two frames ─────────
-  // This prevents the "recreating_view / view id: '0'" PlatformException on iOS
-  // that occurs when .load() is called on a controller whose UiKitView has been
-  // torn down or is mid-recreation.
   void _playResult(PlaybackResult result) {
     if (BackgroundAudioPlayerService.instance.isPlaying) {
       unawaited(BackgroundAudioPlayerService.instance.stop());
@@ -352,38 +400,30 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     _backgroundSyncPosition = Duration.zero;
     _foregroundAudioSuppressedForBackground = false;
 
-    // Store the actual start position for looping
     _loopStartPosition = Duration(
       seconds: result.startTimeSeconds < 0 ? 0 : result.startTimeSeconds,
     );
 
-    // Capture and nullify old controller reference before setState.
     final oldController = _ytController;
     _ytController = null;
 
-    // Frame 1: Remove the YoutubePlayer widget from the tree so the platform
-    // view is fully deregistered before a new one is created.
     setState(() {
       _nowPlaying = result;
-      // _ytController is already null, forcing the Positioned widget to be
-      // absent this frame, which causes UiKitView to be unmounted cleanly.
     });
 
-    // Dispose old controller after the widget has been removed from the tree.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       oldController?.dispose();
     });
 
-    // Frame 2: Create the new controller now that the old platform view is gone.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final controller =
           YouTubePlayerBackgroundHelper.createBackgroundAwareController(
-            videoId: result.videoId,
-            startSeconds: result.startTimeSeconds,
-            autoPlay: true,
-            loop: false, // We'll handle loop manually
-          );
+        videoId: result.videoId,
+        startSeconds: result.startTimeSeconds,
+        autoPlay: true,
+        loop: false,
+      );
       _attachLoopListener(controller);
       setState(() => _ytController = controller);
       _applyEmbeddedPlayerVolume();
@@ -433,9 +473,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     );
     if (!mounted) return;
     if (!available) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Speech not available')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Speech not available')));
       return;
     }
     await _speech.listen(
@@ -467,11 +506,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       );
       return;
     }
-
     if (_isListening) {
       await _stopListening();
     }
-
     try {
       if (_tts.isSpeaking) {
         await _tts.stop();
@@ -480,9 +517,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('TTS error: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('TTS error: $e')));
     }
   }
 
@@ -518,9 +554,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.errorContainer.withValues(alpha: 0.3),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .errorContainer
+                      .withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -543,12 +580,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                     const SizedBox(height: 8),
                     Text(
                       '$hours hours $minutes minutes',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.headlineSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.error,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: Theme.of(context).colorScheme.error,
+                                fontWeight: FontWeight.bold,
+                              ),
                     ),
                     Text(
                       'Resets at: ${status.nextResetTime.hour.toString().padLeft(2, '0')}:${status.nextResetTime.minute.toString().padLeft(2, '0')}',
@@ -561,8 +597,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
               Text(
                 'Usage: ${status.percentageUsed.toStringAsFixed(1)}% of daily quota',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ],
           ),
@@ -579,37 +615,36 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
   Future<void> _onSearch() async {
     if (_isLoading) return;
-
     final query = _lyricController.text.trim();
     if (query.isEmpty) return;
 
     setState(() => _isLoading = true);
+
     try {
       List<PlaybackOption> options;
-
       if (_isQuotaSavingMode) {
         final lightweightResults = await _lightweightService
             .searchSingleLineLyrics(query, cacheOnly: true);
-        options =
-            lightweightResults
-                .map(
-                  (result) => PlaybackOption(
-                    result: PlaybackResult(
-                      videoId: result.videoId,
-                      startTimeSeconds: result.startTimeSeconds,
-                      trackName: result.trackName,
-                      artistName: result.artistName,
-                    ),
-                    confidence: result.confidence,
-                    source: result.source,
-                  ),
-                )
-                .toList();
+        options = lightweightResults
+            .map(
+              (result) => PlaybackOption(
+                result: PlaybackResult(
+                  videoId: result.videoId,
+                  startTimeSeconds: result.startTimeSeconds,
+                  trackName: result.trackName,
+                  artistName: result.artistName,
+                ),
+                confidence: result.confidence,
+                source: result.source,
+              ),
+            )
+            .toList();
       } else {
         options = await _playbackService.resolveCandidates(query, limit: 5);
       }
 
       if (!mounted) return;
+
       if (options.isEmpty) {
         await _suggestions?.addRecentSearch(
           RecentSearch(
@@ -621,13 +656,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         if (!mounted) return;
         setState(_syncRecentFromService);
 
-        final message =
-            _isQuotaSavingMode
-                ? 'No song found in cache. Try normal mode or different lyrics.'
-                : 'No song found for this line. Try another.';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(message)));
+        final message = _isQuotaSavingMode
+            ? 'No song found in cache. Try normal mode or different lyrics.'
+            : 'No song found for this line. Try another.';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
         return;
       }
 
@@ -641,9 +674,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           _showQuotaExceededDialog();
           setState(() => _isQuotaSavingMode = true);
         } else {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Error: $e')));
         }
       }
     } finally {
@@ -652,34 +684,31 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   }
 
   void _openHostParty() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const HostPartyScreen()));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const HostPartyScreen()));
   }
 
   void _openJoinParty() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder:
-            (_) => JoinViaLinkScreen(onBack: () => Navigator.of(context).pop()),
+        builder: (_) =>
+            JoinViaLinkScreen(onBack: () => Navigator.of(context).pop()),
       ),
     );
   }
 
   void _openGenerateSong() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => GenerateSongScreen()));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => GenerateSongScreen()));
   }
 
   void _togglePrimaryPlayback() {
-    if (_isLoading) return;
+    if (_isLoading || _isRestoringForeground) return;
     final controller = _ytController;
     if (controller == null) {
       _onSearch();
       return;
     }
-
     if (controller.value.isPlaying) {
       controller.pause();
     } else {
@@ -690,59 +719,55 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void _toggleLooping() {
     final next = !_isLooping;
     setState(() => _isLooping = next);
-
     if (BackgroundAudioPlayerService.instance.isPlaying) {
       unawaited(BackgroundAudioPlayerService.instance.setLoopEnabled(next));
     }
   }
 
-  // FIXED: Loop restarts from 0:00 to play the full song including intro
-void _attachLoopListener(YoutubePlayerController controller) {
-  controller.addListener(() {
-    if (!_isLooping || _isHandlingLoopRestart) return;
-    final playerState = controller.value.playerState;
-    
-    if (playerState == PlayerState.ended) {
-      _isHandlingLoopRestart = true;
-      Future.microtask(() async {
-        try {
-          // FIX: Use load() with correct parameter 'startAt' (in seconds)
-          final videoId = controller.metadata.videoId;
-          if (videoId.isNotEmpty) {
-            controller.load(
-              videoId,
-              startAt: 0, // Play from beginning on loop (parameter is 'startAt', not 'startSeconds')
-            );
-          } else {
-            // Fallback if videoId is missing
-            controller.seekTo(Duration.zero);
-          }
-          
-          await Future.delayed(const Duration(milliseconds: 100));
-          if (!mounted) {
+  void _attachLoopListener(YoutubePlayerController controller) {
+    controller.addListener(() {
+      if (!_isLooping || _isHandlingLoopRestart || _isRestoringForeground) {
+        return;
+      }
+
+      final playerState = controller.value.playerState;
+      if (playerState == PlayerState.ended) {
+        _isHandlingLoopRestart = true;
+        Future.microtask(() async {
+          try {
+            if (_isRestoringForeground) return;
+            final videoId = controller.metadata.videoId;
+            if (videoId.isNotEmpty) {
+              controller.load(
+                videoId,
+                startAt: 0,
+              );
+            } else {
+              controller.seekTo(Duration.zero);
+            }
+            await Future.delayed(const Duration(milliseconds: 100));
+            if (!mounted || _isRestoringForeground) {
+              _isHandlingLoopRestart = false;
+              return;
+            }
+            controller.play();
+            await Future.delayed(const Duration(milliseconds: 50));
+            if (_isRestoringForeground) return;
+            _applyEmbeddedPlayerVolume();
+            await Future.delayed(const Duration(milliseconds: 100));
+          } catch (e) {
+            debugPrint('Loop restart error: $e');
+          } finally {
             _isHandlingLoopRestart = false;
-            return;
           }
-          
-          controller.play();
-          await Future.delayed(const Duration(milliseconds: 50));
-          _applyEmbeddedPlayerVolume();
-          
-          await Future.delayed(const Duration(milliseconds: 100));
-        } catch (e) {
-          debugPrint('Loop restart error: $e');
-        } finally {
-          _isHandlingLoopRestart = false;
-        }
-      });
-    }
-  });
-}
+        });
+      }
+    });
+  }
 
   void _seekRelative(int seconds) {
     final controller = _ytController;
     if (controller == null) return;
-
     final currentMs = controller.value.position.inMilliseconds;
     final durationMs = controller.metadata.duration.inMilliseconds;
     final targetMs = currentMs + (seconds * 1000);
@@ -751,17 +776,13 @@ void _attachLoopListener(YoutubePlayerController controller) {
     controller.seekTo(Duration(milliseconds: clampedMs));
   }
 
-  // ── FIX 3: Guard against calling setVolume/mute before the player is ready ──
   void _applyEmbeddedPlayerVolume() {
     final controller = _ytController;
     if (controller == null) return;
-    // Do not call volume methods if the player is not yet ready; the onReady
-    // callback will call this method again once it is safe to do so.
     if (!controller.value.isReady) return;
-
     final volume = (_playerVolume * 100).round().clamp(0, 100);
     controller.setVolume(volume);
-    if (volume == 0) {
+    if (_isRestoringForeground || volume == 0) {
       controller.mute();
     } else {
       controller.unMute();
@@ -771,10 +792,8 @@ void _attachLoopListener(YoutubePlayerController controller) {
   void _seekToFraction(double fraction) {
     final controller = _ytController;
     if (controller == null) return;
-
     final duration = controller.metadata.duration;
     if (duration <= Duration.zero) return;
-
     final clamped = fraction.clamp(0.0, 1.0);
     controller.seekTo(
       Duration(milliseconds: (duration.inMilliseconds * clamped).round()),
@@ -785,7 +804,6 @@ void _attachLoopListener(YoutubePlayerController controller) {
     List<PlaybackOption> options,
   ) async {
     if (options.length == 1) return options.first;
-
     return showModalBottomSheet<PlaybackOption>(
       context: context,
       isScrollControlled: true,
@@ -852,82 +870,99 @@ void _attachLoopListener(YoutubePlayerController controller) {
 
   @override
   Widget build(BuildContext context) {
+    // Respect system insets (notch, home indicator, status bar) on all devices
+    final mediaQuery = MediaQuery.of(context);
+    final bottomInset = mediaQuery.viewInsets.bottom;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F3EF),
+      // ── Generate My Song bottom bar – matches card UI ─────────────────────
       bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-        child: InkWell(
-          onTap: _openGenerateSong,
-          borderRadius: BorderRadius.circular(22),
-          child: Ink(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [Color(0xFF11F08A), Color(0xFF5BB4FF)],
+        // minimum padding handles home indicator on iPhone & Android nav bar
+        minimum: EdgeInsets.fromLTRB(20, 8, 20, math.max(16, bottomInset > 0 ? 8 : 0)),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _openGenerateSong,
+            borderRadius: BorderRadius.circular(22),
+            child: Ink(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F4EE),
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x14000000),
+                    blurRadius: 18,
+                    offset: Offset(0, 10),
+                  ),
+                ],
               ),
-              borderRadius: BorderRadius.circular(22),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x3312D9A1),
-                  blurRadius: 20,
-                  offset: Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(18),
+              child: Row(
+                children: [
+                  // Dark icon box with green accent – mirrors the turntable card style
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111111),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: Color(0xFF11F08A),
+                      size: 24,
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: Colors.white,
-                    size: 30,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Generate My Song',
-                        style: TextStyle(
-                          fontFamily: 'Inter',
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Generate My Song',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.black,
+                            height: 1.1,
+                          ),
                         ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'AI writes original lyrics based on your style and mood',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: 'Inter',
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                        SizedBox(height: 3),
+                        Text(
+                          'AI writes original lyrics based on your style and mood',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF666666),
+                            height: 1.3,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                const Icon(
-                  Icons.chevron_right_rounded,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  // Small chevron chip
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDE8E0),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: Colors.black,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -939,12 +974,10 @@ void _attachLoopListener(YoutubePlayerController controller) {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final isCompact = constraints.maxWidth < 600;
-              final horizontalPadding = isCompact ? 24.0 : 48.0;
+              final horizontalPadding = isCompact ? 20.0 : 48.0;
+
               return Stack(
                 children: [
-                  // ── FIX 2: ValueKey tied to videoId forces Flutter to fully
-                  // replace the YoutubePlayer widget (and its UiKitView) when
-                  // the video changes, avoiding platform-view id collisions. ──
                   if (_ytController != null)
                     Positioned(
                       left: horizontalPadding,
@@ -968,9 +1001,13 @@ void _attachLoopListener(YoutubePlayerController controller) {
                       ),
                     ),
                   SingleChildScrollView(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: horizontalPadding,
-                      vertical: 20.0,
+                    // Extra bottom padding so last card never hides behind the
+                    // Generate My Song bar on any device
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      16.0,
+                      horizontalPadding,
+                      16.0,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -992,9 +1029,8 @@ void _attachLoopListener(YoutubePlayerController controller) {
                               _startListening();
                             }
                           },
-                          onToggleQuotaMode:
-                              (value) =>
-                                  setState(() => _isQuotaSavingMode = value),
+                          onToggleQuotaMode: (value) =>
+                              setState(() => _isQuotaSavingMode = value),
                           onOpenJoinParty: _openJoinParty,
                           onOpenHostParty: _openHostParty,
                           onSelectRecentLine: (line) {
@@ -1003,7 +1039,7 @@ void _attachLoopListener(YoutubePlayerController controller) {
                                 TextSelection.collapsed(offset: line.length);
                           },
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 16),
                         _TurntablePlayerCard(
                           controller: _ytController,
                           nowPlaying: _nowPlaying,
@@ -1016,8 +1052,7 @@ void _attachLoopListener(YoutubePlayerController controller) {
                           onSeekForward: () => _seekRelative(10),
                           onSeekToFraction: _seekToFraction,
                         ),
-                        const SizedBox(height: 18),
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 16),
                       ],
                     ),
                   ),
@@ -1030,6 +1065,10 @@ void _attachLoopListener(YoutubePlayerController controller) {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _TurntablePlayerCard
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _TurntablePlayerCard extends StatelessWidget {
   const _TurntablePlayerCard({
@@ -1057,76 +1096,39 @@ class _TurntablePlayerCard extends StatelessWidget {
   final ValueChanged<double> onSeekToFraction;
 
   static const List<double> _waveformHeights = [
-    10,
-    14,
-    18,
-    24,
-    16,
-    12,
-    20,
-    28,
-    18,
-    12,
-    26,
-    14,
-    22,
-    32,
-    16,
-    12,
-    18,
-    26,
-    30,
-    16,
-    12,
-    18,
-    22,
-    26,
-    18,
-    14,
-    16,
-    20,
-    14,
-    12,
+    10, 14, 18, 24, 16, 12, 20, 28, 18, 12, 26, 14, 22, 32, 16, 12, 18, 26, 30,
+    16, 12, 18, 22, 26, 18, 14, 16, 20, 14, 12
   ];
 
   @override
   Widget build(BuildContext context) {
     final musicController = controller;
     final basePosition =
-        musicController?.value.position ??
-        const Duration(minutes: 1, seconds: 54);
-    final baseDuration =
-        musicController != null &&
-                musicController.metadata.duration > Duration.zero
-            ? musicController.metadata.duration
-            : const Duration(minutes: 3, seconds: 35);
-    final progress =
-        baseDuration.inMilliseconds <= 0
-            ? 0.54
-            : (basePosition.inMilliseconds / baseDuration.inMilliseconds).clamp(
-              0.0,
-              1.0,
-            );
+        musicController?.value.position ?? const Duration(minutes: 1, seconds: 54);
+    final baseDuration = musicController != null &&
+            musicController.metadata.duration > Duration.zero
+        ? musicController.metadata.duration
+        : const Duration(minutes: 3, seconds: 35);
+    final progress = baseDuration.inMilliseconds <= 0
+        ? 0.54
+        : (basePosition.inMilliseconds / baseDuration.inMilliseconds)
+            .clamp(0.0, 1.0);
+
     final title = nowPlaying?.trackName ?? 'The Suffering';
     final artist = nowPlaying?.artistName ?? 'Classic';
     final badgeText = nowPlaying == null ? 'Classic' : 'Now Playing';
     final trackCount = savedCount.toString().padLeft(3, '0');
 
     Widget buildCard(bool isPlaying, Duration position, Duration duration) {
-      final playbackProgress =
-          duration.inMilliseconds <= 0
-              ? progress
-              : (position.inMilliseconds / duration.inMilliseconds).clamp(
-                0.0,
-                1.0,
-              );
-      final rotationAngle =
-          duration.inMilliseconds == 0
-              ? 0.0
-              : (position.inMilliseconds / 12000) * math.pi * 2;
+      final playbackProgress = duration.inMilliseconds <= 0
+          ? progress
+          : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+      final rotationAngle = duration.inMilliseconds == 0
+          ? 0.0
+          : (position.inMilliseconds / 12000) * math.pi * 2;
 
       return Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: const Color(0xFFF5F3EF),
           borderRadius: BorderRadius.circular(28),
@@ -1134,145 +1136,151 @@ class _TurntablePlayerCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SizedBox(
-              height: 328,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFFD7D7D7),
-                      Color(0xFFB7B7B7),
-                      Color(0xFF9C9C9C),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(26),
-                  border: Border.all(
-                    color: const Color(0xFF858585),
-                    width: 1.3,
-                  ),
-                ),
-                child: Stack(
-                  children: [
-                    const Positioned(top: 10, left: 10, child: _DeckScrew()),
-                    const Positioned(top: 10, right: 10, child: _DeckScrew()),
-                    const Positioned(bottom: 10, left: 10, child: _DeckScrew()),
-                    const Positioned(
-                      bottom: 10,
-                      right: 10,
-                      child: _DeckScrew(),
-                    ),
-                    Positioned(
-                      top: 18,
-                      left: 18,
-                      child: _DeckLoopButton(
-                        isLooping: isLooping,
-                        onPressed: controller == null ? null : onToggleLoop,
+            // Turntable deck – constrained height so it never overflows on small screens
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final deckSize = math.min(constraints.maxWidth, 320.0);
+                return SizedBox(
+                  height: deckSize,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFFD7D7D7),
+                          Color(0xFFB7B7B7),
+                          Color(0xFF9C9C9C),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(26),
+                      border: Border.all(
+                        color: const Color(0xFF858585),
+                        width: 1.3,
                       ),
                     ),
-                    Positioned(
-                      left: 42,
-                      top: 14,
-                      bottom: 14,
-                      right: 42,
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: DecoratedBox(
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Color(0x33000000),
-                                  blurRadius: 18,
-                                  offset: Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Transform.rotate(
-                                  angle: rotationAngle,
-                                  child: const CustomPaint(
-                                    painter: _VinylPainter(),
-                                    child: SizedBox.expand(),
-                                  ),
-                                ),
-                                Container(
-                                  width: 86,
-                                  height: 86,
-                                  decoration: const BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Color(0xFFF9F8F4),
-                                        Color(0xFFDBD8D2),
-                                      ],
+                    child: Stack(
+                      children: [
+                        const Positioned(top: 10, left: 10, child: _DeckScrew()),
+                        const Positioned(top: 10, right: 10, child: _DeckScrew()),
+                        const Positioned(bottom: 10, left: 10, child: _DeckScrew()),
+                        const Positioned(bottom: 10, right: 10, child: _DeckScrew()),
+                        Positioned(
+                          top: 18,
+                          left: 18,
+                          child: _DeckLoopButton(
+                            isLooping: isLooping,
+                            onPressed: controller == null ? null : onToggleLoop,
+                          ),
+                        ),
+                        Positioned(
+                          left: 42,
+                          top: 14,
+                          bottom: 14,
+                          right: 42,
+                          child: Center(
+                            child: AspectRatio(
+                              aspectRatio: 1,
+                              child: DecoratedBox(
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Color(0x33000000),
+                                      blurRadius: 18,
+                                      offset: Offset(0, 10),
                                     ),
-                                  ),
+                                  ],
+                                ),
+                                child: Stack(
                                   alignment: Alignment.center,
-                                  child: Text(
-                                    artist.length > 12
-                                        ? artist.substring(0, 12).toUpperCase()
-                                        : artist.toUpperCase(),
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontFamily: 'Inter',
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF6B6B6B),
-                                      letterSpacing: 0.6,
+                                  children: [
+                                    Transform.rotate(
+                                      angle: rotationAngle,
+                                      child: const CustomPaint(
+                                        painter: _VinylPainter(),
+                                        child: SizedBox.expand(),
+                                      ),
                                     ),
-                                  ),
+                                    Container(
+                                      width: 86,
+                                      height: 86,
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Color(0xFFF9F8F4),
+                                            Color(0xFFDBD8D2),
+                                          ],
+                                        ),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        artist.length > 12
+                                            ? artist
+                                                .substring(0, 12)
+                                                .toUpperCase()
+                                            : artist.toUpperCase(),
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF6B6B6B),
+                                          letterSpacing: 0.6,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    const Positioned(
-                      left: 52,
-                      bottom: 78,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Color(0xFFBB1D2D),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(color: Color(0x66BB1D2D), blurRadius: 8),
-                          ],
+                        const Positioned(
+                          left: 52,
+                          bottom: 78,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color(0xFFBB1D2D),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                    color: Color(0x66BB1D2D), blurRadius: 8),
+                              ],
+                            ),
+                            child: SizedBox(width: 6, height: 6),
+                          ),
                         ),
-                        child: SizedBox(width: 6, height: 6),
-                      ),
+                        const Positioned(
+                          left: 18,
+                          bottom: 22,
+                          child: _DeckKnob(size: 28),
+                        ),
+                        const Positioned(
+                          right: 22,
+                          bottom: 20,
+                          child: _DeckKnob(size: 24),
+                        ),
+                        Positioned(
+                          right: 12,
+                          top: 20,
+                          child: _ToneArm(
+                            isPlaying: isPlaying,
+                            progress: playbackProgress,
+                            onTap: isLoading ? null : onPlayPause,
+                          ),
+                        ),
+                      ],
                     ),
-                    const Positioned(
-                      left: 18,
-                      bottom: 22,
-                      child: _DeckKnob(size: 28),
-                    ),
-                    const Positioned(
-                      right: 22,
-                      bottom: 20,
-                      child: _DeckKnob(size: 24),
-                    ),
-                    Positioned(
-                      right: 12,
-                      top: 20,
-                      child: _ToneArm(
-                        isPlaying: isPlaying,
-                        progress: playbackProgress,
-                        onTap: isLoading ? null : onPlayPause,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
+            // Track title + saved count badge
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1283,37 +1291,35 @@ class _TurntablePlayerCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontFamily: 'Inter',
-                      fontSize: 28,
+                      fontSize: 26,
                       fontWeight: FontWeight.w900,
                       color: Colors.black,
                       height: 1.05,
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
                     color: const Color(0xFFEDEAE4),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(
                         Icons.add_box_rounded,
-                        size: 18,
+                        size: 16,
                         color: Colors.black,
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 5),
                       Text(
                         trackCount,
                         style: const TextStyle(
                           fontFamily: 'Inter',
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w800,
                           color: Colors.black,
                         ),
@@ -1323,23 +1329,22 @@ class _TurntablePlayerCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
+            // Badge + artist
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: const Color(0xFF171717),
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     badgeText,
                     style: const TextStyle(
                       fontFamily: 'Inter',
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
                     ),
@@ -1353,7 +1358,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontFamily: 'Inter',
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF575757),
                     ),
@@ -1361,20 +1366,21 @@ class _TurntablePlayerCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
+            // Progress row
             Row(
               children: [
                 Text(
                   _formatClock(position),
                   style: const TextStyle(
                     fontFamily: 'Inter',
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF1C1C1C),
                     letterSpacing: 0.2,
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: _ScrubbableWaveform(
                     heights: _waveformHeights,
@@ -1382,12 +1388,12 @@ class _TurntablePlayerCard extends StatelessWidget {
                     onSeek: controller == null ? null : onSeekToFraction,
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Text(
                   _formatClock(duration),
                   style: const TextStyle(
                     fontFamily: 'Inter',
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF1C1C1C),
                     letterSpacing: 0.2,
@@ -1395,7 +1401,8 @@ class _TurntablePlayerCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
+            // Transport controls
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -1404,33 +1411,30 @@ class _TurntablePlayerCard extends StatelessWidget {
                   onPressed: controller == null ? null : onSeekBackward,
                 ),
                 Container(
-                  width: 72,
-                  height: 72,
+                  width: 68,
+                  height: 68,
                   decoration: const BoxDecoration(
                     shape: BoxShape.circle,
                     color: Colors.black,
                   ),
                   child: IconButton(
                     onPressed: isLoading ? null : onPlayPause,
-                    icon:
-                        isLoading
-                            ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.4,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
-                                ),
+                    icon: isLoading
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
                               ),
-                            )
-                            : Icon(
-                              isPlaying
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow,
-                              color: Colors.white,
-                              size: 36,
                             ),
+                          )
+                        : Icon(
+                            isPlaying ? Icons.pause_rounded : Icons.play_arrow,
+                            color: Colors.white,
+                            size: 32,
+                          ),
                   ),
                 ),
                 _PlayerIconButton(
@@ -1452,10 +1456,9 @@ class _TurntablePlayerCard extends StatelessWidget {
       animation: musicController,
       builder: (context, _) {
         final position = musicController.value.position;
-        final duration =
-            musicController.metadata.duration > Duration.zero
-                ? musicController.metadata.duration
-                : baseDuration;
+        final duration = musicController.metadata.duration > Duration.zero
+            ? musicController.metadata.duration
+            : baseDuration;
         return buildCard(musicController.value.isPlaying, position, duration);
       },
     );
@@ -1468,6 +1471,10 @@ class _TurntablePlayerCard extends StatelessWidget {
     return '$minutes:$seconds';
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _SearchConsoleCard
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
@@ -1539,7 +1546,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFFF8F4EE),
         borderRadius: BorderRadius.circular(28),
@@ -1558,196 +1565,204 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
             'Search with one lyric line',
             style: TextStyle(
               fontFamily: 'Inter',
-              fontSize: 24,
+              fontSize: 22,
               fontWeight: FontWeight.w900,
               color: Colors.black,
               height: 1.05,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           const Text(
             'Drop a lyric, use voice, and jump straight into playback.',
             style: TextStyle(
               fontFamily: 'Inter',
-              fontSize: 14,
+              fontSize: 13,
               fontWeight: FontWeight.w600,
               color: Color(0xFF666666),
             ),
           ),
-          const SizedBox(height: 14),
-
-          Stack(
+          const SizedBox(height: 12),
+          // ── Search input + recent history dropdown ───────────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Column(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEDE8E0),
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(22),
-                        topRight: const Radius.circular(22),
-                        bottomLeft: Radius.circular(_showDropdown ? 0 : 22),
-                        bottomRight: Radius.circular(_showDropdown ? 0 : 22),
-                      ),
-                      border: Border.all(
-                        color:
-                            widget.isListening
-                                ? const Color(0xFF11F08A)
-                                : Colors.transparent,
-                        width: 1.5,
+              // Input row
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDE8E0),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(22),
+                    topRight: const Radius.circular(22),
+                    bottomLeft:
+                        Radius.circular(_showDropdown && _filteredLines.isNotEmpty ? 0 : 22),
+                    bottomRight:
+                        Radius.circular(_showDropdown && _filteredLines.isNotEmpty ? 0 : 22),
+                  ),
+                  border: Border.all(
+                    color: widget.isListening
+                        ? const Color(0xFF11F08A)
+                        : Colors.transparent,
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 14),
+                    const Icon(
+                      Icons.search_rounded,
+                      color: Color(0xFF555555),
+                      size: 20,
+                    ),
+                    Expanded(
+                      child: Theme(
+                        data: Theme.of(context).copyWith(
+                          textSelectionTheme: const TextSelectionThemeData(
+                            cursorColor: Colors.black,
+                            selectionColor: Color(0x4411F08A),
+                            selectionHandleColor: Colors.black,
+                          ),
+                        ),
+                        child: TextField(
+                          controller: widget.lyricController,
+                          focusNode: _focusNode,
+                          maxLines: 1,
+                          enabled: !widget.isLoading,
+                          cursorColor: Colors.black,
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black,
+                          ),
+                          decoration: const InputDecoration(
+                            hintText: 'e.g. Hello from the other side',
+                            hintStyle: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFFAAAAAA),
+                            ),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            filled: true,
+                            fillColor: Colors.transparent,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 16,
+                            ),
+                          ),
+                          onSubmitted: (_) => widget.onSearch(),
+                          onChanged: (_) {
+                            if (widget.recentLines.isEmpty) return;
+                            if (!_showDropdown) {
+                              setState(() => _showDropdown = true);
+                            } else {
+                              setState(() {});
+                            }
+                          },
+                        ),
                       ),
                     ),
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 16),
-                        const Icon(
-                          Icons.search_rounded,
-                          color: Color(0xFF555555),
-                          size: 20,
+                    GestureDetector(
+                      onTap: widget.onToggleListen,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.only(right: 8),
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: widget.isListening
+                              ? const Color(0xFF11F08A)
+                              : const Color(0xFFD8D4CC),
+                          shape: BoxShape.circle,
                         ),
-                        Expanded(
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              textSelectionTheme: const TextSelectionThemeData(
-                                cursorColor: Colors.black,
-                                selectionColor: Color(0x4411F08A),
-                                selectionHandleColor: Colors.black,
-                              ),
-                            ),
-                            child: TextField(
-                              controller: widget.lyricController,
-                              focusNode: _focusNode,
-                              maxLines: 1,
-                              enabled: !widget.isLoading,
-                              cursorColor: Colors.black,
-                              style: const TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.black,
-                              ),
-                              decoration: const InputDecoration(
-                                hintText: 'e.g. Hello from the other side',
-                                hintStyle: TextStyle(
-                                  fontFamily: 'Inter',
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                  color: Color(0xFFAAAAAA),
-                                ),
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                filled: true,
-                                fillColor: Colors.transparent,
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 18,
-                                ),
-                              ),
-                              onSubmitted: (_) => widget.onSearch(),
-                              onChanged: (_) {
-                                if (widget.recentLines.isEmpty) return;
-                                if (!_showDropdown) {
-                                  setState(() => _showDropdown = true);
-                                } else {
-                                  setState(() {});
-                                }
-                              },
-                            ),
-                          ),
+                        child: Icon(
+                          widget.isListening
+                              ? Icons.mic_rounded
+                              : Icons.mic_none_rounded,
+                          color: widget.isListening
+                              ? Colors.black
+                              : const Color(0xFF555555),
+                          size: 18,
                         ),
-                        GestureDetector(
-                          onTap: widget.onToggleListen,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            margin: const EdgeInsets.only(right: 8),
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color:
-                                  widget.isListening
-                                      ? const Color(0xFF11F08A)
-                                      : const Color(0xFFD8D4CC),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              widget.isListening
-                                  ? Icons.mic_rounded
-                                  : Icons.mic_none_rounded,
-                              color:
-                                  widget.isListening
-                                      ? Colors.black
-                                      : const Color(0xFF555555),
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                      ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // ── Recent history dropdown – all items as tall card horizontal slider ──
+              if (_showDropdown && _filteredLines.isNotEmpty)
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEDE8E0),
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(22),
+                      bottomRight: Radius.circular(22),
+                    ),
+                    border: Border.all(
+                      color: const Color(0xFFD8D4CC),
+                      width: 1,
                     ),
                   ),
-
-                  if (_showDropdown && _filteredLines.isNotEmpty)
-                    Container(
-                      constraints: const BoxConstraints(maxHeight: 220),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEDE8E0),
-                        borderRadius: const BorderRadius.only(
-                          bottomLeft: Radius.circular(22),
-                          bottomRight: Radius.circular(22),
-                        ),
-                        border: Border.all(
-                          color: const Color(0xFFD8D4CC),
-                          width: 1,
-                        ),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: const BorderRadius.only(
-                          bottomLeft: Radius.circular(22),
-                          bottomRight: Radius.circular(22),
-                        ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(22),
+                      bottomRight: Radius.circular(22),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                      child: SizedBox(
+                        height: 55,
                         child: ListView.separated(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          shrinkWrap: true,
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
                           itemCount: _filteredLines.length,
-                          separatorBuilder:
-                              (_, __) => const Divider(
-                                height: 1,
-                                indent: 16,
-                                endIndent: 16,
-                                color: Color(0xFFC8C4BC),
-                              ),
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 8),
                           itemBuilder: (_, i) {
                             final line = _filteredLines[i];
-                            return InkWell(
+                            return GestureDetector(
                               onTap: () {
                                 widget.onSelectRecentLine(line);
                                 setState(() => _showDropdown = false);
                                 _focusNode.unfocus();
                               },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 18,
-                                  vertical: 12,
+                              child: Container(
+                                constraints: const BoxConstraints(
+                                  minWidth: 100,
+                                  maxWidth: 100,
                                 ),
-                                child: Row(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFD8D4CC),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.center,
                                   children: [
-                                    const Icon(
-                                      Icons.history_rounded,
-                                      size: 16,
-                                      color: Color(0xFF888888),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        line,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontFamily: 'Inter',
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black,
-                                        ),
+                                    // const Icon(
+                                    //   Icons.history_rounded,
+                                    //   size: 13,
+                                    //   color: Color(0xFF888888),
+                                    // ),
+                                    // const SizedBox(height: 5),
+                                    Text(
+                                      line,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black,
+                                        height: 1.3,
                                       ),
                                     ),
                                   ],
@@ -1758,67 +1773,61 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                         ),
                       ),
                     ),
-                ],
-              ),
+                  ),
+                ),
             ],
           ),
-
-          const SizedBox(height: 14),
-
+          const SizedBox(height: 12),
+          // ── Find & play + Eco ────────────────────────────────────────────
           Row(
             children: [
               Expanded(
                 child: SizedBox(
-                  height: 54,
+                  height: 52,
                   child: FilledButton.icon(
                     onPressed: widget.isLoading ? null : widget.onSearch,
                     style: FilledButton.styleFrom(
                       backgroundColor: Colors.black,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(18),
                       ),
                     ),
-                    icon:
-                        widget.isLoading
-                            ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
-                                ),
-                              ),
-                            )
-                            : const Icon(Icons.play_arrow_rounded),
+                    icon: widget.isLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white),
+                            ),
+                          )
+                        : const Icon(Icons.play_arrow_rounded),
                     label: Text(
                       widget.isLoading ? 'Finding…' : 'Find & play',
                       style: const TextStyle(
                         fontFamily: 'Inter',
                         fontWeight: FontWeight.w800,
-                        fontSize: 15,
+                        fontSize: 14,
                       ),
                     ),
                   ),
                 ),
               ),
-
               const SizedBox(width: 10),
-
               GestureDetector(
-                onTap:
-                    () => widget.onToggleQuotaMode(!widget.isQuotaSavingMode),
+                onTap: () =>
+                    widget.onToggleQuotaMode(!widget.isQuotaSavingMode),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 220),
-                  height: 54,
+                  height: 52,
                   padding: const EdgeInsets.symmetric(horizontal: 14),
                   decoration: BoxDecoration(
-                    color:
-                        widget.isQuotaSavingMode
-                            ? const Color(0xFF141414)
-                            : const Color(0xFFEDE8E0),
-                    borderRadius: BorderRadius.circular(20),
+                    color: widget.isQuotaSavingMode
+                        ? const Color(0xFF141414)
+                        : const Color(0xFFEDE8E0),
+                    borderRadius: BorderRadius.circular(18),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1827,11 +1836,10 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                         widget.isQuotaSavingMode
                             ? Icons.eco_rounded
                             : Icons.cloud_queue_rounded,
-                        size: 20,
-                        color:
-                            widget.isQuotaSavingMode
-                                ? const Color(0xFF11F08A)
-                                : const Color(0xFF555555),
+                        size: 18,
+                        color: widget.isQuotaSavingMode
+                            ? const Color(0xFF11F08A)
+                            : const Color(0xFF555555),
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -1840,10 +1848,9 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                           fontFamily: 'Inter',
                           fontSize: 13,
                           fontWeight: FontWeight.w800,
-                          color:
-                              widget.isQuotaSavingMode
-                                  ? Colors.white
-                                  : const Color(0xFF555555),
+                          color: widget.isQuotaSavingMode
+                              ? Colors.white
+                              : const Color(0xFF555555),
                         ),
                       ),
                     ],
@@ -1857,6 +1864,10 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small reusable deck widgets
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _DeckScrew extends StatelessWidget {
   const _DeckScrew();
@@ -1877,7 +1888,6 @@ class _DeckScrew extends StatelessWidget {
 
 class _DeckKnob extends StatelessWidget {
   const _DeckKnob({required this.size});
-
   final double size;
 
   @override
@@ -1900,7 +1910,6 @@ class _DeckKnob extends StatelessWidget {
 
 class _DeckLoopButton extends StatelessWidget {
   const _DeckLoopButton({required this.isLooping, required this.onPressed});
-
   final bool isLooping;
   final VoidCallback? onPressed;
 
@@ -1910,14 +1919,14 @@ class _DeckLoopButton extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: Ink(
-          width: 42,
-          height: 42,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
             color:
                 isLooping ? const Color(0xFF161616) : const Color(0xFFD7D7D7),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color:
                   isLooping ? const Color(0xFF11F08A) : const Color(0xFF8A8A8A),
@@ -1933,9 +1942,8 @@ class _DeckLoopButton extends StatelessWidget {
           ),
           child: Icon(
             isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded,
-            size: 20,
-            color:
-                isLooping ? const Color(0xFF11F08A) : const Color(0xFF4E4E4E),
+            size: 18,
+            color: isLooping ? const Color(0xFF11F08A) : const Color(0xFF4E4E4E),
           ),
         ),
       ),
@@ -1949,7 +1957,6 @@ class _ToneArm extends StatelessWidget {
     required this.progress,
     required this.onTap,
   });
-
   final bool isPlaying;
   final double progress;
   final VoidCallback? onTap;
@@ -2051,7 +2058,8 @@ class _ToneArm extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: const Color(0xFFB3B3B3),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF707070), width: 1),
+                  border:
+                      Border.all(color: const Color(0xFF707070), width: 1),
                 ),
               ),
             ),
@@ -2068,7 +2076,6 @@ class _ScrubbableWaveform extends StatelessWidget {
     required this.progress,
     required this.onSeek,
   });
-
   final List<double> heights;
   final double progress;
   final ValueChanged<double>? onSeek;
@@ -2104,10 +2111,9 @@ class _ScrubbableWaveform extends StatelessWidget {
                       width: 4,
                       height: heights[index],
                       decoration: BoxDecoration(
-                        color:
-                            isActive
-                                ? const Color(0xFF141414)
-                                : const Color(0xFFD6D6D6),
+                        color: isActive
+                            ? const Color(0xFF141414)
+                            : const Color(0xFFD6D6D6),
                         borderRadius: BorderRadius.circular(99),
                       ),
                     ),
@@ -2124,7 +2130,6 @@ class _ScrubbableWaveform extends StatelessWidget {
 
 class _PlayerIconButton extends StatelessWidget {
   const _PlayerIconButton({required this.icon, required this.onPressed});
-
   final IconData icon;
   final VoidCallback? onPressed;
 
@@ -2162,11 +2167,10 @@ class _VinylPainter extends CustomPainter {
         ).createShader(Rect.fromCircle(center: center, radius: radius)),
     );
 
-    final groovePaint =
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..color = const Color(0x14FFFFFF)
-          ..strokeWidth = 1;
+    final groovePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = const Color(0x14FFFFFF)
+      ..strokeWidth = 1;
     for (double groove = radius * 0.35; groove < radius * 0.96; groove += 9) {
       canvas.drawCircle(center, groove, groovePaint);
     }

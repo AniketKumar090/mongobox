@@ -7,7 +7,8 @@ import 'package:record/record.dart';
 import '../models/song_reference.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
-import '../theme/pixel_theme.dart';
+import '../theme/lyric_screen_theme.dart';
+import '../widgets/flow_step_header.dart';
 import 'voice_song_screen.dart';
 
 class VoiceSampleScreen extends StatefulWidget {
@@ -41,7 +42,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
   final _bpmService = BpmService();
-  late ScrollController _scrollController; // ← Changed to late
+  late ScrollController _scrollController;
   String? _recordedPath;
   bool _isRecording = false;
   bool _isPlaying = false;
@@ -72,19 +73,21 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    _scrollController = ScrollController(); // ← Initialize here
+    _scrollController = ScrollController();
     _prepareRecordingAssets();
     _fetchReferenceTempo();
   }
 
   void _prepareRecordingAssets() {
-    final isHindiDominant =
-        widget.dominantLanguage.toLowerCase().contains('hindi');
-    _targetLyrics = isHindiDominant
-        ? (widget.hinglishLyrics?.isNotEmpty == true
-            ? widget.hinglishLyrics!
-            : widget.hindiLyrics)
-        : widget.englishLyrics;
+    final isHindiDominant = widget.dominantLanguage.toLowerCase().contains(
+      'hindi',
+    );
+    _targetLyrics =
+        isHindiDominant
+            ? (widget.hinglishLyrics?.isNotEmpty == true
+                ? widget.hinglishLyrics!
+                : widget.hindiLyrics)
+            : widget.englishLyrics;
     _preparedFlowPromptLines = _extractFlowPromptLines(
       _targetLyrics,
       isHindiDominant: isHindiDominant,
@@ -97,23 +100,23 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     if (ref == null) return;
     if (ref.trackName.trim().isNotEmpty && ref.artistName.trim().isNotEmpty) {
       try {
-        final matches =
-            await _lyricsService.search('${ref.trackName} ${ref.artistName}');
+        final matches = await _lyricsService.search(
+          '${ref.trackName} ${ref.artistName}',
+        );
         for (final m in matches.take(5)) {
           final synced = m.syncedLyrics;
           if (synced != null && synced.isNotEmpty) {
-            final ms =
-                LyricsService.computeMsPerWordFromSyncedLyrics(synced);
+            final ms = LyricsService.computeMsPerWordFromSyncedLyrics(synced);
             if (ms != null && mounted) {
               setState(() => _referenceMsPerWord = ms);
               return;
             }
           }
           final full = await _lyricsService.getById(m.id);
-          if (full?.syncedLyrics != null &&
-              full!.syncedLyrics!.isNotEmpty) {
+          if (full?.syncedLyrics != null && full!.syncedLyrics!.isNotEmpty) {
             final ms = LyricsService.computeMsPerWordFromSyncedLyrics(
-                full.syncedLyrics);
+              full.syncedLyrics,
+            );
             if (ms != null && mounted) {
               setState(() => _referenceMsPerWord = ms);
               return;
@@ -141,40 +144,42 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _recorder.dispose();
     _player.dispose();
     _waveController.dispose();
-    _scrollController.dispose(); // ← Dispose controller
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _showMicSettingsDialog() async {
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          '[ MIC PERMISSION ]',
-          style: PixelFonts.pressStart(size: 7, color: PixelColors.green),
-        ),
-        content: Text(
-          'Microphone is off.\nEnable it in Settings.',
-          style: PixelFonts.vt323(size: 16, color: PixelColors.textPrimary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('CANCEL',
-                style: PixelFonts.pressStart(
-                    size: 6, color: PixelColors.muted)),
+      builder:
+          (ctx) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(
+                  Icons.mic_off_rounded,
+                  color: Theme.of(ctx).colorScheme.error,
+                ),
+                const SizedBox(width: 8),
+                const Text('Microphone Permission Required'),
+              ],
+            ),
+            content: const Text(
+              'Microphone access is disabled. Please enable it in Settings to continue recording.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  Navigator.of(ctx).pop();
+                  await openAppSettings();
+                },
+                child: const Text('Open Settings'),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              await openAppSettings();
-            },
-            child: Text('OPEN SETTINGS',
-                style: PixelFonts.pressStart(
-                    size: 6, color: PixelColors.green)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -220,9 +225,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         setState(() => _recordingSeconds++);
         if (_recordingSeconds >= 30) _stopRecording();
       });
-      final targetWpm = _referenceMsPerWord != null
-          ? (60000 / _referenceMsPerWord!).round().clamp(90, 150)
-          : _fallbackTargetWpm;
+      final targetWpm =
+          _referenceMsPerWord != null
+              ? (60000 / _referenceMsPerWord!).round().clamp(90, 150)
+              : _fallbackTargetWpm;
       _waveController.repeat(reverse: true);
       _startKaraokeGuide(
         flowLines: _preparedFlowPromptLines,
@@ -276,10 +282,9 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg, style: PixelFonts.vt323(size: 14)),
+        content: Text(msg),
         behavior: SnackBarBehavior.floating,
-        shape:
-            const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -290,12 +295,11 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     'verse 2',
     'verse 3',
     'bridge',
-    'pre-chorus'
+    'pre-chorus',
   ];
   static const _englishSections = ['chorus', 'outro', 'hook'];
 
-  List<String> _linesForDominantLanguage(
-      String lyrics, bool isHindiDominant) {
+  List<String> _linesForDominantLanguage(String lyrics, bool isHindiDominant) {
     final raw = lyrics.split('\n');
     final result = <String>[];
     var currentSection = '';
@@ -307,9 +311,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
         continue;
       }
-      final sectionMatch = isHindiDominant
-          ? _hindiSections.any((s) => currentSection.contains(s))
-          : _englishSections.any((s) => currentSection.contains(s));
+      final sectionMatch =
+          isHindiDominant
+              ? _hindiSections.any((s) => currentSection.contains(s))
+              : _englishSections.any((s) => currentSection.contains(s));
       if (sectionMatch && trimmed.length >= 8) result.add(trimmed);
     }
     if (result.isEmpty) return _cleanSingableLines(lyrics);
@@ -320,18 +325,22 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     return lyrics
         .split('\n')
         .map((l) => l.trim())
-        .where((l) =>
-            l.isNotEmpty &&
-            !l.startsWith('[') &&
-            l
-                .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
-                .length >=
-                8)
+        .where(
+          (l) =>
+              l.isNotEmpty &&
+              !l.startsWith('[') &&
+              l
+                      .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
+                      .length >=
+                  8,
+        )
         .toList();
   }
 
-  List<String> _extractFlowPromptLines(String lyrics,
-      {required bool isHindiDominant}) {
+  List<String> _extractFlowPromptLines(
+    String lyrics, {
+    required bool isHindiDominant,
+  }) {
     final filtered = _linesForDominantLanguage(lyrics, isHindiDominant);
     if (filtered.isEmpty) return const [];
     filtered.sort((a, b) => a.length.compareTo(b.length));
@@ -354,7 +363,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       }
       final sectionMatch =
           _hindiSections.any((s) => currentSection.contains(s)) ||
-              _englishSections.any((s) => currentSection.contains(s));
+          _englishSections.any((s) => currentSection.contains(s));
       if (sectionMatch && trimmed.length >= 8) {
         result.add(trimmed);
       } else if (trimmed.length >= 5) {
@@ -369,8 +378,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     if (lines.isEmpty) return 105;
     final words = lines
         .take(10)
-        .map((l) =>
-            l.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length)
+        .map((l) => l.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length)
         .fold<int>(0, (a, b) => a + b);
     final avgWordsPerLine = words / lines.take(10).length;
     return (avgWordsPerLine * 18).round().clamp(90, 150);
@@ -379,8 +387,10 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   List<String> _splitWords(String line) =>
       line.split(RegExp(r'\s+')).where((w) => w.trim().isNotEmpty).toList();
 
-  void _startKaraokeGuide(
-      {required List<String> flowLines, required int targetWpm}) {
+  void _startKaraokeGuide({
+    required List<String> flowLines,
+    required int targetWpm,
+  }) {
     _karaokeFlowLines = flowLines;
     _karaokeTargetWpm = targetWpm;
     _karaokeCurrentWord = -1;
@@ -404,18 +414,19 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       ..start();
     _karaokeTicker = Timer.periodic(const Duration(milliseconds: 120), (_) {
       if (!mounted || _karaokeWords.isEmpty) return;
-      final msPerWord = _referenceMsPerWord ??
+      final msPerWord =
+          _referenceMsPerWord ??
           (60000 / _karaokeTargetWpm).round().clamp(220, 900);
-      final rawIndex =
-          (_karaokeWatch.elapsedMilliseconds / msPerWord).floor();
+      final rawIndex = (_karaokeWatch.elapsedMilliseconds / msPerWord).floor();
       final safeIndex = rawIndex.clamp(0, _karaokeWords.length - 1);
       if (safeIndex == _karaokeCurrentWord) return;
       var lineIndex = 0;
       for (var i = 0; i < _karaokeLineWordStart.length; i++) {
         final start = _karaokeLineWordStart[i];
-        final next = i + 1 < _karaokeLineWordStart.length
-            ? _karaokeLineWordStart[i + 1]
-            : _karaokeWords.length;
+        final next =
+            i + 1 < _karaokeLineWordStart.length
+                ? _karaokeLineWordStart[i + 1]
+                : _karaokeWords.length;
         if (safeIndex >= start && safeIndex < next) {
           lineIndex = i;
           break;
@@ -424,12 +435,14 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       setState(() {
         _karaokeCurrentWord = safeIndex;
         _karaokeCurrentLine = lineIndex;
-        final lineStart = lineIndex < _karaokeLineWordStart.length
-            ? _karaokeLineWordStart[lineIndex]
-            : 0;
-        final lineEnd = lineIndex + 1 < _karaokeLineWordStart.length
-            ? _karaokeLineWordStart[lineIndex + 1]
-            : _karaokeWords.length;
+        final lineStart =
+            lineIndex < _karaokeLineWordStart.length
+                ? _karaokeLineWordStart[lineIndex]
+                : 0;
+        final lineEnd =
+            lineIndex + 1 < _karaokeLineWordStart.length
+                ? _karaokeLineWordStart[lineIndex + 1]
+                : _karaokeWords.length;
         final lineWordCount = (lineEnd - lineStart).clamp(1, 9999);
         final inLine = (safeIndex - lineStart).clamp(0, lineWordCount - 1);
         _activeLineProgress = (inLine + 1) / lineWordCount;
@@ -450,9 +463,9 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     if (spokenSeconds <= 0 || flowLines.isEmpty) return '';
     final targetWords = flowLines.expand(_splitWords).length.clamp(1, 9999);
     final ratio = spokenSeconds / (targetWords * 60 / targetWpm);
-    if (ratio < 0.85) return 'TOO FAST — slow down to stay on beat.';
-    if (ratio > 1.2) return 'TOO SLOW — tighten delivery to match flow.';
-    return 'GREAT PACING — close to target flow.';
+    if (ratio < 0.85) return 'Too fast — slow down to stay on beat.';
+    if (ratio > 1.2) return 'Too slow — tighten delivery to match flow.';
+    return 'Great pacing — close to target flow.';
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -460,109 +473,157 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   // ───────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final pageTheme = lyricScreenTheme(context);
+    final cs = pageTheme.colorScheme;
+    final tt = pageTheme.textTheme;
     final hasRecording = _recordedPath != null;
     final isShort = _recordingSeconds < 5 && hasRecording;
-    final isHindiDominant =
-        widget.dominantLanguage.toLowerCase().contains('hindi');
+    final isHindiDominant = widget.dominantLanguage.toLowerCase().contains(
+      'hindi',
+    );
     final targetLyrics = _targetLyrics;
 
-    return Scaffold(
-      backgroundColor: PixelColors.bg,
-      appBar: AppBar(
-        title: Text(
-          '// RECORD VOICE //',
-          style: PixelFonts.pressStart(size: 7, color: PixelColors.green),
-        ),
-        centerTitle: true,
-        backgroundColor: PixelColors.card,
-        foregroundColor: PixelColors.green,
-        elevation: 0,
-        shape: const Border(
-          bottom: BorderSide(color: PixelColors.green, width: 2),
-        ),
-      ),
-      // ── Replace the entire body: property in your build() method with this ──────
+    return Theme(
+      data: pageTheme,
+      child: Scaffold(
+        backgroundColor: LyricScreenPalette.background,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final horizontalPadding = flowHorizontalPadding(
+                constraints.maxWidth,
+              );
+              final contentMaxWidth = flowContentMaxWidth(constraints.maxWidth);
 
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Scrollable content fills remaining space ─────────────────
-            if (hasRecording && !_isRecording)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _PixelInfoCard(
-                        songTitle: widget.songTitle,
-                        referenceSong: widget.referenceSong,
+              return Column(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      16,
+                      horizontalPadding,
+                      12,
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                        child: const FlowStepHeader(
+                          title: 'Record your voice',
+                          subtitle:
+                              'Read a short sample clearly so we can build a solid voice clone for your song.',
+                          steps: ['Song', 'Voice', 'Preview'],
+                          currentStep: 2,
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: PixelColors.card,
-                            border:
-                                Border.all(color: PixelColors.blue, width: 2),
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0xFF1A5A99),
-                                offset: Offset(3, 3),
-                                blurRadius: 0,
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.lyrics_outlined,
-                                        size: 13, color: PixelColors.blue),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'GENERATED LYRICS',
-                                      style: PixelFonts.pressStart(
-                                          size: 5, color: PixelColors.blue),
-                                    ),
-                                  ],
+                    ),
+                  ),
+                  if (hasRecording && !_isRecording)
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          0,
+                          horizontalPadding,
+                          16,
+                        ),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: contentMaxWidth,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _InfoCard(
+                                  songTitle: widget.songTitle,
+                                  referenceSong: widget.referenceSong,
+                                  cs: cs,
+                                  tt: tt,
                                 ),
-                              ),
-                              Container(
-                                height: 1,
-                                color: PixelColors.blue.withValues(alpha: 0.3),
-                              ),
-                              Expanded(
-                                child: Scrollbar(
-                                  controller: _scrollController,
-                                  thumbVisibility: true,
-                                  child: SingleChildScrollView(
-                                    controller: _scrollController,
-                                    padding: const EdgeInsets.all(12),
+                                const SizedBox(height: 16),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: cs.surface,
+                                      borderRadius: BorderRadius.circular(24),
+                                      border: Border.all(
+                                        color: cs.outline.withValues(
+                                          alpha: 0.65,
+                                        ),
+                                      ),
+                                    ),
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        ..._getAllLyricsLines(targetLyrics).map(
-                                          (line) => Padding(
-                                            padding:
-                                                const EdgeInsets.only(bottom: 6),
-                                            child: Text(
-                                              line.startsWith('[')
-                                                  ? line
-                                                  : '  $line',
-                                              style: PixelFonts.vt323(
-                                                size: line.startsWith('[')
-                                                    ? 14
-                                                    : 15,
-                                                color: line.startsWith('[')
-                                                    ? PixelColors.blue
-                                                    : PixelColors.textPrimary,
+                                        Row(
+                                          children: [
+                                            Container(
+                                              width: 36,
+                                              height: 36,
+                                              decoration: BoxDecoration(
+                                                color: cs.secondaryContainer,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Icon(
+                                                Icons.lyrics_rounded,
+                                                size: 18,
+                                                color: cs.secondary,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Text(
+                                              'Generated Lyrics',
+                                              style: tt.titleSmall?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 14),
+                                        Expanded(
+                                          child: Scrollbar(
+                                            controller: _scrollController,
+                                            thumbVisibility: true,
+                                            child: SingleChildScrollView(
+                                              controller: _scrollController,
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  ..._getAllLyricsLines(
+                                                    targetLyrics,
+                                                  ).map(
+                                                    (line) => Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                            bottom: 6,
+                                                          ),
+                                                      child: Text(
+                                                        line,
+                                                        style: tt.bodyMedium?.copyWith(
+                                                          height: 1.6,
+                                                          color:
+                                                              line.startsWith(
+                                                                    '[',
+                                                                  )
+                                                                  ? cs.onSurfaceVariant
+                                                                  : cs.onSurface,
+                                                          fontWeight:
+                                                              line.startsWith(
+                                                                    '[',
+                                                                  )
+                                                                  ? FontWeight
+                                                                      .w700
+                                                                  : FontWeight
+                                                                      .normal,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
                                             ),
                                           ),
@@ -571,362 +632,537 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // ── Info card ──────────────────────────────────────────
-                      _PixelInfoCard(
-                        songTitle: widget.songTitle,
-                        referenceSong: widget.referenceSong,
-                      ),
-                      const SizedBox(height: 16),
-                      // ── Before recording ────────────────────────────────────
-                      if (!_isRecording && !hasRecording) ...[
-                        const _HintBanner(
-                          text:
-                              'Record yourself reading the lyrics aloud (10-15 seconds)',
-                          color: PixelColors.blue,
-                        ),
-                        const SizedBox(height: 12),
-                        _SpeakingLinesDropdown(
-                          targetLyrics: targetLyrics,
-                          isHindiDominant: isHindiDominant,
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            PixelLabel('LYRICS TO RECORD:'),
-                            const Spacer(),
-                            TextButton.icon(
-                              onPressed: () {
-                                setState(
-                                    () => _showFullLyrics = !_showFullLyrics);
-                              },
-                              icon: AnimatedRotation(
-                                turns: _showFullLyrics ? 0.5 : 0,
-                                duration: const Duration(milliseconds: 200),
-                                child: const Icon(
-                                  Icons.keyboard_arrow_down,
-                                  size: 20,
-                                  color: PixelColors.blue,
-                                ),
-                              ),
-                              label: Text(
-                                _showFullLyrics ? 'HIDE' : 'SHOW',
-                                style: PixelFonts.pressStart(
-                                    size: 8, color: PixelColors.blue),
-                              ),
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                              ),
+                              ],
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut,
-                          constraints: BoxConstraints(
-                            maxHeight: _showFullLyrics ? 300 : 0,
                           ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: PixelColors.card,
-                                border: Border.all(
-                                    color: PixelColors.blue, width: 2),
-                              ),
-                              child: Scrollbar(
-                                controller: _scrollController,
-                                thumbVisibility: true,
-                                child: SingleChildScrollView(
-                                  controller: _scrollController,
-                                  padding: const EdgeInsets.all(12),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          0,
+                          horizontalPadding,
+                          16,
+                        ),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: contentMaxWidth,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _InfoCard(
+                                  songTitle: widget.songTitle,
+                                  referenceSong: widget.referenceSong,
+                                  cs: cs,
+                                  tt: tt,
+                                ),
+                                const SizedBox(height: 16),
+                                if (!_isRecording && !hasRecording) ...[
+                                  _HintBanner(
+                                    text:
+                                        'Record yourself reading the lyrics aloud for 10-15 seconds.',
+                                    color: cs.secondary,
+                                    cs: cs,
+                                    tt: tt,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _SpeakingLinesDropdown(
+                                    targetLyrics: targetLyrics,
+                                    isHindiDominant: isHindiDominant,
+                                    cs: cs,
+                                    tt: tt,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  LayoutBuilder(
+                                    builder: (context, innerConstraints) {
+                                      final compactHeader =
+                                          innerConstraints.maxWidth < 420;
+                                      return compactHeader
+                                          ? Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Lyrics to Record',
+                                                style: tt.titleSmall?.copyWith(
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              TextButton.icon(
+                                                onPressed: () {
+                                                  setState(
+                                                    () =>
+                                                        _showFullLyrics =
+                                                            !_showFullLyrics,
+                                                  );
+                                                },
+                                                icon: AnimatedRotation(
+                                                  turns:
+                                                      _showFullLyrics ? 0.5 : 0,
+                                                  duration: const Duration(
+                                                    milliseconds: 200,
+                                                  ),
+                                                  child: const Icon(
+                                                    Icons.keyboard_arrow_down,
+                                                    size: 20,
+                                                  ),
+                                                ),
+                                                label: Text(
+                                                  _showFullLyrics
+                                                      ? 'Hide'
+                                                      : 'Show',
+                                                ),
+                                                style: TextButton.styleFrom(
+                                                  foregroundColor: cs.onSurface,
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 0,
+                                                        vertical: 4,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                          : Row(
+                                            children: [
+                                              Text(
+                                                'Lyrics to Record',
+                                                style: tt.titleSmall?.copyWith(
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const Spacer(),
+                                              TextButton.icon(
+                                                onPressed: () {
+                                                  setState(
+                                                    () =>
+                                                        _showFullLyrics =
+                                                            !_showFullLyrics,
+                                                  );
+                                                },
+                                                icon: AnimatedRotation(
+                                                  turns:
+                                                      _showFullLyrics ? 0.5 : 0,
+                                                  duration: const Duration(
+                                                    milliseconds: 200,
+                                                  ),
+                                                  child: const Icon(
+                                                    Icons.keyboard_arrow_down,
+                                                    size: 20,
+                                                  ),
+                                                ),
+                                                label: Text(
+                                                  _showFullLyrics
+                                                      ? 'Hide'
+                                                      : 'Show',
+                                                ),
+                                                style: TextButton.styleFrom(
+                                                  foregroundColor: cs.onSurface,
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 4,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          );
+                                    },
+                                  ),
+                                  const SizedBox(height: 8),
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 300),
+                                    curve: Curves.easeInOut,
+                                    constraints: BoxConstraints(
+                                      maxHeight: _showFullLyrics ? 320 : 0,
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(24),
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: cs.surface,
+                                          border: Border.all(
+                                            color: cs.outline.withValues(
+                                              alpha: 0.65,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Scrollbar(
+                                          controller: _scrollController,
+                                          thumbVisibility: true,
+                                          child: SingleChildScrollView(
+                                            controller: _scrollController,
+                                            padding: const EdgeInsets.all(16),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                ..._getAllLyricsLines(
+                                                  targetLyrics,
+                                                ).map(
+                                                  (line) => Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          bottom: 6,
+                                                        ),
+                                                    child: Text(
+                                                      line,
+                                                      style: tt.bodyMedium?.copyWith(
+                                                        height: 1.6,
+                                                        color:
+                                                            line.startsWith('[')
+                                                                ? cs.onSurfaceVariant
+                                                                : cs.onSurface,
+                                                        fontWeight:
+                                                            line.startsWith('[')
+                                                                ? FontWeight
+                                                                    .w700
+                                                                : FontWeight
+                                                                    .normal,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                ],
+                                if (_isRecording) ...[
+                                  _WaveBar(
+                                    controller: _waveController,
+                                    seconds: _recordingSeconds,
+                                    cs: cs,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  if (_karaokeFlowLines.isNotEmpty) ...[
+                                    Text(
+                                      'Follow the highlighted words',
+                                      style: tt.labelLarge?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    _KaraokeBox(
+                                      flowLines: _karaokeFlowLines,
+                                      lineWordStart: _karaokeLineWordStart,
+                                      currentWord: _karaokeCurrentWord,
+                                      currentLine: _karaokeCurrentLine,
+                                      activeLineProgress: _activeLineProgress,
+                                      targetWpm: _karaokeTargetWpm,
+                                      referenceMsPerWord: _referenceMsPerWord,
+                                      splitWords: _splitWords,
+                                      cs: cs,
+                                      tt: tt,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 20),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Container(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      12,
+                      horizontalPadding,
+                      20,
+                    ),
+                    decoration: BoxDecoration(
+                      color: LyricScreenPalette.background,
+                      border: Border(
+                        top: BorderSide(
+                          color: cs.outline.withValues(alpha: 0.35),
+                        ),
+                      ),
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (hasRecording && !_isRecording) ...[
+                              if (_karaokeFlowLines.isNotEmpty) ...[
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: cs.surface,
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: cs.outline.withValues(alpha: 0.55),
+                                    ),
+                                  ),
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      ..._getAllLyricsLines(targetLyrics).map(
-                                        (line) => Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 6),
-                                          child: Text(
-                                            line.startsWith('[')
-                                                ? line
-                                                : '  $line',
-                                            style: PixelFonts.vt323(
-                                              size:
-                                                  line.startsWith('[') ? 14 : 15,
-                                              color: line.startsWith('[')
-                                                  ? PixelColors.blue
-                                                  : PixelColors.textPrimary,
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 32,
+                                            height: 32,
+                                            decoration: BoxDecoration(
+                                              color: cs.secondaryContainer,
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
                                             ),
+                                            child: Icon(
+                                              Icons.article_outlined,
+                                              size: 16,
+                                              color: cs.secondary,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Lines You Recorded',
+                                            style: tt.labelLarge?.copyWith(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      ..._karaokeFlowLines.map(
+                                        (line) => Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 6,
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '›  ',
+                                                style: tt.bodyMedium?.copyWith(
+                                                  color: cs.secondary,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                              Expanded(
+                                                child: Text(
+                                                  line,
+                                                  style: tt.bodyMedium
+                                                      ?.copyWith(
+                                                        color: cs.onSurface,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                      ],
-                      // ── During recording: Wave + Karaoke guide ─────────────
-                      if (_isRecording) ...[
-                        _PixelWaveBar(
-                          controller: _waveController,
-                          seconds: _recordingSeconds,
-                        ),
-                        const SizedBox(height: 16),
-                        if (_karaokeFlowLines.isNotEmpty) ...[
-                          Text(
-                            'Follow the highlighted words',
-                            style: PixelFonts.pressStart(
-                                size: 5, color: PixelColors.green),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 12),
-                          _KaraokeBox(
-                            flowLines: _karaokeFlowLines,
-                            lineWordStart: _karaokeLineWordStart,
-                            currentWord: _karaokeCurrentWord,
-                            currentLine: _karaokeCurrentLine,
-                            activeLineProgress: _activeLineProgress,
-                            targetWpm: _karaokeTargetWpm,
-                            referenceMsPerWord: _referenceMsPerWord,
-                            splitWords: _splitWords,
-                          ),
-                        ],
-                        const SizedBox(height: 20),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-
-            // ── Bottom panel always pinned to bottom ──────────────────────
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              color: PixelColors.bg,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // ── Post-recording section ───────────────────────────────
-                  if (hasRecording && !_isRecording) ...[
-
-                    // ── Speaking lines review card ─────────────────────────
-                    if (_karaokeFlowLines.isNotEmpty) ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: PixelColors.card,
-                          border: Border.all(color: PixelColors.green, width: 2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.article_outlined,
-                                    size: 13, color: PixelColors.green),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'LINES YOU RECORDED',
-                                  style: PixelFonts.pressStart(
-                                      size: 5, color: PixelColors.green),
-                                ),
+                                const SizedBox(height: 10),
                               ],
-                            ),
-                            const SizedBox(height: 10),
-                            ..._karaokeFlowLines.map(
-                              (line) => Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('›  ',
-                                        style: PixelFonts.vt323(
-                                            size: 15,
-                                            color: PixelColors.green)),
-                                    Expanded(
-                                      child: Text(
-                                        line,
-                                        style: PixelFonts.vt323(
-                                            size: 15,
-                                            color: PixelColors.textPrimary),
+                              if ((_paceFeedback ?? '').isNotEmpty) ...[
+                                _PaceBanner(
+                                  text: _paceFeedback!,
+                                  cs: cs,
+                                  tt: tt,
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                              LayoutBuilder(
+                                builder: (context, footerConstraints) {
+                                  final stackPlayback =
+                                      isShort &&
+                                      footerConstraints.maxWidth < 470;
+                                  final playButton = SizedBox(
+                                    width:
+                                        stackPlayback ? double.infinity : null,
+                                    child: OutlinedButton.icon(
+                                      onPressed: _playback,
+                                      icon: Icon(
+                                        _isPlaying
+                                            ? Icons.stop_rounded
+                                            : Icons.play_arrow_rounded,
+                                        size: 20,
+                                      ),
+                                      label: Text(_isPlaying ? 'Stop' : 'Play'),
+                                    ),
+                                  );
+                                  final shortBadge = Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: cs.errorContainer,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: cs.error.withValues(alpha: 0.25),
                                       ),
                                     ),
-                                  ],
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.warning_amber_rounded,
+                                          size: 16,
+                                          color: cs.error,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Too short',
+                                          style: tt.labelSmall?.copyWith(
+                                            color: cs.error,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  if (stackPlayback) {
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        playButton,
+                                        const SizedBox(height: 10),
+                                        Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: shortBadge,
+                                        ),
+                                      ],
+                                    );
+                                  }
+
+                                  return Row(
+                                    children: [
+                                      Expanded(child: playButton),
+                                      if (isShort) ...[
+                                        const SizedBox(width: 12),
+                                        shortBadge,
+                                      ],
+                                    ],
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                height: 56,
+                                width: double.infinity,
+                                child: FilledButton.icon(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder:
+                                            (_) => VoiceSongScreen(
+                                              songTitle: widget.songTitle,
+                                              hindiLyrics: widget.hindiLyrics,
+                                              englishLyrics:
+                                                  widget.englishLyrics,
+                                              hinglishLyrics:
+                                                  widget.hinglishLyrics,
+                                              dominantLanguage:
+                                                  widget.dominantLanguage,
+                                              mood: widget.mood,
+                                              genre: widget.genre,
+                                              referenceSong:
+                                                  widget.referenceSong,
+                                              voiceSamplePath: _recordedPath!,
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.arrow_forward_rounded,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    'Use This Recording',
+                                    style: tt.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+                              const SizedBox(height: 8),
+                            ],
+                            _isRecording
+                                ? SizedBox(
+                                  height: 56,
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _stopRecording,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: cs.error,
+                                      backgroundColor: cs.errorContainer,
+                                      side: BorderSide(
+                                        color: cs.error.withValues(alpha: 0.55),
+                                      ),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.stop_rounded,
+                                      size: 18,
+                                    ),
+                                    label: Text(
+                                      'Stop (${_recordingSeconds}s)',
+                                      style: tt.labelLarge?.copyWith(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                : SizedBox(
+                                  height: 56,
+                                  width: double.infinity,
+                                  child:
+                                      hasRecording
+                                          ? OutlinedButton.icon(
+                                            onPressed: _startRecording,
+                                            icon: const Icon(
+                                              Icons.mic_rounded,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              'Re-record',
+                                              style: tt.labelLarge?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                          )
+                                          : FilledButton.icon(
+                                            onPressed: _startRecording,
+                                            icon: const Icon(
+                                              Icons.mic_rounded,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              'Start Recording',
+                                              style: tt.labelLarge?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                          ),
+                                ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 10),
-                    ],
-
-                    // ── Pace feedback ──────────────────────────────────────
-                    if ((_paceFeedback ?? '').isNotEmpty) ...[
-                      _PaceBanner(text: _paceFeedback!),
-                      const SizedBox(height: 8),
-                    ],
-
-                    // ── Playback row + too-short warning ───────────────────
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _playback,
-                            style: OutlinedButton.styleFrom(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28)),
-                              side: BorderSide(
-                                color: _isPlaying
-                                    ? PixelColors.red
-                                    : PixelColors.muted,
-                                width: 2,
-                              ),
-                            ),
-                            icon: Icon(
-                              _isPlaying
-                                  ? Icons.stop_rounded
-                                  : Icons.play_arrow_rounded,
-                              color: _isPlaying
-                                  ? PixelColors.red
-                                  : PixelColors.muted,
-                              size: 16,
-                            ),
-                            label: Text(
-                              _isPlaying ? 'STOP' : 'PLAY',
-                              style: PixelFonts.pressStart(
-                                size: 6,
-                                color: _isPlaying
-                                    ? PixelColors.red
-                                    : PixelColors.muted,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (isShort) ...[
-                          const SizedBox(width: 12),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2A0D12),
-                              borderRadius: BorderRadius.circular(28),
-                              border: Border.all(
-                                  color: PixelColors.red, width: 2),
-                            ),
-                            child: Row(children: [
-                              const Icon(Icons.warning_amber_rounded,
-                                  size: 14, color: PixelColors.red),
-                              const SizedBox(width: 6),
-                              Text('Too short',
-                                  style: PixelFonts.vt323(
-                                      size: 13, color: PixelColors.red)),
-                            ]),
-                          ),
-                        ],
-                      ],
                     ),
-                    const SizedBox(height: 8),
-
-                    // ── USE THIS RECORDING — same style as RE-RECORD ────────
-                    SizedBox(
-                      height: 56,
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => VoiceSongScreen(
-                                songTitle: widget.songTitle,
-                                hindiLyrics: widget.hindiLyrics,
-                                englishLyrics: widget.englishLyrics,
-                                hinglishLyrics: widget.hinglishLyrics,
-                                dominantLanguage: widget.dominantLanguage,
-                                mood: widget.mood,
-                                genre: widget.genre,
-                                referenceSong: widget.referenceSong,
-                                voiceSamplePath: _recordedPath!,
-                              ),
-                            ),
-                          );
-                        },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: PixelColors.purple,
-                          foregroundColor: PixelColors.bg,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(28)),
-                          side: const BorderSide(
-                              color: PixelColors.purpleDim, width: 2),
-                          elevation: 0,
-                        ),
-                        icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                        label: Text(
-                          'USE THIS RECORDING',
-                          style: PixelFonts.pressStart(
-                              size: 7, color: PixelColors.bg),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-
-                  // ── Record / Stop button (always at very bottom) ──────────
-                  _isRecording
-                      ? PixelStopButton(
-                          label: 'STOP  (${_recordingSeconds}s)',
-                          onPressed: _stopRecording,
-                        )
-                      : SizedBox(
-                          height: 56,
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _startRecording,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: PixelColors.green,
-                              foregroundColor: PixelColors.bg,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28)),
-                              side: const BorderSide(
-                                  color: PixelColors.greenDim, width: 2),
-                              elevation: 0,
-                            ),
-                            icon: const Icon(Icons.mic_rounded, size: 18),
-                            label: Text(
-                              hasRecording ? 'RE-RECORD' : 'START RECORDING',
-                              style: PixelFonts.pressStart(
-                                  size: 7, color: PixelColors.bg),
-                            ),
-                          ),
-                        ),
+                  ),
                 ],
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -937,45 +1173,57 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
 // PRIVATE SUB-WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _PixelInfoCard extends StatelessWidget {
-  const _PixelInfoCard(
-      {required this.songTitle, required this.referenceSong});
+class _InfoCard extends StatelessWidget {
+  const _InfoCard({
+    required this.songTitle,
+    required this.referenceSong,
+    required this.cs,
+    required this.tt,
+  });
 
   final String songTitle;
   final SongReference? referenceSong;
+  final ColorScheme cs;
+  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: PixelColors.card,
-        border: Border.all(color: PixelColors.purple, width: 2),
-        boxShadow: const [
-          BoxShadow(
-              color: PixelColors.purpleDim, offset: Offset(3, 3), blurRadius: 0),
-        ],
+        gradient: LinearGradient(
+          colors: [cs.primaryContainer, cs.secondaryContainer],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
       ),
       child: Row(
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: 48,
+            height: 48,
             decoration: BoxDecoration(
-              color: PixelColors.purple,
-              border: Border.all(color: const Color(0xFFD0AAFF), width: 1),
+              color: cs.surface.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(16),
             ),
-            child: const Icon(Icons.record_voice_over_rounded,
-                color: PixelColors.bg, size: 18),
+            child: Icon(
+              Icons.record_voice_over_rounded,
+              color: cs.onSurface,
+              size: 24,
+            ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
               referenceSong != null
                   ? '${referenceSong!.trackName} — ${referenceSong!.artistName}'
                   : songTitle,
-              style: PixelFonts.vt323(
-                  size: 16, color: const Color(0xFFD0AAFF)),
+              style: tt.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: cs.onSurface,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -986,55 +1234,81 @@ class _PixelInfoCard extends StatelessWidget {
 }
 
 class _HintBanner extends StatelessWidget {
-  const _HintBanner({required this.text, required this.color});
+  const _HintBanner({
+    required this.text,
+    required this.color,
+    required this.cs,
+    required this.tt,
+  });
 
   final String text;
   final Color color;
+  final ColorScheme cs;
+  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: PixelColors.card2,
-        border: Border(
-          left: BorderSide(color: color, width: 3),
-          top: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
-          right: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
-          bottom: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
-        ),
+        color: cs.secondaryContainer,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.35), width: 1),
       ),
-      child: Text(text, style: PixelFonts.vt323(size: 14, color: color)),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _PaceBanner extends StatelessWidget {
-  const _PaceBanner({required this.text});
+  const _PaceBanner({required this.text, required this.cs, required this.tt});
 
   final String text;
+  final ColorScheme cs;
+  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
+    final isPositive = text.toLowerCase().contains('great');
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: const BoxDecoration(
-        color: PixelColors.card2,
-        border: Border(
-          left: BorderSide(color: PixelColors.green, width: 3),
-          top: BorderSide(color: PixelColors.green, width: 1),
-          right: BorderSide(color: PixelColors.green, width: 1),
-          bottom: BorderSide(color: PixelColors.green, width: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: isPositive ? cs.secondaryContainer : cs.errorContainer,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: (isPositive ? cs.secondary : cs.error).withValues(alpha: 0.22),
         ),
       ),
-      child: Row(children: [
-        const Icon(Icons.speed_rounded, size: 14, color: PixelColors.green),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(text,
-              style: PixelFonts.vt323(size: 14, color: PixelColors.green)),
-        ),
-      ]),
+      child: Row(
+        children: [
+          Icon(
+            Icons.speed_rounded,
+            size: 18,
+            color: isPositive ? cs.secondary : cs.error,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: tt.bodyMedium?.copyWith(
+                color: cs.onSurface,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1043,10 +1317,14 @@ class _SpeakingLinesDropdown extends StatefulWidget {
   const _SpeakingLinesDropdown({
     required this.targetLyrics,
     required this.isHindiDominant,
+    required this.cs,
+    required this.tt,
   });
 
   final String targetLyrics;
   final bool isHindiDominant;
+  final ColorScheme cs;
+  final TextTheme tt;
 
   @override
   State<_SpeakingLinesDropdown> createState() => _SpeakingLinesDropdownState();
@@ -1055,20 +1333,22 @@ class _SpeakingLinesDropdown extends StatefulWidget {
 class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
   bool _isExpanded = false;
   late final List<String> _speakingLines;
-  late ScrollController _scrollController; // ← Changed to late
+  late ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController(); // ← Initialize here
+    _scrollController = ScrollController();
     _speakingLines = _extractFlowPromptLines(
       widget.targetLyrics,
       isHindiDominant: widget.isHindiDominant,
     );
   }
 
-  List<String> _extractFlowPromptLines(String lyrics,
-      {required bool isHindiDominant}) {
+  List<String> _extractFlowPromptLines(
+    String lyrics, {
+    required bool isHindiDominant,
+  }) {
     final raw = lyrics.split('\n');
     final result = <String>[];
     var currentSection = '';
@@ -1080,16 +1360,20 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
         currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
         continue;
       }
-      final sectionMatch = isHindiDominant
-          ? [
-              'verse 1',
-              'verse 2',
-              'verse 3',
-              'bridge',
-              'pre-chorus'
-            ].any((s) => currentSection.contains(s))
-          : ['chorus', 'outro', 'hook']
-              .any((s) => currentSection.contains(s));
+      final sectionMatch =
+          isHindiDominant
+              ? [
+                'verse 1',
+                'verse 2',
+                'verse 3',
+                'bridge',
+                'pre-chorus',
+              ].any((s) => currentSection.contains(s))
+              : [
+                'chorus',
+                'outro',
+                'hook',
+              ].any((s) => currentSection.contains(s));
       if (sectionMatch && trimmed.length >= 8) {
         result.add(trimmed);
       }
@@ -1098,13 +1382,15 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
       return lyrics
           .split('\n')
           .map((l) => l.trim())
-          .where((l) =>
-              l.isNotEmpty &&
-              !l.startsWith('[') &&
-              l
-                  .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
-                  .length >=
-                  8)
+          .where(
+            (l) =>
+                l.isNotEmpty &&
+                !l.startsWith('[') &&
+                l
+                        .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
+                        .length >=
+                    8,
+          )
           .toList();
     }
     result.sort((a, b) => a.length.compareTo(b.length));
@@ -1114,7 +1400,7 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
 
   @override
   void dispose() {
-    _scrollController.dispose(); // ← Dispose controller
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -1123,44 +1409,49 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
     if (_speakingLines.isEmpty) return const SizedBox.shrink();
     return Container(
       decoration: BoxDecoration(
-        color: PixelColors.card,
-        border: Border.all(color: PixelColors.green, width: 2),
-        borderRadius: BorderRadius.circular(8),
+        color: widget.cs.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: widget.cs.outline.withValues(alpha: 0.55)),
       ),
       child: Column(
         children: [
           InkWell(
             onTap: () => setState(() => _isExpanded = !_isExpanded),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(22),
             child: Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
                   Container(
-                    width: 32,
-                    height: 32,
+                    width: 36,
+                    height: 36,
                     decoration: BoxDecoration(
-                      color: PixelColors.green,
-                      borderRadius: BorderRadius.circular(4),
+                      color: widget.cs.secondaryContainer,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.mic_rounded,
-                        color: PixelColors.bg, size: 16),
+                    child: Icon(
+                      Icons.mic_rounded,
+                      color: widget.cs.secondary,
+                      size: 18,
+                    ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'YOUR SPEAKING LINES',
-                          style: PixelFonts.pressStart(
-                              size: 6, color: PixelColors.green),
+                          'Your Speaking Lines',
+                          style: widget.tt.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           '${_speakingLines.length} lines to record',
-                          style: PixelFonts.vt323(
-                              size: 12, color: PixelColors.muted),
+                          style: widget.tt.bodySmall?.copyWith(
+                            color: widget.cs.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -1170,7 +1461,7 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
                     duration: const Duration(milliseconds: 200),
                     child: Icon(
                       Icons.keyboard_arrow_down,
-                      color: PixelColors.green,
+                      color: widget.cs.onSurface,
                       size: 20,
                     ),
                   ),
@@ -1187,23 +1478,26 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
                 decoration: BoxDecoration(
                   border: Border(
                     top: BorderSide(
-                        color: PixelColors.green.withValues(alpha: 0.3),
-                        width: 1),
+                      color: widget.cs.outline.withValues(alpha: 0.35),
+                      width: 1,
+                    ),
                   ),
                 ),
                 child: Scrollbar(
-                  controller: _scrollController, // ← Fixed
+                  controller: _scrollController,
                   thumbVisibility: true,
                   child: SingleChildScrollView(
-                    controller: _scrollController, // ← Fixed
-                    padding: const EdgeInsets.all(10),
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '🎤 Practice these lines before recording:',
-                          style: PixelFonts.pressStart(
-                              size: 5, color: PixelColors.green),
+                          'Practice these lines before recording:',
+                          style: widget.tt.labelSmall?.copyWith(
+                            color: widget.cs.onSurfaceVariant,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         ..._speakingLines.map(
@@ -1211,15 +1505,19 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
                             padding: const EdgeInsets.only(bottom: 6),
                             child: Row(
                               children: [
-                                Text('• ',
-                                    style: PixelFonts.vt323(
-                                        size: 14, color: PixelColors.green)),
+                                Text(
+                                  '• ',
+                                  style: widget.tt.bodyMedium?.copyWith(
+                                    color: widget.cs.secondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                                 Expanded(
                                   child: Text(
                                     line,
-                                    style: PixelFonts.vt323(
-                                        size: 14,
-                                        color: PixelColors.textPrimary),
+                                    style: widget.tt.bodyMedium?.copyWith(
+                                      color: widget.cs.onSurface,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -1239,58 +1537,74 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
   }
 }
 
-class _PixelWaveBar extends StatelessWidget {
-  const _PixelWaveBar(
-      {required this.controller, required this.seconds});
+class _WaveBar extends StatelessWidget {
+  const _WaveBar({
+    required this.controller,
+    required this.seconds,
+    required this.cs,
+  });
 
   final AnimationController controller;
   final int seconds;
+  final ColorScheme cs;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A0D12),
-        border: Border.all(color: PixelColors.red, width: 2),
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.error.withValues(alpha: 0.2)),
       ),
-      child: Row(children: [
-        const _PulsingDot(),
-        const SizedBox(width: 8),
-        Text('REC ${seconds}s / 30s',
-            style: PixelFonts.pressStart(size: 6, color: PixelColors.red)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: List.generate(18, (i) {
-              return AnimatedBuilder(
-                animation: controller,
-                builder: (_, __) {
-                  final h = 4.0 +
-                      22.0 *
-                          (0.3 +
-                              0.7 *
-                                  ((controller.value + i * 0.12) % 1.0));
-                  return Container(
-                    width: 3,
-                    height: h,
-                    margin: const EdgeInsets.symmetric(horizontal: 1),
-                    color: PixelColors.red.withValues(alpha: 0.75),
-                  );
-                },
-              );
-            }),
+      child: Row(
+        children: [
+          _PulsingDot(color: cs.error),
+          const SizedBox(width: 8),
+          Text(
+            'REC ${seconds}s / 30s',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: cs.error,
+              fontWeight: FontWeight.w800,
+            ),
           ),
-        ),
-      ]),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: List.generate(18, (i) {
+                return AnimatedBuilder(
+                  animation: controller,
+                  builder: (_, __) {
+                    final h =
+                        4.0 +
+                        22.0 *
+                            (0.3 + 0.7 * ((controller.value + i * 0.12) % 1.0));
+                    return Container(
+                      width: 3,
+                      height: h,
+                      margin: const EdgeInsets.symmetric(horizontal: 1),
+                      decoration: BoxDecoration(
+                        color: cs.error.withValues(alpha: 0.75),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    );
+                  },
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _PulsingDot extends StatefulWidget {
-  const _PulsingDot();
+  const _PulsingDot({required this.color});
+
+  final Color color;
 
   @override
   State<_PulsingDot> createState() => _PulsingDotState();
@@ -1304,8 +1618,9 @@ class _PulsingDotState extends State<_PulsingDot>
   void initState() {
     super.initState();
     _c = AnimationController(
-            vsync: this, duration: const Duration(milliseconds: 600))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..repeat(reverse: true);
   }
 
   @override
@@ -1318,11 +1633,15 @@ class _PulsingDotState extends State<_PulsingDot>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _c,
-      builder: (_, __) => Container(
-        width: 8,
-        height: 8,
-        color: PixelColors.red.withValues(alpha: 0.4 + 0.6 * _c.value),
-      ),
+      builder:
+          (_, __) => Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: widget.color.withValues(alpha: 0.4 + 0.6 * _c.value),
+              shape: BoxShape.circle,
+            ),
+          ),
     );
   }
 }
@@ -1337,6 +1656,8 @@ class _KaraokeBox extends StatelessWidget {
     required this.targetWpm,
     required this.referenceMsPerWord,
     required this.splitWords,
+    required this.cs,
+    required this.tt,
   });
 
   final List<String> flowLines;
@@ -1347,28 +1668,29 @@ class _KaraokeBox extends StatelessWidget {
   final int targetWpm;
   final int? referenceMsPerWord;
   final List<String> Function(String) splitWords;
+  final ColorScheme cs;
+  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: PixelColors.card,
-        border: Border.all(color: PixelColors.blue, width: 2),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0xFF1A5A99), offset: Offset(3, 3), blurRadius: 0),
-        ],
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.55)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             referenceMsPerWord != null
-                ? '> KARAOKE GUIDE (REF TEMPO)'
-                : '> KARAOKE GUIDE ($targetWpm WPM)',
-            style: PixelFonts.pressStart(
-                size: 5, color: PixelColors.blue, letterSpacing: 1),
+                ? 'Karaoke Guide (Reference Tempo)'
+                : 'Karaoke Guide ($targetWpm WPM)',
+            style: tt.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: cs.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 10),
           ...List.generate(flowLines.length, (i) {
@@ -1383,40 +1705,52 @@ class _KaraokeBox extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (activeLine) ...[
-                    LayoutBuilder(builder: (ctx, c) {
-                      final width = c.maxWidth.clamp(1.0, 9999.0);
-                      final dotX = (width * activeLineProgress)
-                          .clamp(0.0, width - 6);
-                      return SizedBox(
-                        height: 10,
-                        child: Stack(children: [
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            top: 4,
-                            child: Container(
-                              height: 2,
-                              color: PixelColors.blue.withValues(alpha: 0.25),
-                            ),
+                    LayoutBuilder(
+                      builder: (ctx, c) {
+                        final width = c.maxWidth.clamp(1.0, 9999.0);
+                        final dotX = (width * activeLineProgress).clamp(
+                          0.0,
+                          width - 6,
+                        );
+                        return SizedBox(
+                          height: 10,
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                top: 4,
+                                child: Container(
+                                  height: 2,
+                                  decoration: BoxDecoration(
+                                    color: cs.secondary.withValues(alpha: 0.25),
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                              ),
+                              AnimatedPositioned(
+                                duration: const Duration(milliseconds: 120),
+                                curve: Curves.easeOut,
+                                left: dotX,
+                                top: 0,
+                                child: Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: cs.secondary,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          AnimatedPositioned(
-                            duration: const Duration(milliseconds: 120),
-                            curve: Curves.easeOut,
-                            left: dotX,
-                            top: 0,
-                            child: Container(
-                              width: 6,
-                              height: 6,
-                              color: PixelColors.blue,
-                            ),
-                          ),
-                        ]),
-                      );
-                    }),
+                        );
+                      },
+                    ),
                     const SizedBox(height: 4),
                   ],
                   Wrap(
-                    spacing: 3,
+                    spacing: 4,
                     runSpacing: 4,
                     children: List.generate(lineWords.length, (wi) {
                       final isPast = activeLine && wi < currentInLine;
@@ -1424,21 +1758,29 @@ class _KaraokeBox extends StatelessWidget {
                       return AnimatedContainer(
                         duration: const Duration(milliseconds: 100),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 4, vertical: 1),
-                        color: isCurrent
-                            ? PixelColors.blue
-                            : isPast
-                                ? PixelColors.blue.withValues(alpha: 0.15)
-                                : Colors.transparent,
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              isCurrent
+                                  ? cs.secondary
+                                  : isPast
+                                  ? cs.secondaryContainer
+                                  : Colors.transparent,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
                         child: Text(
                           lineWords[wi],
-                          style: PixelFonts.vt323(
-                            size: 15,
-                            color: isCurrent
-                                ? PixelColors.bg
-                                : isPast
-                                    ? PixelColors.blue
-                                    : PixelColors.muted,
+                          style: tt.bodyMedium?.copyWith(
+                            color:
+                                isCurrent
+                                    ? cs.onSecondary
+                                    : isPast
+                                    ? cs.onSurface
+                                    : cs.onSurfaceVariant,
+                            fontWeight:
+                                isCurrent ? FontWeight.w700 : FontWeight.normal,
                           ),
                         ),
                       );
