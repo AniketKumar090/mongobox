@@ -16,6 +16,8 @@ import '../services/tts_service.dart';
 import '../services/youtube_player_background_helper.dart';
 import '../services/background_audio_player_service.dart';
 import '../services/soundcloud_service.dart';
+import '../theme/lyric_screen_theme.dart';
+import '../widgets/lyric_page_scaffold.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
@@ -47,15 +49,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   bool _isRestoringForeground = false;
   Duration _backgroundSyncPosition = Duration.zero;
   Duration _loopStartPosition = Duration.zero;
-
   double _playerVolume = 1.0;
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
-
   static const String _volumeFetchInitialKey = 'fetchInitialVolume';
   static const String _volumeEventChannelName =
       'com.kurenai7968.volume_controller.volume_listener_event';
-
   LocalSuggestionsService? _suggestions;
   List<String> _recentLines = [];
   List<RecentTrack> _recentTracks = [];
@@ -79,7 +78,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final c = _ytController;
     if (c == null) return;
-
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
@@ -88,17 +86,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           c.value.isPlaying ||
           c.value.playerState == PlayerState.playing ||
           c.value.playerState == PlayerState.buffering;
-
       if (_wasPlayingBeforeBackground) {
         _suppressForegroundPlaybackForBackground();
         _autoStartBackgroundMirror(++_backgroundMirrorRequestId);
       }
       return;
     }
-
     _appIsInBackground = false;
     _backgroundMirrorRequestId++;
-
     if (state == AppLifecycleState.resumed && _wasPlayingBeforeBackground) {
       _restoreForegroundPlayback();
     }
@@ -107,12 +102,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void _suppressForegroundPlaybackForBackground() {
     final controller = _ytController;
     if (controller == null || _foregroundAudioSuppressedForBackground) return;
-
     _backgroundSyncPosition = controller.value.position;
     debugPrint(
       '[Background] Saved YouTube position: ${_backgroundSyncPosition.inSeconds}s',
     );
-
     _foregroundAudioSuppressedForBackground = true;
     try {
       controller.mute();
@@ -123,12 +116,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void _restoreForegroundPlayback() {
     _wasPlayingBeforeBackground = false;
     _isRestoringForeground = true;
-
     try {
       _ytController?.mute();
       _ytController?.pause();
     } catch (_) {}
-
     _restoreForegroundPlaybackAsync().whenComplete(() {
       _isRestoringForeground = false;
     });
@@ -139,17 +130,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     debugPrint(
       '[Resume] Background player position: ${mirroredPosition.inSeconds}s',
     );
-
     final stoppedPosition =
         await BackgroundAudioPlayerService.instance.hardStopAndReset();
-
     await Future<void>.delayed(const Duration(milliseconds: 250));
-
     if (!mounted) {
       _isRestoringForeground = false;
       return;
     }
-
     final controller = _ytController;
     if (controller == null) {
       _foregroundAudioSuppressedForBackground = false;
@@ -157,42 +144,33 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       _isRestoringForeground = false;
       return;
     }
-
     await _waitForYoutubeControllerReady(controller);
     if (!mounted || controller != _ytController) {
       _isRestoringForeground = false;
       return;
     }
-
     final resumePosition =
         stoppedPosition > Duration.zero
             ? stoppedPosition
             : mirroredPosition > Duration.zero
             ? mirroredPosition
             : _backgroundSyncPosition;
-
     debugPrint('[Resume] Seeking YouTube to: ${resumePosition.inSeconds}s');
-
     if (resumePosition > Duration.zero) {
       controller.seekTo(resumePosition);
       await Future.delayed(const Duration(milliseconds: 150));
     }
-
     if (!mounted) {
       _isRestoringForeground = false;
       return;
     }
-
     try {
       controller.unMute();
       controller.play();
     } catch (_) {}
-
     _applyEmbeddedPlayerVolume();
-
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-
     if (!controller.value.isPlaying &&
         controller.value.playerState != PlayerState.playing &&
         controller.value.playerState != PlayerState.buffering) {
@@ -205,10 +183,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       } catch (_) {}
       _applyEmbeddedPlayerVolume();
     }
-
     _foregroundAudioSuppressedForBackground = false;
     _backgroundSyncPosition = Duration.zero;
-
     if (_backgroundMirrorFailed) {
       _backgroundMirrorFailed = false;
       if (!mounted) return;
@@ -227,17 +203,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     YoutubePlayerController controller,
   ) async {
     if (controller.value.isReady) return;
-
     final completer = Completer<void>();
     late VoidCallback listener;
     Timer? timeout;
-
     listener = () {
       if (controller.value.isReady && !completer.isCompleted) {
         completer.complete();
       }
     };
-
     controller.addListener(listener);
     timeout = Timer(const Duration(seconds: 5), () {
       if (!completer.isCompleted) {
@@ -245,7 +218,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         completer.complete();
       }
     });
-
     try {
       await completer.future;
     } finally {
@@ -264,36 +236,28 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   }) async {
     if (_isBackgroundAudioLoading) return;
     if (BackgroundAudioPlayerService.instance.isPlaying) return;
-
     final now = _nowPlaying;
     if (now == null) return;
     if (now.trackName.trim().isEmpty || now.artistName.trim().isEmpty) return;
-
     setState(() => _isBackgroundAudioLoading = true);
-
     if (auto) {
       _backgroundMirrorFailed = false;
     }
-
     try {
       await BackgroundAudioPlayerService.instance.setLoopEnabled(_isLooping);
-
       final sc = await _soundcloud.findMirrorStream(
         trackName: now.trackName,
         artistName: now.artistName,
       );
-
       if (!mounted ||
           !_appIsInBackground ||
           requestId != _backgroundMirrorRequestId) {
         return;
       }
-
       if (sc != null && sc.confidence >= 0.62) {
         debugPrint(
           '[Background] Starting SoundCloud stream at: ${_backgroundSyncPosition.inSeconds}s',
         );
-
         await BackgroundAudioPlayerService.instance.playSources(
           sc.streamSources
               .map((source) => (url: source.url, headers: source.headers))
@@ -302,7 +266,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         );
         return;
       }
-
       if (!auto) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -343,10 +306,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       _volumeSystemCap = 1.0;
       return;
     }
-
     final volumeController = VolumeController.instance;
     volumeController.showSystemUI = false;
-
     try {
       final cap = await volumeController.getVolume();
       _volumeSystemCap = cap.clamp(0.001, 1.0);
@@ -354,9 +315,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       _volumeSystemCap = 1.0;
       return;
     }
-
     if (!mounted) return;
-
     _volumeSubscription = const EventChannel(_volumeEventChannelName)
         .receiveBroadcastStream(<String, dynamic>{_volumeFetchInitialKey: true})
         .listen(
@@ -405,22 +364,17 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     }
     _backgroundSyncPosition = Duration.zero;
     _foregroundAudioSuppressedForBackground = false;
-
     _loopStartPosition = Duration(
       seconds: result.startTimeSeconds < 0 ? 0 : result.startTimeSeconds,
     );
-
     final oldController = _ytController;
     _ytController = null;
-
     setState(() {
       _nowPlaying = result;
     });
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       oldController?.dispose();
     });
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final controller =
@@ -434,7 +388,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       setState(() => _ytController = controller);
       _applyEmbeddedPlayerVolume();
     });
-
     _lightweightService.cachePlaybackResult(
       result,
       _lyricController.text.trim(),
@@ -535,7 +488,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     final timeUntilReset = status.nextResetTime.difference(DateTime.now());
     final hours = timeUntilReset.inHours;
     final minutes = timeUntilReset.inMinutes % 60;
-
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -625,9 +577,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     if (_isLoading) return;
     final query = _lyricController.text.trim();
     if (query.isEmpty) return;
-
     setState(() => _isLoading = true);
-
     try {
       List<PlaybackOption> options;
       if (_isQuotaSavingMode) {
@@ -651,9 +601,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       } else {
         options = await _playbackService.resolveCandidates(query, limit: 5);
       }
-
       if (!mounted) return;
-
       if (options.isEmpty) {
         await _suggestions?.addRecentSearch(
           RecentSearch(
@@ -664,7 +612,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         );
         if (!mounted) return;
         setState(_syncRecentFromService);
-
         final message =
             _isQuotaSavingMode
                 ? 'No song found in cache. Try normal mode or different lyrics.'
@@ -674,7 +621,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         ).showSnackBar(SnackBar(content: Text(message)));
         return;
       }
-
       final selected = await _pickCandidateFromOptions(options);
       if (!mounted || selected == null) return;
       _playResult(selected.result);
@@ -755,7 +701,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       if (!_isLooping || _isHandlingLoopRestart || _isRestoringForeground) {
         return;
       }
-
       final playerState = controller.value.playerState;
       if (playerState == PlayerState.ended) {
         _isHandlingLoopRestart = true;
@@ -830,64 +775,194 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     return showModalBottomSheet<PlaybackOption>(
       context: context,
       isScrollControlled: true,
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: Row(
-                  children: [
-                    Text(
-                      'Choose your song',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+      backgroundColor: Colors.transparent,
+      builder:
+          (ctx) => Theme(
+            data: lyricScreenTheme(ctx),
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: LyricScreenPalette.background,
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(
+                      color: LyricScreenPalette.outline.withValues(alpha: 0.5),
                     ),
-                  ],
-                ),
-              ),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: options.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final option = options[i];
-                    final result = option.result;
-                    final confidencePct =
-                        (option.confidence * 100).clamp(0, 100).round();
-                    return ListTile(
-                      dense: true,
-                      leading: CircleAvatar(
-                        radius: 14,
-                        child: Text(
-                          '${i + 1}',
-                          style: theme.textTheme.labelSmall,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 10),
+                      Container(
+                        width: 48,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: LyricScreenPalette.outline,
+                          borderRadius: BorderRadius.circular(999),
                         ),
                       ),
-                      title: Text(
-                        result.trackName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Choose your song',
+                              style: Theme.of(ctx).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'We found multiple strong matches. Pick the one that feels right and jump straight in.',
+                              style: Theme.of(
+                                ctx,
+                              ).textTheme.bodyMedium?.copyWith(
+                                color:
+                                    Theme.of(ctx).colorScheme.onSurfaceVariant,
+                                height: 1.45,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      subtitle: Text(
-                        '${result.artistName} • ${result.startTimeSeconds}s • ${option.source} • $confidencePct%',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                          itemCount: options.length,
+                          separatorBuilder:
+                              (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (_, i) {
+                            final option = options[i];
+                            final result = option.result;
+                            final confidencePct =
+                                (option.confidence * 100).clamp(0, 100).round();
+
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => Navigator.of(ctx).pop(option),
+                                borderRadius: BorderRadius.circular(22),
+                                child: Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: LyricScreenPalette.surface,
+                                    borderRadius: BorderRadius.circular(22),
+                                    border: Border.all(
+                                      color: LyricScreenPalette.outline
+                                          .withValues(alpha: 0.45),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      // Modified: Circular image with fallback
+                                      _CircularThumbnail(
+                                        imageUrl:
+                                            'https://img.youtube.com/vi/${result.videoId}/0.jpg',
+                                        size: 56,
+                                        fallbackText: 'LyricQSK',
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              result.trackName,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(
+                                                ctx,
+                                              ).textTheme.titleSmall?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              result.artistName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(
+                                                ctx,
+                                              ).textTheme.bodySmall?.copyWith(
+                                                color:
+                                                    Theme.of(ctx)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Wrap(
+                                              spacing: 8,
+                                              runSpacing: 8,
+                                              children: [
+                                                LyricTag(
+                                                  label:
+                                                      '${result.startTimeSeconds}s',
+                                                  icon: Icons.timer_rounded,
+                                                ),
+                                                LyricTag(
+                                                  label: option.source,
+                                                  icon: Icons.tune_rounded,
+                                                ),
+                                                LyricTag(
+                                                  label: '$confidencePct%',
+                                                  icon:
+                                                      Icons.auto_graph_rounded,
+                                                  highlighted:
+                                                      confidencePct >= 80,
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        width: 34,
+                                        height: 34,
+                                        decoration: BoxDecoration(
+                                          color: LyricScreenPalette.accentSoft,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.chevron_right_rounded,
+                                          color: LyricScreenPalette.ink,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                       ),
-                      onTap: () => Navigator.of(ctx).pop(option),
-                    );
-                  },
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(ctx).pop(),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
-        );
-      },
     );
   }
 
@@ -899,13 +974,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     final isCompact = screenWidth < 600;
     final hPad = isCompact ? screenWidth * 0.05 : screenWidth * 0.08;
     final vGap = screenHeight < 700 ? 8.0 : 12.0;
-
     return Scaffold(
       backgroundColor: const Color(0xFFF5F3EF),
       bottomNavigationBar: SafeArea(
         minimum: EdgeInsets.fromLTRB(hPad, 8, hPad, 12),
         child: SizedBox(
-          height: screenHeight < 700 ? 74 : 80,
+          height: screenHeight < 700 ? 60 : 60,
           child: _GenerateSongSliderCard(
             compact: isCompact,
             onCompleted: _openGenerateSongBySlide,
@@ -920,10 +994,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
             builder: (context, constraints) {
               final availH = constraints.maxHeight;
               final availW = constraints.maxWidth;
-
               return Stack(
                 children: [
-                  // ── Hidden YouTube player (off-screen, 1% opacity) ────────
+                  // 🎵  Hidden YouTube player (off-screen, 1% opacity) 🎵 🎵 🎵  🎵
                   if (_ytController != null)
                     Positioned(
                       left: hPad,
@@ -946,8 +1019,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                         ),
                       ),
                     ),
-
-                  // ── Main non-scrollable column ────────────────────────────
+                  // 🎵  Main non-scrollable column 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵
                   Padding(
                     padding: EdgeInsets.fromLTRB(hPad, vGap, hPad, vGap),
                     child: Column(
@@ -1012,10 +1084,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
 // _TurntablePlayerCard
-// ─────────────────────────────────────────────────────────────────────────────
-
+// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
 class _TurntablePlayerCard extends StatelessWidget {
   const _TurntablePlayerCard({
     required this.controller,
@@ -1092,7 +1163,6 @@ class _TurntablePlayerCard extends StatelessWidget {
               0.0,
               1.0,
             );
-
     final title = nowPlaying?.trackName ?? 'The Suffering';
     final artist = nowPlaying?.artistName ?? 'LyricQSK';
     final badgeText = nowPlaying == null ? 'Now Playing' : 'Now Playing';
@@ -1106,19 +1176,17 @@ class _TurntablePlayerCard extends StatelessWidget {
                 0.0,
                 1.0,
               );
+      // Calculate rotation angle - full rotation every 12 seconds of playback time
       final rotationAngle =
           duration.inMilliseconds == 0
               ? 0.0
               : (position.inMilliseconds / 12000) * math.pi * 2;
-
       return LayoutBuilder(
         builder: (context, constraints) {
           final cardW = constraints.maxWidth;
-
           final titleFontSize = (cardW * 0.065).clamp(18.0, 28.0);
           final clockFontSize = (cardW * 0.048).clamp(14.0, 22.0);
           final playBtnSize = (cardW * 0.17).clamp(52.0, 72.0);
-
           return Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -1212,91 +1280,69 @@ class _TurntablePlayerCard extends StatelessWidget {
                                             child: SizedBox.expand(),
                                           ),
                                         ),
-                                        Container(
-                                          width: labelSize,
-                                          height: labelSize,
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            gradient: const LinearGradient(
-                                              begin: Alignment.topCenter,
-                                              end: Alignment.bottomCenter,
-                                              colors: [
-                                                Color(0xFFF9F8F4),
-                                                Color(0xFFDBD8D2),
-                                              ],
+                                        // Center label with image - rotates at same speed as vinyl
+                                        Transform.rotate(
+                                          angle: rotationAngle,
+                                          child: Container(
+                                            width: labelSize,
+                                            height: labelSize,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              gradient: const LinearGradient(
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                                colors: [
+                                                  Color(0xFFF9F8F4),
+                                                  Color(0xFFDBD8D2),
+                                                ],
+                                              ),
                                             ),
-                                          ),
-                                          child: ClipOval(
-                                            child:
-                                                nowPlaying != null
-                                                    ? Image.network(
-                                                      'https://img.youtube.com/vi/${nowPlaying!.videoId}/0.jpg',
-                                                      fit: BoxFit.cover,
-                                                      width: labelSize,
-                                                      height: labelSize,
-                                                      errorBuilder:
-                                                          (
-                                                            _,
-                                                            __,
-                                                            ___,
-                                                          ) => Center(
-                                                            child: Text(
-                                                              artist.length > 12
-                                                                  ? artist
-                                                                      .substring(
-                                                                        0,
-                                                                        12,
-                                                                      )
-                                                                      .toUpperCase()
-                                                                  : artist
-                                                                      .toUpperCase(),
-                                                              textAlign:
-                                                                  TextAlign
-                                                                      .center,
-                                                              style: TextStyle(
-                                                                fontFamily:
-                                                                    'Inter',
-                                                                fontSize:
-                                                                    labelFontSize,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w700,
-                                                                color:
-                                                                    const Color(
-                                                                      0xFF6B6B6B,
-                                                                    ),
-                                                                letterSpacing:
-                                                                    0.6,
-                                                              ),
+                                            child: ClipOval(
+                                              child:
+                                                  nowPlaying != null
+                                                      ? _CircularThumbnail(
+                                                        imageUrl:
+                                                            'https://img.youtube.com/vi/${nowPlaying!.videoId}/0.jpg',
+                                                        size: labelSize,
+                                                        fallbackText:
+                                                            'LYRICQSK',
+                                                      )
+                                                      : Transform.rotate(
+                                                        angle:
+                                                            math.pi, // 180 degrees rotation
+                                                        child: Center(
+                                                          child: Text(
+                                                            artist.length > 12
+                                                                ? artist
+                                                                    .substring(
+                                                                      0,
+                                                                      12,
+                                                                    )
+                                                                    .toUpperCase()
+                                                                : artist
+                                                                    .toUpperCase(),
+                                                            textAlign:
+                                                                TextAlign
+                                                                    .center,
+                                                            style: TextStyle(
+                                                              fontFamily:
+                                                                  'Inter',
+                                                              fontSize:
+                                                                  labelFontSize,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              color:
+                                                                  const Color(
+                                                                    0xFF6B6B6B,
+                                                                  ),
+                                                              letterSpacing:
+                                                                  0.6,
                                                             ),
                                                           ),
-                                                    )
-                                                    : Center(
-                                                      child: Text(
-                                                        artist.length > 12
-                                                            ? artist
-                                                                .substring(
-                                                                  0,
-                                                                  12,
-                                                                )
-                                                                .toUpperCase()
-                                                            : artist
-                                                                .toUpperCase(),
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                        style: TextStyle(
-                                                          fontFamily: 'Inter',
-                                                          fontSize:
-                                                              labelFontSize,
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                          color: const Color(
-                                                            0xFF6B6B6B,
-                                                          ),
-                                                          letterSpacing: 0.6,
                                                         ),
                                                       ),
-                                                    ),
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -1539,7 +1585,6 @@ class _TurntablePlayerCard extends StatelessWidget {
     if (musicController == null) {
       return buildCard(false, basePosition, baseDuration);
     }
-
     return AnimatedBuilder(
       animation: musicController,
       builder: (context, _) {
@@ -1561,10 +1606,9 @@ class _TurntablePlayerCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵
 // _SearchConsoleCard
-// ─────────────────────────────────────────────────────────────────────────────
-
+// 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵  🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
 class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
     required this.lyricController,
@@ -1612,7 +1656,6 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
   bool _showDropdown = false;
   final FocusNode _focusNode = FocusNode();
   OverlayEntry? _overlayEntry;
-
   final LayerLink _layerLink = LayerLink();
 
   List<String> get _filteredLines {
@@ -1662,7 +1705,6 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
       builder: (context) {
         final lines = _filteredLines;
         if (lines.isEmpty) return const SizedBox.shrink();
-
         return Positioned(
           width: widget.availableWidth,
           child: CompositedTransformFollower(
@@ -1771,7 +1813,6 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
     final subtitleFontSize = (widget.availableWidth * 0.034).clamp(11.0, 14.0);
     final showSubtitle = widget.screenHeight > 680;
     final btnHeight = widget.screenHeight < 700 ? 46.0 : 52.0;
-
     return Container(
       padding: EdgeInsets.only(bottom: widget.screenHeight < 700 ? 12 : 16),
       child: Column(
@@ -1819,13 +1860,13 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
             link: _layerLink,
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFFEDE8E0),
+                color: const Color(0xFFF8F4EE),
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(
                   color:
                       widget.isListening
                           ? const Color(0xFF11F08A)
-                          : Colors.transparent,
+                          : const Color(0xFFD8D4CC),
                   width: 1.5,
                 ),
               ),
@@ -2012,10 +2053,59 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Small reusable deck widgets
-// ─────────────────────────────────────────────────────────────────────────────
+// New widget: Circular thumbnail with fallback
+class _CircularThumbnail extends StatelessWidget {
+  const _CircularThumbnail({
+    required this.imageUrl,
+    required this.size,
+    required this.fallbackText,
+  });
 
+  final String imageUrl;
+  final double size;
+  final String fallbackText;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Image.network(
+          imageUrl,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) {
+            return Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: const Color(0xFFD8D4CC),
+                borderRadius: BorderRadius.circular(size / 2),
+              ),
+              child: Center(
+                child: Text(
+                  fallbackText.length > 6
+                      ? fallbackText.substring(0, 6)
+                      : fallbackText,
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: size * 0.2,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF6B6B6B),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// 🎵 🎵 🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵
+// Small reusable deck widgets
+// 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵 🎵 🎵  🎵  🎵 🎵
 class _DeckScrew extends StatelessWidget {
   const _DeckScrew();
 
@@ -2035,6 +2125,7 @@ class _DeckScrew extends StatelessWidget {
 
 class _DeckKnob extends StatelessWidget {
   const _DeckKnob({required this.size});
+
   final double size;
 
   @override
@@ -2057,6 +2148,7 @@ class _DeckKnob extends StatelessWidget {
 
 class _DeckLoopButton extends StatelessWidget {
   const _DeckLoopButton({required this.isLooping, required this.onPressed});
+
   final bool isLooping;
   final VoidCallback? onPressed;
 
@@ -2104,6 +2196,7 @@ class _ToneArm extends StatelessWidget {
     required this.progress,
     required this.onTap,
   });
+
   final bool isPlaying;
   final double progress;
   final VoidCallback? onTap;
@@ -2222,6 +2315,7 @@ class _ScrubbableWaveform extends StatelessWidget {
     required this.progress,
     required this.onSeek,
   });
+
   final List<double> heights;
   final double progress;
   final ValueChanged<double>? onSeek;
@@ -2275,10 +2369,9 @@ class _ScrubbableWaveform extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _GenerateSongSliderCard - Improved with dark theme and better UX
-// ─────────────────────────────────────────────────────────────────────────────
-
+// 🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵
+// _GenerateSongSliderCard - Modified to only proceed when slid the whole way
+// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
 class _GenerateSongSliderCard extends StatefulWidget {
   const _GenerateSongSliderCard({
     required this.compact,
@@ -2295,72 +2388,253 @@ class _GenerateSongSliderCard extends StatefulWidget {
 
 class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
     with SingleTickerProviderStateMixin {
-  static const double _handleSize = 46;
-  static const double _trackPadding = 7;
-  static const double _completeThreshold = 0.92;
-
+  static const double _handleSize = 50;
+  static const double _trackPadding = 6;
+  static const double _completeThreshold =
+      0.99; // Changed to 0.99 for full slide
   double _progress = 0;
   bool _isSubmitting = false;
   bool _isDragging = false;
-  late AnimationController _pulseController;
+  late AnimationController _shimmerController;
 
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1200),
+    _shimmerController = AnimationController(
+      duration: const Duration(milliseconds: 3800),
       vsync: this,
     )..repeat();
   }
 
   @override
   void dispose() {
-    _pulseController.dispose();
+    _shimmerController.dispose();
     super.dispose();
   }
 
-  double _maxTravel(BoxConstraints constraints) {
-    return (constraints.maxWidth - _handleSize - (_trackPadding * 2)).clamp(
-      0.0,
-      double.infinity,
+  double _maxTravel(BoxConstraints c) =>
+      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(
+        0.0,
+        double.infinity,
+      );
+
+  void _updateProgress(Offset local, BoxConstraints c) {
+    if (_isSubmitting) return;
+    final t = ((local.dx - _trackPadding - _handleSize / 2) / _maxTravel(c))
+        .clamp(0.0, 1.0);
+    if (t == _progress) return;
+    setState(() {
+      _progress = t;
+      _isDragging = t > 0;
+    });
+  }
+
+  Future<void> _onDragEnd() async {
+    setState(() => _isDragging = false);
+    if (_isSubmitting) return;
+    // Only proceed if slid to completion (full width)
+    if (_progress >= _completeThreshold) {
+      setState(() {
+        _progress = 1;
+        _isSubmitting = true;
+      });
+      try {
+        await widget.onCompleted();
+      } finally {
+        if (mounted)
+          setState(() {
+            _isSubmitting = false;
+            _progress = 0;
+          });
+      }
+    } else {
+      // Reset progress if not fully slid
+      setState(() => _progress = 0);
+    }
+  }
+
+  BoxDecoration _buildTrackDecoration() => BoxDecoration(
+    color: const Color(0xFF1E1E1E),
+    borderRadius: BorderRadius.circular(22),
+    border: Border.all(
+      color: _isDragging ? const Color(0xFF11F08A) : const Color(0xFF3A3A3A),
+      width: _isDragging ? 1.5 : 1,
+    ),
+  );
+
+  Widget _buildShimmer(BoxConstraints c) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: AnimatedBuilder(
+            animation: _shimmerController,
+            builder: (_, __) {
+              final bandW = c.maxWidth * 0.30;
+              final x =
+                  -bandW + (_shimmerController.value * (c.maxWidth + bandW));
+              return CustomPaint(
+                painter: _ShimmerPainter(x: x, bandWidth: bandW),
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 
-  void _updateProgress(Offset localPosition, BoxConstraints constraints) {
-    if (_isSubmitting) return;
-    final maxTravel = _maxTravel(constraints);
-    if (maxTravel <= 0) return;
-    final next = ((localPosition.dx - _trackPadding - (_handleSize / 2)) /
-            maxTravel)
-        .clamp(0.0, 1.0);
-    if (next == _progress) return;
-    setState(() {
-      _progress = next;
-      _isDragging = next > 0;
-    });
+  Widget _buildHandle(double knobOffset) {
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 110),
+      curve: Curves.easeOut,
+      left: _trackPadding + knobOffset,
+      top: _trackPadding,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: _handleSize,
+        height: _handleSize,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors:
+                _isDragging
+                    ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
+                    : [const Color(0xFF383838), const Color(0xFF262626)],
+          ),
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(
+            color:
+                _isDragging
+                    ? Colors.white.withValues(alpha: 0.45)
+                    : const Color(0xFF565656),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color:
+                  _isDragging
+                      ? const Color(0xFF11F08A).withValues(alpha: 0.35)
+                      : Colors.black.withValues(alpha: 0.4),
+              blurRadius: _isDragging ? 16 : 8,
+              offset: Offset(0, _isDragging ? 4 : 2),
+            ),
+          ],
+        ),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child:
+              _isSubmitting
+                  ? const SizedBox(
+                    key: ValueKey('loading'),
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                  : Icon(
+                    Icons.auto_awesome_rounded,
+                    key: const ValueKey('icon'),
+                    size: 22,
+                    color: _isDragging ? Colors.black : Colors.white,
+                  ),
+        ),
+      ),
+    );
   }
 
-  Future<void> _handleDragEnd() async {
-    setState(() => _isDragging = false);
-    if (_isSubmitting) return;
-    if (_progress < _completeThreshold) {
-      setState(() => _progress = 0);
-      return;
-    }
-    setState(() {
-      _progress = 1;
-      _isSubmitting = true;
-    });
-    try {
-      await widget.onCompleted();
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-          _progress = 0;
-        });
-      }
-    }
+  Widget _buildContent(BoxConstraints c) {
+    final titleSize = (c.maxWidth * 0.037).clamp(13.0, 15.5);
+    final subSize = (c.maxWidth * 0.026).clamp(10.0, 11.5);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_handleSize + _trackPadding + 14, 0, 14, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 120),
+              opacity: _isSubmitting ? 0.6 : (1 - _progress * 0.45),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome_rounded,
+                        size: titleSize + 1,
+                        color:
+                            _isDragging
+                                ? const Color(0xFF11F08A)
+                                : const Color(0xFFCCCCCC),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _isSubmitting
+                              ? 'Opening generator…'
+                              : _isDragging
+                              ? 'Slide to create 🎵 '
+                              : 'Generate My Song',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: titleSize,
+                            fontWeight: FontWeight.w900,
+                            color:
+                                _isDragging
+                                    ? const Color(0xFF11F08A)
+                                    : Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    _isDragging
+                        ? 'Release to generate AI song'
+                        : 'AI writes lyrics based on your style',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: subSize,
+                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFF888888),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedOpacity(
+            duration: const Duration(milliseconds: 120),
+            opacity: _isSubmitting ? 0.2 : (_progress < 0.25 ? 0.8 : 0.15),
+            child: SizedBox(
+              width: 48,
+              height: 18,
+              child: Stack(
+                children: List.generate(4, (i) {
+                  const alphas = [1.0, 0.65, 0.38, 0.18];
+                  return Positioned(
+                    left: i * 11.0,
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: Colors.white.withValues(alpha: alphas[i]),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -2368,361 +2642,47 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
     return Semantics(
       button: true,
       label: 'Generate My Song',
-      hint: 'Slide to open the AI song generator.',
+      hint: 'Slide right to open the AI song generator.',
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final titleSize =
-              constraints.maxWidth < 310
-                  ? 12.2
-                  : constraints.maxWidth < 340
-                  ? 12.8
-                  : constraints.maxWidth < 380
-                  ? 13.6
-                  : widget.compact
-                  ? 14.4
-                  : 15.2;
-          final subtitleSize =
-              constraints.maxWidth < 340 ? 9.8 : (widget.compact ? 10.5 : 11.2);
-          final titleIconSize =
-              constraints.maxWidth < 340 ? 15.0 : titleSize + 3;
           final maxTravel = _maxTravel(constraints);
           final knobOffset = maxTravel * _progress;
-          final revealWidth = (_handleSize + (_trackPadding * 2) + knobOffset)
-              .clamp(_handleSize + (_trackPadding * 2), constraints.maxWidth);
-
+          final revealW = (_handleSize + _trackPadding * 2 + knobOffset).clamp(
+            _handleSize + _trackPadding * 2,
+            constraints.maxWidth,
+          );
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: (details) {
+            onHorizontalDragStart: (d) {
               HapticFeedback.lightImpact();
-              _updateProgress(details.localPosition, constraints);
+              _updateProgress(d.localPosition, constraints);
             },
             onHorizontalDragUpdate:
-                (details) =>
-                    _updateProgress(details.localPosition, constraints),
-            onHorizontalDragEnd: (_) => _handleDragEnd(),
+                (d) => _updateProgress(d.localPosition, constraints),
+            onHorizontalDragEnd: (_) => _onDragEnd(),
             onHorizontalDragCancel: () {
-              if (_isSubmitting) return;
-              setState(() {
-                _progress = 0;
-                _isDragging = false;
-              });
+              if (!_isSubmitting)
+                setState(() {
+                  _progress = 0;
+                  _isDragging = false;
+                });
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors:
-                      _isDragging
-                          ? [const Color(0xFF2A2A2A), const Color(0xFF1A1A1A)]
-                          : [const Color(0xFF2A2A2A), const Color(0xFF1A1A1A)],
-                ),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(
-                  color:
-                      _isDragging
-                          ? const Color(0xFF11F08A)
-                          : const Color(0xFF3A3A3A),
-                  width: _isDragging ? 1.5 : 1,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color:
-                        _isDragging
-                            ? const Color(0xFF11F08A).withValues(alpha: 0.2)
-                            : Colors.black.withValues(alpha: 0.1),
-                    blurRadius: _isDragging ? 12 : 4,
-                    offset: Offset(0, _isDragging ? 2 : 1),
-                  ),
-                ],
-              ),
+              decoration: _buildTrackDecoration(),
               child: Stack(
                 children: [
-                  // Animated fill background
                   AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOut,
-                    width: revealWidth,
+                    duration: const Duration(milliseconds: 120),
+                    width: revealW,
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                        colors: [
-                          const Color(0xFF3A3A3A),
-                          const Color(0xFF2A2A2A),
-                          const Color(0xFF1F1F1F),
-                        ],
-                      ),
+                      color: const Color(0xFF2C2C2C),
                       borderRadius: BorderRadius.circular(22),
                     ),
                   ),
-                  // Shimmer sweep
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
-                        child: AnimatedBuilder(
-                          animation: _pulseController,
-                          builder: (context, child) {
-                            final shimmerWidth = constraints.maxWidth * 0.34;
-                            final shimmerLeft =
-                                -shimmerWidth +
-                                ((constraints.maxWidth + shimmerWidth * 2) *
-                                    _pulseController.value);
-                            return Stack(
-                              children: [
-                                Positioned(
-                                  left: shimmerLeft,
-                                  top: -10,
-                                  bottom: -10,
-                                  child: Opacity(
-                                    opacity:
-                                        _isSubmitting
-                                            ? 0.08
-                                            : _isDragging
-                                            ? 0.12
-                                            : 0.16,
-                                    child: Transform.rotate(
-                                      angle: -0.18,
-                                      child: Container(
-                                        width: shimmerWidth,
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.centerLeft,
-                                            end: Alignment.centerRight,
-                                            colors: [
-                                              Colors.white.withValues(alpha: 0),
-                                              Colors.white.withValues(
-                                                alpha: 0.04,
-                                              ),
-                                              Colors.white.withValues(
-                                                alpha: 0.22,
-                                              ),
-                                              Colors.white.withValues(
-                                                alpha: 0.04,
-                                              ),
-                                              Colors.white.withValues(alpha: 0),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Content
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(72, 10, 14, 10),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 120),
-                            opacity:
-                                _isSubmitting ? 0.7 : (1 - (_progress * 0.5)),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    AnimatedBuilder(
-                                      animation: _pulseController,
-                                      builder: (context, child) {
-                                        return Icon(
-                                          Icons.auto_awesome_rounded,
-                                          size: titleIconSize,
-                                          color:
-                                              _isSubmitting
-                                                  ? Colors.grey[400]
-                                                  : _isDragging
-                                                  ? const Color(0xFF11F08A)
-                                                  : Colors.grey[300],
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        _isSubmitting
-                                            ? 'Opening generator...'
-                                            : _isDragging
-                                            ? 'Slide to create →'
-                                            : 'Generate My Song',
-                                        maxLines: 1,
-                                        softWrap: false,
-                                        style: TextStyle(
-                                          fontFamily: 'Inter',
-                                          fontSize: titleSize,
-                                          fontWeight: FontWeight.w900,
-                                          color:
-                                              _isDragging
-                                                  ? const Color(0xFF11F08A)
-                                                  : Colors.white,
-                                          height: 1.1,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  _isDragging
-                                      ? 'Release to generate AI song'
-                                      : 'AI writes lyrics based on your style',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: subtitleSize,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.grey[400],
-                                    height: 1.3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        AnimatedOpacity(
-                          duration: const Duration(milliseconds: 120),
-                          opacity:
-                              _isSubmitting
-                                  ? 0.3
-                                  : (_progress < 0.3 ? 0.9 : 0.2),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(
-                                width: 49,
-                                height: 18,
-                                child: Stack(
-                                  children: List.generate(4, (index) {
-                                    const arrowBrightness = [
-                                      1.0,
-                                      0.72,
-                                      0.46,
-                                      0.24,
-                                    ];
-                                    return Positioned(
-                                      left: index * 10.0,
-                                      child: Icon(
-                                        Icons.chevron_right_rounded,
-                                        color: Colors.white.withValues(
-                                          alpha: arrowBrightness[index],
-                                        ),
-                                        size: 18,
-                                      ),
-                                    );
-                                  }),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Slider handle
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 120),
-                    curve: Curves.easeOut,
-                    left: _trackPadding + knobOffset,
-                    top: _trackPadding,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      width: _handleSize,
-                      height: _handleSize,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors:
-                              _isDragging
-                                  ? [
-                                    const Color(0xFF11F08A),
-                                    const Color(0xFF0CC878),
-                                  ]
-                                  : [
-                                    const Color(0xFF3A3A3A),
-                                    const Color(0xFF2A2A2A),
-                                  ],
-                        ),
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color:
-                                _isDragging
-                                    ? const Color(
-                                      0xFF11F08A,
-                                    ).withValues(alpha: 0.4)
-                                    : Colors.black.withValues(alpha: 0.3),
-                            blurRadius: _isDragging ? 16 : 8,
-                            offset: Offset(0, _isDragging ? 4 : 2),
-                          ),
-                        ],
-                        border: Border.all(
-                          color:
-                              _isDragging
-                                  ? Colors.white.withValues(alpha: 0.5)
-                                  : Colors.grey[600]!,
-                          width: 1,
-                        ),
-                      ),
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 200),
-                        child:
-                            _isSubmitting
-                                ? const SizedBox(
-                                  key: ValueKey('loading'),
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
-                                    ),
-                                  ),
-                                )
-                                : Icon(
-                                  _isDragging
-                                      ? Icons.auto_awesome_rounded
-                                      : Icons.auto_awesome_rounded,
-                                  key: ValueKey('icon'),
-                                  color:
-                                      _isDragging ? Colors.black : Colors.white,
-                                  size: 24,
-                                ),
-                      ),
-                    ),
-                  ),
-                  // Progress indicator overlay
-                  if (_progress > 0 && _progress < 1 && !_isSubmitting)
-                    Positioned(
-                      left: _trackPadding + _handleSize,
-                      top: 0,
-                      bottom: 0,
-                      child: Center(
-                        child: Container(
-                          width: 2,
-                          height: _handleSize - 10,
-                          decoration: BoxDecoration(
-                            color: const Color(
-                              0xFF11F08A,
-                            ).withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(1),
-                          ),
-                        ),
-                      ),
-                    ),
+                  _buildShimmer(constraints),
+                  Positioned.fill(child: _buildContent(constraints)),
+                  _buildHandle(knobOffset),
                 ],
               ),
             ),
@@ -2733,8 +2693,41 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   }
 }
 
+// 🎵 🎵  Shimmer painter (extracted for cleanliness) 🎵  🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵  🎵 🎵 🎵 🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵 🎵
+class _ShimmerPainter extends CustomPainter {
+  const _ShimmerPainter({required this.x, required this.bandWidth});
+
+  final double x;
+  final double bandWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grad = LinearGradient(
+      colors: [
+        Colors.white.withValues(alpha: 0),
+        Colors.white.withValues(alpha: 0.025),
+        Colors.white.withValues(alpha: 0.10),
+        Colors.white.withValues(alpha: 0.025),
+        Colors.white.withValues(alpha: 0),
+      ],
+    ).createShader(Rect.fromLTWH(x, 0, bandWidth, size.height));
+    canvas.save();
+    canvas.transform(Matrix4.rotationZ(-0.12).storage);
+    canvas.drawRect(
+      Rect.fromLTWH(x - 10, -20, bandWidth, size.height + 40),
+      Paint()..shader = grad,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ShimmerPainter old) =>
+      old.x != x || old.bandWidth != bandWidth;
+}
+
 class _SeekButton extends StatelessWidget {
   const _SeekButton({required this.seconds, required this.onPressed});
+
   final int seconds;
   final VoidCallback? onPressed;
 
@@ -2742,7 +2735,6 @@ class _SeekButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     final isForward = seconds > 0;
-
     return Opacity(
       opacity: enabled ? 1.0 : 0.35,
       child: GestureDetector(
@@ -2828,7 +2820,7 @@ class _HeaderQuickMenu extends StatelessWidget {
         height: compact ? 28 : 20,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFEDE8E0),
+          color: const Color(0xFFF8F4EE),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: const Color(0xFFD8D3CC), width: 1),
         ),
@@ -2840,16 +2832,6 @@ class _HeaderQuickMenu extends StatelessWidget {
               color: const Color(0xFF333333),
               size: compact ? 20 : 22,
             ),
-           // const SizedBox(width: 4),
-            // Text(
-            //   '',
-            //   style: TextStyle(
-            //     fontFamily: 'Inter',
-            //     fontSize: compact ? 12 : 13,
-            //     fontWeight: FontWeight.w800,
-            //     color: const Color(0xFF333333),
-            //   ),
-            // ),
           ],
         ),
       ),
@@ -2892,7 +2874,6 @@ class _VinylPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
     final radius = size.shortestSide / 2;
-
     canvas.drawCircle(
       center,
       radius,
@@ -2902,7 +2883,6 @@ class _VinylPainter extends CustomPainter {
           stops: [0.2, 0.72, 1],
         ).createShader(Rect.fromCircle(center: center, radius: radius)),
     );
-
     final groovePaint =
         Paint()
           ..style = PaintingStyle.stroke
@@ -2911,7 +2891,6 @@ class _VinylPainter extends CustomPainter {
     for (double groove = radius * 0.35; groove < radius * 0.96; groove += 9) {
       canvas.drawCircle(center, groove, groovePaint);
     }
-
     final dotPaint = Paint()..color = const Color(0xCCF4F4F4);
     for (int i = 0; i < 132; i++) {
       final theta = (i / 132) * math.pi * 2;
@@ -2921,7 +2900,6 @@ class _VinylPainter extends CustomPainter {
       );
       canvas.drawCircle(dotCenter, 1.3, dotPaint);
     }
-
     canvas.drawCircle(
       center,
       radius * 0.16,

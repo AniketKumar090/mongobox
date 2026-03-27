@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import '../models/saved_voice_song.dart';
 import '../services/audio_session_service.dart';
 import '../services/saved_voice_song_service.dart';
+import '../widgets/lyric_page_scaffold.dart';
 
 class SavedVoiceSongsScreen extends StatefulWidget {
   const SavedVoiceSongsScreen({super.key});
@@ -29,8 +30,8 @@ class _SavedVoiceSongsScreenState extends State<SavedVoiceSongsScreen> {
     super.initState();
     _player.playerStateStream.listen((state) {
       if (!mounted) return;
-      final playing = state.playing &&
-          state.processingState != ProcessingState.completed;
+      final playing =
+          state.playing && state.processingState != ProcessingState.completed;
       setState(() => _isPlaying = playing);
       if (state.processingState == ProcessingState.completed) {
         _musicPlayer.stop();
@@ -93,20 +94,21 @@ class _SavedVoiceSongsScreenState extends State<SavedVoiceSongsScreen> {
   Future<void> _deleteSong(SavedVoiceSong song) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete saved song?'),
-        content: Text('Remove "${song.title}" from your saved songs?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Delete saved song?'),
+            content: Text('Remove "${song.title}" from your saved songs?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
     );
 
     if (shouldDelete != true) return;
@@ -136,20 +138,21 @@ class _SavedVoiceSongsScreenState extends State<SavedVoiceSongsScreen> {
   String _formatDate(String iso) {
     final dt = DateTime.tryParse(iso)?.toLocal();
     if (dt == null) return '';
-    final month = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ][dt.month - 1];
+    final month =
+        [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ][dt.month - 1];
     final hour = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
     final minute = dt.minute.toString().padLeft(2, '0');
     final period = dt.hour >= 12 ? 'PM' : 'AM';
@@ -158,99 +161,246 @@ class _SavedVoiceSongsScreenState extends State<SavedVoiceSongsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Saved Songs'),
-        backgroundColor: cs.inverseSurface,
-        foregroundColor: cs.onInverseSurface,
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _songs.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.library_music_outlined,
-                            size: 60, color: cs.outline),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No saved cloned songs yet',
-                          style: tt.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Save a cloned song after generation and it will appear here for replay anytime.',
-                          textAlign: TextAlign.center,
-                          style: tt.bodyMedium?.copyWith(
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
+    return LyricPageScaffold(
+      title: 'Downloads',
+      subtitle:
+          'Replay the cloned songs you have saved, jump back into your favorites, and tidy up the library when you want.',
+      badge: 'Saved audio',
+      child: Builder(
+        builder:
+            (context) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                LyricSectionCard(
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      LyricStatChip(
+                        label: 'Saved tracks',
+                        value: '${_songs.length}',
+                        icon: Icons.library_music_rounded,
+                      ),
+                      LyricStatChip(
+                        label: 'Now playing',
+                        value: _activeSongId == null ? 'Idle' : 'Live preview',
+                        icon: Icons.play_circle_rounded,
+                      ),
+                    ],
                   ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _songs.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final song = _songs[index];
-                    final isActive = _activeSongId == song.id;
-                    final exists = File(song.filePath).existsSync();
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: cs.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: isActive
-                              ? cs.primary.withValues(alpha: 0.4)
-                              : cs.outline.withValues(alpha: 0.15),
-                        ),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 10,
-                        ),
-                        leading: CircleAvatar(
-                          backgroundColor: isActive
-                              ? cs.primary
-                              : cs.primaryContainer,
-                          foregroundColor:
-                              isActive ? cs.onPrimary : cs.onPrimaryContainer,
-                          child: Icon(
-                            isActive && _isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                          ),
-                        ),
-                        title: Text(
-                          song.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${song.language} • ${song.hasBackgroundMusic ? 'with music' : 'vocals only'}\n${_formatDate(song.createdAtIso)}',
-                        ),
-                        isThreeLine: true,
-                        onTap: exists ? () => _togglePlay(song) : null,
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline_rounded),
-                          tooltip: 'Delete',
-                          onPressed: () => _deleteSong(song),
-                        ),
-                      ),
-                    );
-                  },
                 ),
+                const SizedBox(height: 16),
+                if (_loading)
+                  const LyricSectionCard(
+                    child: Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  )
+                else if (_songs.isEmpty)
+                  const LyricSectionCard(child: _DownloadsEmptyState())
+                else
+                  Column(
+                    children: [
+                      for (var index = 0; index < _songs.length; index++) ...[
+                        _SavedSongCard(
+                          song: _songs[index],
+                          isActive: _activeSongId == _songs[index].id,
+                          isPlaying: _isPlaying,
+                          exists: File(_songs[index].filePath).existsSync(),
+                          formattedDate: _formatDate(
+                            _songs[index].createdAtIso,
+                          ),
+                          onPlay: () => _togglePlay(_songs[index]),
+                          onDelete: () => _deleteSong(_songs[index]),
+                        ),
+                        if (index != _songs.length - 1)
+                          const SizedBox(height: 12),
+                      ],
+                    ],
+                  ),
+              ],
+            ),
+      ),
+    );
+  }
+}
+
+class _DownloadsEmptyState extends StatelessWidget {
+  const _DownloadsEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.library_music_outlined, size: 56, color: cs.outline),
+          const SizedBox(height: 14),
+          Text(
+            'No saved cloned songs yet',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Save a cloned song after generation and it will appear here for replay anytime.',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SavedSongCard extends StatelessWidget {
+  const _SavedSongCard({
+    required this.song,
+    required this.isActive,
+    required this.isPlaying,
+    required this.exists,
+    required this.formattedDate,
+    required this.onPlay,
+    required this.onDelete,
+  });
+
+  final SavedVoiceSong song;
+  final bool isActive;
+  final bool isPlaying;
+  final bool exists;
+  final String formattedDate;
+  final VoidCallback onPlay;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color:
+            isActive
+                ? cs.secondaryContainer.withValues(alpha: 0.7)
+                : cs.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color:
+              isActive
+                  ? cs.secondary.withValues(alpha: 0.35)
+                  : cs.outline.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: isActive ? cs.primary : cs.tertiaryContainer,
+                foregroundColor: isActive ? cs.onPrimary : cs.onSurface,
+                child: Icon(
+                  isActive && isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      song.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      formattedDate,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded),
+                tooltip: 'Delete',
+                onPressed: onDelete,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (song.language.trim().isNotEmpty)
+                LyricTag(label: song.language, icon: Icons.language_rounded),
+              if (song.genre.trim().isNotEmpty)
+                LyricTag(label: song.genre, icon: Icons.graphic_eq_rounded),
+              if (song.mood.trim().isNotEmpty)
+                LyricTag(label: song.mood, icon: Icons.auto_awesome_rounded),
+              LyricTag(
+                label: song.hasBackgroundMusic ? 'With music' : 'Vocals only',
+                icon:
+                    song.hasBackgroundMusic
+                        ? Icons.album_rounded
+                        : Icons.mic_rounded,
+                highlighted: song.hasBackgroundMusic,
+              ),
+              if (!exists)
+                const LyricTag(
+                  label: 'File missing',
+                  icon: Icons.warning_amber_rounded,
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: exists ? onPlay : null,
+                  icon: Icon(
+                    isActive && isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                  ),
+                  label: Text(isActive && isPlaying ? 'Pause' : 'Play'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  label: const Text('Remove'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
