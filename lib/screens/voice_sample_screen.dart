@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -285,6 +286,29 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         content: Text(msg),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  Future<void> _startVoiceCloneFlow() async {
+    final recordedPath = _recordedPath;
+    if (recordedPath == null) return;
+    await HapticFeedback.mediumImpact();
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => VoiceSongScreen(
+              songTitle: widget.songTitle,
+              hindiLyrics: widget.hindiLyrics,
+              englishLyrics: widget.englishLyrics,
+              hinglishLyrics: widget.hinglishLyrics,
+              dominantLanguage: widget.dominantLanguage,
+              mood: widget.mood,
+              genre: widget.genre,
+              referenceSong: widget.referenceSong,
+              voiceSamplePath: recordedPath,
+            ),
       ),
     );
   }
@@ -1058,41 +1082,14 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                               ),
                               const SizedBox(height: 12),
                               SizedBox(
-                                height: 56,
+                                height: 68,
                                 width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute<void>(
-                                        builder:
-                                            (_) => VoiceSongScreen(
-                                              songTitle: widget.songTitle,
-                                              hindiLyrics: widget.hindiLyrics,
-                                              englishLyrics:
-                                                  widget.englishLyrics,
-                                              hinglishLyrics:
-                                                  widget.hinglishLyrics,
-                                              dominantLanguage:
-                                                  widget.dominantLanguage,
-                                              mood: widget.mood,
-                                              genre: widget.genre,
-                                              referenceSong:
-                                                  widget.referenceSong,
-                                              voiceSamplePath: _recordedPath!,
-                                            ),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.arrow_forward_rounded,
-                                    size: 18,
-                                  ),
-                                  label: Text(
-                                    'Use This Recording',
-                                    style: tt.labelLarge?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
+                                child: _SlideToConfirmButton(
+                                  label: 'Slide to clone my voice',
+                                  hint:
+                                      'Complete the swipe to start the Python voice-cloning backend.',
+                                  handleIcon: Icons.record_voice_over_rounded,
+                                  onCompleted: _startVoiceCloneFlow,
                                 ),
                               ),
                               const SizedBox(height: 8),
@@ -1596,6 +1593,208 @@ class _WaveBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SlideToConfirmButton extends StatefulWidget {
+  const _SlideToConfirmButton({
+    required this.label,
+    required this.hint,
+    required this.handleIcon,
+    required this.onCompleted,
+  });
+
+  final String label;
+  final String hint;
+  final IconData handleIcon;
+  final Future<void> Function() onCompleted;
+
+  @override
+  State<_SlideToConfirmButton> createState() => _SlideToConfirmButtonState();
+}
+
+class _SlideToConfirmButtonState extends State<_SlideToConfirmButton> {
+  static const double _handleSize = 56;
+  static const double _trackPadding = 6;
+  static const double _completeThreshold = 0.9;
+
+  double _progress = 0;
+  bool _isSubmitting = false;
+
+  double _maxTravel(BoxConstraints constraints) {
+    return (constraints.maxWidth - _handleSize - (_trackPadding * 2)).clamp(
+      0.0,
+      double.infinity,
+    );
+  }
+
+  void _updateProgress(Offset localPosition, BoxConstraints constraints) {
+    if (_isSubmitting) return;
+    final maxTravel = _maxTravel(constraints);
+    if (maxTravel <= 0) return;
+    final next = ((localPosition.dx - _trackPadding - (_handleSize / 2)) /
+            maxTravel)
+        .clamp(0.0, 1.0);
+    if (next == _progress) return;
+    setState(() => _progress = next);
+  }
+
+  Future<void> _handleDragEnd() async {
+    if (_isSubmitting) return;
+    if (_progress < _completeThreshold) {
+      setState(() => _progress = 0);
+      return;
+    }
+    setState(() {
+      _progress = 1;
+      _isSubmitting = true;
+    });
+    try {
+      await widget.onCompleted();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+          _progress = 0;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+
+    return Semantics(
+      button: true,
+      label: widget.label,
+      hint: widget.hint,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxTravel = _maxTravel(constraints);
+          final knobOffset = maxTravel * _progress;
+          final fillWidth = (_handleSize + (_trackPadding * 2) + knobOffset)
+              .clamp(_handleSize + (_trackPadding * 2), constraints.maxWidth);
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart:
+                (details) =>
+                    _updateProgress(details.localPosition, constraints),
+            onHorizontalDragUpdate:
+                (details) =>
+                    _updateProgress(details.localPosition, constraints),
+            onHorizontalDragEnd: (_) => _handleDragEnd(),
+            onHorizontalDragCancel: () {
+              if (_isSubmitting) return;
+              setState(() => _progress = 0);
+            },
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1D191B),
+                borderRadius: BorderRadius.circular(36),
+                border: Border.all(color: const Color(0xFF2C272A), width: 1.5),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x20000000),
+                    blurRadius: 18,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.centerLeft,
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut,
+                    width: fillWidth,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF2A2427), Color(0xFF1D191B)],
+                      ),
+                      borderRadius: BorderRadius.circular(36),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 44),
+                        Expanded(
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 120),
+                            opacity:
+                                _isSubmitting ? 0.75 : (1 - (_progress * 0.5)),
+                            child: Text(
+                              _isSubmitting
+                                  ? 'Starting voice clone...'
+                                  : widget.label,
+                              textAlign: TextAlign.center,
+                              style: tt.titleMedium?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                        AnimatedOpacity(
+                          duration: const Duration(milliseconds: 120),
+                          opacity:
+                              _isSubmitting ? 0.3 : (0.95 - (_progress * 0.7)),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: List.generate(
+                              3,
+                              (_) => const Icon(
+                                Icons.chevron_right_rounded,
+                                color: Color(0xFFD4CED1),
+                                size: 24,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 120),
+                    curve: Curves.easeOut,
+                    left: _trackPadding + knobOffset,
+                    top: _trackPadding,
+                    child: Container(
+                      width: _handleSize,
+                      height: _handleSize,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF2E292C),
+                        border: Border.all(
+                          color: const Color(0xFF3C3539),
+                          width: 1.5,
+                        ),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x33000000),
+                            blurRadius: 12,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        widget.handleIcon,
+                        color: const Color(0xFFFF5A47),
+                        size: 28,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
