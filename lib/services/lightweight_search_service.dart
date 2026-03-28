@@ -17,6 +17,8 @@ class LightweightSearchResult {
     required this.artistName,
     required this.startTimeSeconds,
     required this.confidence,
+    this.matchedLineTimeSeconds,
+    this.matchedLyricLine,
     this.source = 'lightweight',
   });
 
@@ -25,6 +27,8 @@ class LightweightSearchResult {
   final String artistName;
   final int startTimeSeconds;
   final double confidence;
+  final int? matchedLineTimeSeconds;
+  final String? matchedLyricLine;
   final String source;
 }
 
@@ -39,11 +43,12 @@ class LightweightSearchService {
   final Map<String, List<LightweightSearchResult>> _searchCache = {};
   final Map<String, String> _videoIdCache = {};
   final Map<String, String> _titleCache = {};
-  
+
   // When quota is exceeded, only use cached results
   bool get _isQuotaExceeded {
     final status = _quotaMonitor.getStatus();
-    return status.estimatedRemaining < 500; // Use cached results when less than 500 units left
+    return status.estimatedRemaining <
+        500; // Use cached results when less than 500 units left
   }
 
   /// Prime in-memory caches from disk-stored recent tracks (no API calls).
@@ -70,6 +75,8 @@ class LightweightSearchService {
       artistName: result.artistName,
       videoId: result.videoId,
       startTimeSeconds: result.startTimeSeconds,
+      matchedLineTimeSeconds: result.matchedLineTimeSeconds,
+      matchedLyricLine: result.matchedLyricLine,
       source: 'played-cache',
     );
   }
@@ -80,11 +87,14 @@ class LightweightSearchService {
     required String artistName,
     required String videoId,
     required int startTimeSeconds,
+    int? matchedLineTimeSeconds,
+    String? matchedLyricLine,
     required String source,
   }) {
     if (videoId.isEmpty) return;
     final normalizedLyric = _normalize(lyricKey);
-    final normalizedTrackKey = '${trackName.toLowerCase()}::${artistName.toLowerCase()}';
+    final normalizedTrackKey =
+        '${trackName.toLowerCase()}::${artistName.toLowerCase()}';
 
     final cached = LightweightSearchResult(
       videoId: videoId,
@@ -92,6 +102,8 @@ class LightweightSearchService {
       artistName: artistName,
       startTimeSeconds: startTimeSeconds,
       confidence: 0.95,
+      matchedLineTimeSeconds: matchedLineTimeSeconds,
+      matchedLyricLine: matchedLyricLine,
       source: source,
     );
 
@@ -123,12 +135,14 @@ class LightweightSearchService {
   ) {
     final deduped = <String, LightweightSearchResult>{};
     for (final r in [...existing, incoming]) {
-      if (!deduped.containsKey(r.videoId) || r.confidence > deduped[r.videoId]!.confidence) {
+      if (!deduped.containsKey(r.videoId) ||
+          r.confidence > deduped[r.videoId]!.confidence) {
         deduped[r.videoId] = r;
       }
     }
-    final merged = deduped.values.toList()
-      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+    final merged =
+        deduped.values.toList()
+          ..sort((a, b) => b.confidence.compareTo(a.confidence));
     return merged;
   }
 
@@ -168,8 +182,10 @@ class LightweightSearchService {
       results = await _grokRefinement.refineSearchResults(query, results);
     }
 
-    // Cache the results
-    _searchCache[cacheKey] = results;
+    // Cache only successful results so a bad/exhausted key does not poison later searches.
+    if (results.isNotEmpty) {
+      _searchCache[cacheKey] = results;
+    }
 
     return results;
   }
@@ -181,18 +197,31 @@ class LightweightSearchService {
     final lyricMatches = await _collectLyricMatches(query);
     if (lyricMatches.isNotEmpty) {
       for (final match in lyricMatches.take(3)) {
-        final videoId = await _getVideoIdWithCache(match.trackName, match.artistName);
+        final videoId = await _getVideoIdWithCache(
+          match.trackName,
+          match.artistName,
+        );
         if (videoId == null) continue;
 
         final startTime = _calculateStartTime(match.syncedLyrics, query);
 
-        results.add(LightweightSearchResult(
-          videoId: videoId,
-          trackName: match.trackName,
-          artistName: match.artistName,
-          startTimeSeconds: startTime,
-          confidence: _calculateConfidence(match.syncedLyrics, query),
-        ));
+        results.add(
+          LightweightSearchResult(
+            videoId: videoId,
+            trackName: match.trackName,
+            artistName: match.artistName,
+            startTimeSeconds: startTime,
+            confidence: _calculateConfidence(match.syncedLyrics, query),
+            matchedLineTimeSeconds: _findExactLineTime(
+              match.syncedLyrics,
+              query,
+            ),
+            matchedLyricLine: LyricsService.bestMatchingLineText(
+              match.syncedLyrics ?? '',
+              query,
+            ),
+          ),
+        );
       }
 
       results.sort((a, b) => b.confidence.compareTo(a.confidence));
@@ -204,7 +233,10 @@ class LightweightSearchService {
 
   /// Merge LRCLIB hits across multiple query variants (head/mid/tail/sliding), like [PlaybackServiceMobile].
   Future<List<LyricsMatch>> _collectLyricMatches(String query) async {
-    final variants = LyricsService.lyricSearchQueryVariants(query, maxQueries: 12);
+    final variants = LyricsService.lyricSearchQueryVariants(
+      query,
+      maxQueries: 12,
+    );
     final byId = <int, LyricsMatch>{};
     final order = <int>[];
 
@@ -223,11 +255,16 @@ class LightweightSearchService {
   }
 
   /// When LRCLIB has no match (common for deep rap), search YouTube with the same variants as playback.
-  Future<List<LightweightSearchResult>> _youtubeLyricOnlyFallback(String query) async {
+  Future<List<LightweightSearchResult>> _youtubeLyricOnlyFallback(
+    String query,
+  ) async {
     final results = <LightweightSearchResult>[];
     if (_isQuotaExceeded) return results;
 
-    final variants = LyricsService.youtubeLyricSearchVariants(query, maxQueries: 6);
+    final variants = LyricsService.youtubeLyricSearchVariants(
+      query,
+      maxQueries: 6,
+    );
     final seen = <String>{};
     final pool = <Map<String, dynamic>>[];
 
@@ -247,8 +284,12 @@ class LightweightSearchService {
 
     if (pool.isEmpty) return results;
 
-    pool.sort((a, b) => LyricsService.scoreYoutubeCandidateForLyricLine(b, query)
-        .compareTo(LyricsService.scoreYoutubeCandidateForLyricLine(a, query)));
+    pool.sort(
+      (a, b) => LyricsService.scoreYoutubeCandidateForLyricLine(
+        b,
+        query,
+      ).compareTo(LyricsService.scoreYoutubeCandidateForLyricLine(a, query)),
+    );
 
     for (final picked in pool.take(3)) {
       final videoId = picked['id'] as String? ?? '';
@@ -256,43 +297,64 @@ class LightweightSearchService {
       final channel = picked['artist'] as String? ?? '';
       if (videoId.isEmpty) continue;
 
-      final score = LyricsService.scoreYoutubeCandidateForLyricLine(picked, query);
+      final score = LyricsService.scoreYoutubeCandidateForLyricLine(
+        picked,
+        query,
+      );
 
-      results.add(LightweightSearchResult(
-        videoId: videoId,
-        trackName: _trackFromYoutubeTitle(title, channel),
-        artistName: _artistFromYoutubeTitle(title, channel),
-        startTimeSeconds: 0,
-        confidence: score.clamp(0, 1),
-        source: 'yt-lyric-fallback',
-      ));
+      results.add(
+        LightweightSearchResult(
+          videoId: videoId,
+          trackName: _trackFromYoutubeTitle(title, channel),
+          artistName: _artistFromYoutubeTitle(title, channel),
+          startTimeSeconds: 0,
+          confidence: score.clamp(0, 1),
+          source: 'yt-lyric-fallback',
+        ),
+      );
     }
 
     return results;
   }
 
   String _trackFromYoutubeTitle(String title, String channel) {
-    final sep = title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
+    final sep =
+        title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
     if (sep != null) {
-      final parts = title.split(sep).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+      final parts =
+          title
+              .split(sep)
+              .map((p) => p.trim())
+              .where((p) => p.isNotEmpty)
+              .toList();
       if (parts.length >= 2) return parts[0];
     }
     return title;
   }
 
   String _artistFromYoutubeTitle(String title, String channel) {
-    final sep = title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
+    final sep =
+        title.contains(' - ') ? ' - ' : (title.contains(' | ') ? ' | ' : null);
     if (sep != null) {
-      final parts = title.split(sep).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+      final parts =
+          title
+              .split(sep)
+              .map((p) => p.trim())
+              .where((p) => p.isNotEmpty)
+              .toList();
       if (parts.length >= 2) return parts[1];
     }
     return channel;
   }
 
   /// Get video ID with aggressive caching
-  Future<String?> _getVideoIdWithCache(String trackName, String artistName) async {
-    final cacheKey = '${trackName.toLowerCase()}::${artistName.toLowerCase()}';
-    
+  Future<String?> _getVideoIdWithCache(
+    String trackName,
+    String artistName,
+  ) async {
+    final cacheKey =
+        '${activeYoutubeApiKeyFingerprint()}::${trackName.toLowerCase()}::${artistName.toLowerCase()}';
+
     // Check cache first
     final cached = _videoIdCache[cacheKey];
     if (cached != null) {
@@ -306,41 +368,46 @@ class LightweightSearchService {
 
     // Make minimal YouTube API call
     final videoId = await _searchSingleVideo(trackName, artistName);
-    
+
     // Cache the result (even if null to avoid repeated calls)
     _videoIdCache[cacheKey] = videoId ?? '';
-    
+
     return videoId;
   }
 
   /// Minimal YouTube search - just one API call
-  Future<String?> _searchSingleVideo(String trackName, String artistName) async {
+  Future<String?> _searchSingleVideo(
+    String trackName,
+    String artistName,
+  ) async {
     final searchQuery = '$trackName $artistName official audio';
-    final cacheKey = searchQuery.toLowerCase();
-    
+    final cacheKey =
+        '${activeYoutubeApiKeyFingerprint()}::${searchQuery.toLowerCase()}';
+
     final cached = _titleCache[cacheKey];
     if (cached != null) {
       return cached.isEmpty ? null : cached;
     }
 
-    const String youtubeApiKey = 'AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
-    
     try {
+      final youtubeApiKey = getActiveYoutubeApiKey();
       final uri = Uri.parse(
         'https://www.googleapis.com/youtube/v3/search'
         '?part=snippet&maxResults=1&q=${Uri.encodeQueryComponent(searchQuery)}'
         '&type=video&key=$youtubeApiKey',
       );
 
-      final response = await _client.get(uri).timeout(const Duration(seconds: 6));
-      
+      final response = await _client
+          .get(uri)
+          .timeout(const Duration(seconds: 6));
+
       if (response.statusCode == 403) {
         // Quota exceeded - log and return null
         _quotaMonitor.logSearchCall(searchQuery);
         _titleCache[cacheKey] = '';
         return null;
       }
-      
+
       if (response.statusCode != 200) {
         _titleCache[cacheKey] = '';
         return null;
@@ -348,7 +415,7 @@ class LightweightSearchService {
 
       final data = json.decode(response.body) as Map<String, dynamic>?;
       final items = data?['items'] as List<dynamic>?;
-      
+
       if (items == null || items.isEmpty) {
         _titleCache[cacheKey] = '';
         return null;
@@ -356,7 +423,7 @@ class LightweightSearchService {
 
       final videoId = items.first['id']['videoId'] as String?;
       _quotaMonitor.logSearchCall(searchQuery);
-      
+
       // Cache the result
       _titleCache[cacheKey] = videoId ?? '';
       return videoId;
@@ -370,7 +437,7 @@ class LightweightSearchService {
   Future<List<LightweightSearchResult>> _fallbackSearch(String query) async {
     final results = <LightweightSearchResult>[];
     final normalizedQuery = _normalize(query);
-    
+
     // Try to find matches in existing cache
     for (final entry in _searchCache.entries) {
       final key = entry.key;
@@ -384,51 +451,72 @@ class LightweightSearchService {
       // Fuzzy rescue path for noisy/transcribed rap lines in cache-only mode.
       final fuzzy = LyricsService.scoreTextMatch(key, normalizedQuery);
       if (fuzzy >= 0.58) {
-        final boosted = entry.value
-            .map((r) => LightweightSearchResult(
-                  videoId: r.videoId,
-                  trackName: r.trackName,
-                  artistName: r.artistName,
-                  startTimeSeconds: r.startTimeSeconds,
-                  confidence: ((r.confidence * 0.75) + (fuzzy * 0.25))
-                      .clamp(0, 1)
-                      .toDouble(),
-                  source: '${r.source}-fuzzy',
-                ))
-            .toList();
+        final boosted =
+            entry.value
+                .map(
+                  (r) => LightweightSearchResult(
+                    videoId: r.videoId,
+                    trackName: r.trackName,
+                    artistName: r.artistName,
+                    startTimeSeconds: r.startTimeSeconds,
+                    confidence:
+                        ((r.confidence * 0.75) + (fuzzy * 0.25))
+                            .clamp(0, 1)
+                            .toDouble(),
+                    matchedLineTimeSeconds: r.matchedLineTimeSeconds,
+                    matchedLyricLine: r.matchedLyricLine,
+                    source: '${r.source}-fuzzy',
+                  ),
+                )
+                .toList();
         results.addAll(boosted);
       }
     }
-    
+
     // Remove duplicates and sort by relevance
     final uniqueResults = <String, LightweightSearchResult>{};
     for (final result in results) {
-      if (!uniqueResults.containsKey(result.videoId) || 
+      if (!uniqueResults.containsKey(result.videoId) ||
           result.confidence > uniqueResults[result.videoId]!.confidence) {
         uniqueResults[result.videoId] = result;
       }
     }
-    
-    final sorted = uniqueResults.values.toList()
-      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
+    final sorted =
+        uniqueResults.values.toList()
+          ..sort((a, b) => b.confidence.compareTo(a.confidence));
     return sorted.take(5).toList(); // Limit fallback results
   }
 
   /// Calculate start time with -8 seconds offset
   int _calculateStartTime(String? syncedLyrics, String userLine) {
     if (syncedLyrics == null || syncedLyrics.isEmpty) return 0;
-    
-    final startTime = LyricsService.findStartTimeSeconds(syncedLyrics, userLine);
+
+    final startTime = LyricsService.findStartTimeSeconds(
+      syncedLyrics,
+      userLine,
+    );
     if (startTime <= 0) return 0;
-    
+
     final preroll = startTime - 8;
-    return preroll > 0 ? preroll : 0; // Start 8 seconds before, but not before 0
+    return preroll > 0
+        ? preroll
+        : 0; // Start 8 seconds before, but not before 0
+  }
+
+  int? _findExactLineTime(String? syncedLyrics, String userLine) {
+    if (syncedLyrics == null || syncedLyrics.isEmpty) return null;
+    return LyricsService.bestMatchingLineSeconds(
+      syncedLyrics,
+      userLine,
+      minScore: 0.0,
+    );
   }
 
   /// Calculate confidence score for the match
   double _calculateConfidence(String? syncedLyrics, String userLine) {
     if (syncedLyrics == null || syncedLyrics.isEmpty) return 0.3;
-    
+
     return LyricsService.scoreSyncedLyricsMatch(syncedLyrics, userLine);
   }
 

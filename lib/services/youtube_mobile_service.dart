@@ -4,34 +4,36 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'env_config.dart';
 
-/// Use API key from .env file for consistency across the app.
-late String youtubeApiKey;
-bool _youtubeInitialized = false;
+String? _youtubeApiKeyOverride;
 
-void initializeYoutubeApiKey() {
-  if (_youtubeInitialized) return;
-  try {
-    youtubeApiKey = EnvConfig.youtubeApiKey;
-    _youtubeInitialized = true;
-    print('✅ YouTube API key initialized');
-  } catch (e) {
-    print('⚠️  YouTube API key not available. API calls will fail until key is set.');
-    youtubeApiKey = '';
-    _youtubeInitialized = true;
-  }
+void setYoutubeApiKeyOverride(String? apiKey) {
+  final trimmed = apiKey?.trim() ?? '';
+  _youtubeApiKeyOverride = trimmed.isEmpty ? null : trimmed;
 }
 
-// Lazy initialization - only init when first used
-String _getApiKey() {
-  if (!_youtubeInitialized) {
-    initializeYoutubeApiKey();
+String getActiveYoutubeApiKey() {
+  final override = _youtubeApiKeyOverride;
+  if (override != null && override.isNotEmpty) {
+    return override;
   }
-  if (youtubeApiKey.trim().isEmpty) {
+
+  final resolved = EnvConfig.youtubeApiKey.trim();
+  if (resolved.isEmpty) {
     throw Exception(
       'YouTube API key missing. Add a valid YOUTUBE_API_KEY in .env.',
     );
   }
-  return youtubeApiKey;
+  return resolved;
+}
+
+String activeYoutubeApiKeyFingerprint() {
+  try {
+    final apiKey = getActiveYoutubeApiKey();
+    if (apiKey.length <= 8) return apiKey;
+    return apiKey.substring(apiKey.length - 8);
+  } catch (_) {
+    return 'missing-key';
+  }
 }
 
 class YoutubeMobileService {
@@ -54,7 +56,7 @@ class YoutubeMobileService {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return null;
 
-    final cacheKey = trimmed.toLowerCase();
+    final cacheKey = _cacheKey(trimmed);
     if (_firstVideoCache.containsKey(cacheKey)) {
       return _firstVideoCache[cacheKey];
     }
@@ -73,16 +75,19 @@ class YoutubeMobileService {
       return const [];
     }
 
-    final cacheKey = trimmedQuery.toLowerCase();
+    final cacheKey = _cacheKey(trimmedQuery);
     final cached = _searchCache[cacheKey];
     if (cached != null) return cached;
 
+    final apiKey = getActiveYoutubeApiKey();
     final uri = Uri.parse(
-      'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q=${Uri.encodeQueryComponent(trimmedQuery)}&type=video&key=${_getApiKey()}',
+      'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q=${Uri.encodeQueryComponent(trimmedQuery)}&type=video&key=$apiKey',
     );
 
     try {
-      final response = await _client.get(uri).timeout(const Duration(seconds: 6));
+      final response = await _client
+          .get(uri)
+          .timeout(const Duration(seconds: 6));
       if (response.statusCode == 400) {
         final reason = _extractYoutubeErrorReason(response.body);
         if (reason == 'badRequest' || reason == 'keyInvalid') {
@@ -107,16 +112,19 @@ class YoutubeMobileService {
         return const [];
       }
 
-      final raw = items
-          .map((item) => {
-                'id': item['id']['videoId'],
-                'title': item['snippet']['title'],
-                'thumbnail': item['snippet']['thumbnails']['default']['url'],
-                'artist': item['snippet']['channelTitle'],
-                'description': item['snippet']['description'] ?? '',
-              })
-          .where((row) => (row['id'] as String? ?? '').isNotEmpty)
-          .toList();
+      final raw =
+          items
+              .map(
+                (item) => {
+                  'id': item['id']['videoId'],
+                  'title': item['snippet']['title'],
+                  'thumbnail': item['snippet']['thumbnails']['default']['url'],
+                  'artist': item['snippet']['channelTitle'],
+                  'description': item['snippet']['description'] ?? '',
+                },
+              )
+              .where((row) => (row['id'] as String? ?? '').isNotEmpty)
+              .toList();
 
       if (raw.isEmpty) {
         _searchCache[cacheKey] = const [];
@@ -127,22 +135,24 @@ class YoutubeMobileService {
         raw.map((e) => e['id'] as String).toList(),
       );
 
-      final results = raw.where((row) {
-        final id = row['id'] as String;
-        final duration = durations[id] ?? 0;
-        final title = (row['title'] as String? ?? '').toLowerCase();
-        final description = (row['description'] as String? ?? '').toLowerCase();
-        if (duration < _minFullSongSeconds) return false;
-        if (_containsAny(title, _shortFormKeywords)) return false;
-        if (_containsAny(description, _shortFormKeywords)) return false;
-        return true;
-      }).map((row) {
-        final id = row['id'] as String;
-        return {
-          ...row,
-          'durationSeconds': durations[id] ?? 0,
-        };
-      }).toList();
+      final results =
+          raw
+              .where((row) {
+                final id = row['id'] as String;
+                final duration = durations[id] ?? 0;
+                final title = (row['title'] as String? ?? '').toLowerCase();
+                final description =
+                    (row['description'] as String? ?? '').toLowerCase();
+                if (duration < _minFullSongSeconds) return false;
+                if (_containsAny(title, _shortFormKeywords)) return false;
+                if (_containsAny(description, _shortFormKeywords)) return false;
+                return true;
+              })
+              .map((row) {
+                final id = row['id'] as String;
+                return {...row, 'durationSeconds': durations[id] ?? 0};
+              })
+              .toList();
 
       _searchCache[cacheKey] = results;
       return results;
@@ -158,11 +168,13 @@ class YoutubeMobileService {
 
     final uri = Uri.parse(
       'https://www.googleapis.com/youtube/v3/videos'
-      '?part=contentDetails&id=${Uri.encodeQueryComponent(ids.join(','))}&key=${_getApiKey()}',
+      '?part=contentDetails&id=${Uri.encodeQueryComponent(ids.join(','))}&key=${getActiveYoutubeApiKey()}',
     );
 
     try {
-      final response = await _client.get(uri).timeout(const Duration(seconds: 6));
+      final response = await _client
+          .get(uri)
+          .timeout(const Duration(seconds: 6));
       if (response.statusCode == 400) {
         final reason = _extractYoutubeErrorReason(response.body);
         if (reason == 'badRequest' || reason == 'keyInvalid') {
@@ -197,7 +209,9 @@ class YoutubeMobileService {
   }
 
   int _parseIsoDurationSeconds(String iso) {
-    final match = RegExp(r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$').firstMatch(iso);
+    final match = RegExp(
+      r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$',
+    ).firstMatch(iso);
     if (match == null) return 0;
     final h = int.tryParse(match.group(1) ?? '0') ?? 0;
     final m = int.tryParse(match.group(2) ?? '0') ?? 0;
@@ -234,4 +248,7 @@ class YoutubeMobileService {
     final text = error.toString().toLowerCase();
     return text.contains('api key') || text.contains('quota exceeded');
   }
+
+  String _cacheKey(String query) =>
+      '${activeYoutubeApiKeyFingerprint()}::${query.toLowerCase()}';
 }

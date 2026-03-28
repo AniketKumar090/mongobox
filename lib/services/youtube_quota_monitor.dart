@@ -1,20 +1,17 @@
-import 'dart:io';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'youtube_mobile_service.dart';
 
 /// YouTube API Quota Monitor
 /// Tracks quota usage and estimates reset time
 class YouTubeQuotaMonitor {
-  static const String youtubeApiKey = 'AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
   static const int defaultDailyQuota = 10000;
   static const int searchCost = 100; // units per search query
   static const int videoCost = 1; // units per video.get call
-  
+
   static final YouTubeQuotaMonitor _instance = YouTubeQuotaMonitor._internal();
-  
+
   late DateTime _quotaResetTime;
-  int _estimatedUsageToday = 0;
-  final List<QuotaEvent> _usageLog = [];
+  final Map<String, int> _estimatedUsageByKey = {};
+  final Map<String, List<QuotaEvent>> _usageLogByKey = {};
 
   factory YouTubeQuotaMonitor() {
     return _instance;
@@ -27,64 +24,93 @@ class YouTubeQuotaMonitor {
   void _updateQuotaResetTime() {
     // YouTube quota resets daily at midnight Pacific Time (PT)
     final now = DateTime.now();
-    final pacificTimeOffset = Duration(hours: -7); // PT is UTC-7 (or UTC-8 in winter, but using standard)
-    
+    final pacificTimeOffset = Duration(
+      hours: -7,
+    ); // PT is UTC-7 (or UTC-8 in winter, but using standard)
+
     final pacificNow = now.add(pacificTimeOffset);
-    var resetTime = DateTime(pacificNow.year, pacificNow.month, pacificNow.day, 0, 0, 0);
-    
+    var resetTime = DateTime(
+      pacificNow.year,
+      pacificNow.month,
+      pacificNow.day,
+      0,
+      0,
+      0,
+    );
+
     // If already past midnight PT today, next reset is tomorrow
     if (pacificNow.isAfter(resetTime)) {
       resetTime = resetTime.add(Duration(days: 1));
     }
-    
+
     _quotaResetTime = resetTime.subtract(pacificTimeOffset);
   }
 
   /// Log a search API call (costs 100 quota units)
   void logSearchCall(String query) {
-    _estimatedUsageToday += searchCost;
-    _usageLog.add(QuotaEvent(
-      type: 'SEARCH',
-      cost: searchCost,
-      query: query,
-      timestamp: DateTime.now(),
-    ));
+    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    _estimatedUsageByKey[keyFingerprint] =
+        (_estimatedUsageByKey[keyFingerprint] ?? 0) + searchCost;
+    _usageLogByKey
+        .putIfAbsent(keyFingerprint, () => [])
+        .add(
+          QuotaEvent(
+            type: 'SEARCH',
+            cost: searchCost,
+            query: query,
+            timestamp: DateTime.now(),
+          ),
+        );
   }
 
   /// Log a video.get API call (costs 1 quota unit)
   void logVideoCall(List<String> videoIds) {
     final cost = videoCost * videoIds.length;
-    _estimatedUsageToday += cost;
-    _usageLog.add(QuotaEvent(
-      type: 'VIDEO_GET',
-      cost: cost,
-      query: '${videoIds.length} videos',
-      timestamp: DateTime.now(),
-    ));
+    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    _estimatedUsageByKey[keyFingerprint] =
+        (_estimatedUsageByKey[keyFingerprint] ?? 0) + cost;
+    _usageLogByKey
+        .putIfAbsent(keyFingerprint, () => [])
+        .add(
+          QuotaEvent(
+            type: 'VIDEO_GET',
+            cost: cost,
+            query: '${videoIds.length} videos',
+            timestamp: DateTime.now(),
+          ),
+        );
   }
 
   /// Get current quota status
   QuotaStatus getStatus() {
     _updateQuotaResetTime();
-    final remaining = defaultDailyQuota - _estimatedUsageToday;
-    final percentUsed = (_estimatedUsageToday / defaultDailyQuota * 100).toStringAsFixed(2);
-    
+    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    final estimatedUsage = _estimatedUsageByKey[keyFingerprint] ?? 0;
+    final usageLog = List<QuotaEvent>.from(
+      _usageLogByKey[keyFingerprint] ?? const [],
+    );
+    final remaining = defaultDailyQuota - estimatedUsage;
+    final percentUsed = (estimatedUsage / defaultDailyQuota * 100)
+        .toStringAsFixed(2);
+
     return QuotaStatus(
       dailyQuotaLimit: defaultDailyQuota,
-      estimatedUsage: _estimatedUsageToday,
+      estimatedUsage: estimatedUsage,
       estimatedRemaining: remaining,
       percentageUsed: double.parse(percentUsed),
       nextResetTime: _quotaResetTime,
-      usageLog: List.from(_usageLog),
+      usageLog: usageLog,
     );
   }
 
   /// Get formatted status report
   String getFormattedReport() {
     final status = getStatus();
-    final hoursUntilReset = status.nextResetTime.difference(DateTime.now()).inHours;
-    final minutesUntilReset = status.nextResetTime.difference(DateTime.now()).inMinutes % 60;
-    
+    final hoursUntilReset =
+        status.nextResetTime.difference(DateTime.now()).inHours;
+    final minutesUntilReset =
+        status.nextResetTime.difference(DateTime.now()).inMinutes % 60;
+
     return '''
 ╔════════════════════════════════════════════════════════════╗
 ║          YOUTUBE API QUOTA MONITOR - STATUS REPORT         ║
@@ -98,7 +124,7 @@ class YouTubeQuotaMonitor {
 
 ⏰ NEXT QUOTA RESET:
    • Reset Time:           ${status.nextResetTime.toString()}
-   • Time Until Reset:     $hoursUntilReset hours ${minutesUntilReset} minutes
+   • Time Until Reset:     $hoursUntilReset hours $minutesUntilReset minutes
 
 📈 API COST BREAKDOWN:
    • Search Query:         $searchCost units
@@ -121,12 +147,16 @@ ${_getWarningMessage(status.percentageUsed)}
     if (events.isEmpty) {
       return '   No API calls yet today';
     }
-    
-    return events.asMap().entries.map((entry) {
-      final idx = entry.key + 1;
-      final event = entry.value;
-      return '   $idx. [${event.type}] +${event.cost} units @ ${event.timestamp.toString().split('.')[0]}\n      Query: ${event.query}';
-    }).join('\n');
+
+    return events
+        .asMap()
+        .entries
+        .map((entry) {
+          final idx = entry.key + 1;
+          final event = entry.value;
+          return '   $idx. [${event.type}] +${event.cost} units @ ${event.timestamp.toString().split('.')[0]}\n      Query: ${event.query}';
+        })
+        .join('\n');
   }
 
   String _getWarningMessage(double percentUsed) {

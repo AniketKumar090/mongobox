@@ -11,12 +11,16 @@ class PlaybackResult {
     required this.startTimeSeconds,
     required this.trackName,
     required this.artistName,
+    this.matchedLineTimeSeconds,
+    this.matchedLyricLine,
   });
 
   final String videoId;
   final int startTimeSeconds;
   final String trackName;
   final String artistName;
+  final int? matchedLineTimeSeconds;
+  final String? matchedLyricLine;
 }
 
 class PlaybackOption {
@@ -81,7 +85,10 @@ class PlaybackServiceMobile {
     return options.first.result;
   }
 
-  Future<List<PlaybackOption>> resolveCandidates(String lyricLine, {int limit = 5}) async {
+  Future<List<PlaybackOption>> resolveCandidates(
+    String lyricLine, {
+    int limit = 5,
+  }) async {
     final trimmed = lyricLine.trim();
     if (trimmed.isEmpty) return const [];
 
@@ -104,39 +111,46 @@ class PlaybackServiceMobile {
     }
     for (final option in parallel[1]) {
       final existing = byVideoId[option.result.videoId];
-      if (existing == null || option.confidence > existing.confidence) {
+      if (existing == null || _shouldPreferOption(option, existing)) {
         byVideoId[option.result.videoId] = option;
       }
     }
     for (final option in parallel[2]) {
       final existing = byVideoId[option.result.videoId];
-      if (existing == null || option.confidence > existing.confidence) {
+      if (existing == null || _shouldPreferOption(option, existing)) {
         byVideoId[option.result.videoId] = option;
       }
     }
 
-    final reranked = byVideoId.values.map((option) {
-      final semanticScore = _reranker.score(
-        query: trimmed,
-        trackName: option.result.trackName,
-        artistName: option.result.artistName,
-        evidenceText: option.evidenceText,
-      );
-      final timingScore = _timingResolutionScore(option.result.startTimeSeconds);
+    final reranked =
+        byVideoId.values.map((option) {
+          final semanticScore = _reranker.score(
+            query: trimmed,
+            trackName: option.result.trackName,
+            artistName: option.result.artistName,
+            evidenceText: option.evidenceText,
+          );
+          final timingScore = _timingResolutionScore(
+            option.result.startTimeSeconds,
+          );
 
-      // Blend source confidence + semantic confidence + lyric-timestamp quality.
-      final blended = ((option.confidence * 0.50) + (semanticScore * 0.35) + (timingScore * 0.15))
-          .clamp(0, 1)
-          .toDouble();
-      return PlaybackOption(
-        result: option.result,
-        confidence: blended,
-        source: option.source,
-        evidenceText: option.evidenceText,
-      );
-    }).toList();
+          // Blend source confidence + semantic confidence + lyric-timestamp quality.
+          final blended =
+              ((option.confidence * 0.50) +
+                      (semanticScore * 0.35) +
+                      (timingScore * 0.15))
+                  .clamp(0, 1)
+                  .toDouble();
+          return PlaybackOption(
+            result: option.result,
+            confidence: blended,
+            source: option.source,
+            evidenceText: option.evidenceText,
+          );
+        }).toList();
 
-    final sorted = reranked..sort((a, b) => b.confidence.compareTo(a.confidence));
+    final sorted =
+        reranked..sort((a, b) => b.confidence.compareTo(a.confidence));
 
     final top = sorted.take(limit).toList();
     if (top.isNotEmpty) {
@@ -145,28 +159,43 @@ class PlaybackServiceMobile {
     return top;
   }
 
-  Future<List<PlaybackOption>> _resolveFromLyricsOptions(String lyricLine, {int maxCandidates = 4}) async {
+  Future<List<PlaybackOption>> _resolveFromLyricsOptions(
+    String lyricLine, {
+    int maxCandidates = 4,
+  }) async {
     final matches = await _searchLyricsAcrossVariants(lyricLine);
     if (matches.isEmpty) return const [];
 
     final top = matches.take(18).toList();
-    final hydrated = await Future.wait(top.map((m) async {
-      if ((m.syncedLyrics ?? '').isNotEmpty) return m;
-      return await _lyrics.getById(m.id) ?? m;
-    }));
+    final hydrated = await Future.wait(
+      top.map((m) async {
+        if ((m.syncedLyrics ?? '').isNotEmpty) return m;
+        return await _lyrics.getById(m.id) ?? m;
+      }),
+    );
 
     final scored = <_ScoredLyricsCandidate>[];
     for (final m in hydrated.take(maxCandidates * 2)) {
       final playResult = _lyrics.toPlayResult(m, lyricLine);
-      final score = LyricsService.scoreSyncedLyricsMatch(m.syncedLyrics ?? '', lyricLine);
-      final bestLine = LyricsService.bestMatchingLineText(m.syncedLyrics ?? '', lyricLine) ?? '';
-      scored.add(_ScoredLyricsCandidate(
-        trackName: m.trackName,
-        artistName: m.artistName,
-        startTimeSeconds: _applyLinePreroll(playResult?.startTimeSeconds ?? 0),
-        score: score,
-        evidenceText: bestLine,
-      ));
+      final score = LyricsService.scoreSyncedLyricsMatch(
+        m.syncedLyrics ?? '',
+        lyricLine,
+      );
+      final bestLine =
+          LyricsService.bestMatchingLineText(m.syncedLyrics ?? '', lyricLine) ??
+          '';
+      scored.add(
+        _ScoredLyricsCandidate(
+          trackName: m.trackName,
+          artistName: m.artistName,
+          startTimeSeconds: _applyLinePreroll(
+            playResult?.startTimeSeconds ?? 0,
+          ),
+          matchedLineTimeSeconds: playResult?.exactLineTimeSeconds,
+          score: score,
+          evidenceText: playResult?.matchedLyricLine ?? bestLine,
+        ),
+      );
     }
 
     scored.sort((a, b) => b.score.compareTo(a.score));
@@ -178,46 +207,64 @@ class PlaybackServiceMobile {
       final key = '${c.trackName.toLowerCase()}::${c.artistName.toLowerCase()}';
       if (!seenTrackArtist.add(key)) continue;
 
-      final videoId = await _searchBestVideoIdForSong(c.trackName, c.artistName);
+      final videoId = await _searchBestVideoIdForSong(
+        c.trackName,
+        c.artistName,
+      );
       if (videoId == null || videoId.isEmpty) continue;
 
-      options.add(PlaybackOption(
-        result: PlaybackResult(
-          videoId: videoId,
-          startTimeSeconds: c.startTimeSeconds,
-          trackName: c.trackName,
-          artistName: c.artistName,
+      options.add(
+        PlaybackOption(
+          result: PlaybackResult(
+            videoId: videoId,
+            startTimeSeconds: c.startTimeSeconds,
+            trackName: c.trackName,
+            artistName: c.artistName,
+            matchedLineTimeSeconds: c.matchedLineTimeSeconds,
+            matchedLyricLine: c.evidenceText,
+          ),
+          confidence: c.score.clamp(0, 1).toDouble(),
+          source: 'lyrics',
+          evidenceText: c.evidenceText,
         ),
-        confidence: c.score.clamp(0, 1).toDouble(),
-        source: 'lyrics',
-        evidenceText: c.evidenceText,
-      ));
+      );
 
       if (options.length >= maxCandidates) break;
     }
 
     if (options.isEmpty && hydrated.isNotEmpty) {
       final first = hydrated.first;
-      final videoId = await _searchBestVideoIdForSong(first.trackName, first.artistName);
+      final firstResult = _lyrics.toPlayResult(first, lyricLine);
+      final videoId = await _searchBestVideoIdForSong(
+        first.trackName,
+        first.artistName,
+      );
       if (videoId != null && videoId.isNotEmpty) {
-        options.add(PlaybackOption(
-          result: PlaybackResult(
-            videoId: videoId,
-            startTimeSeconds: 0,
-            trackName: first.trackName,
-            artistName: first.artistName,
+        options.add(
+          PlaybackOption(
+            result: PlaybackResult(
+              videoId: videoId,
+              startTimeSeconds: 0,
+              trackName: first.trackName,
+              artistName: first.artistName,
+              matchedLineTimeSeconds: firstResult?.exactLineTimeSeconds,
+              matchedLyricLine: firstResult?.matchedLyricLine,
+            ),
+            confidence: 0.3,
+            source: 'lyrics',
+            evidenceText: firstResult?.matchedLyricLine ?? lyricLine,
           ),
-          confidence: 0.3,
-          source: 'lyrics',
-          evidenceText: first.syncedLyrics,
-        ));
+        );
       }
     }
 
     return options;
   }
 
-  Future<List<PlaybackOption>> _resolveFromGeniusOptions(String lyricLine, {int maxCandidates = 3}) async {
+  Future<List<PlaybackOption>> _resolveFromGeniusOptions(
+    String lyricLine, {
+    int maxCandidates = 3,
+  }) async {
     final hits = await _genius.searchLyricLine(lyricLine);
     if (hits.isEmpty) return const [];
 
@@ -230,30 +277,36 @@ class PlaybackServiceMobile {
       final key = '${hit.title.toLowerCase()}::${hit.artistName.toLowerCase()}';
       if (!seen.add(key)) continue;
 
-      final videoId = await _searchBestVideoIdForSong(hit.title, hit.artistName);
+      final videoId = await _searchBestVideoIdForSong(
+        hit.title,
+        hit.artistName,
+      );
       if (videoId == null || videoId.isEmpty) continue;
 
       final blob = '${hit.title} ${hit.artistName}';
       final snippet = hit.snippet ?? hit.fullTitle ?? '';
       double conf;
       if (snippet.isNotEmpty) {
-        conf = (0.5 * LyricsService.scoreTextMatch(blob, lyricLine)) +
+        conf =
+            (0.5 * LyricsService.scoreTextMatch(blob, lyricLine)) +
             (0.5 * LyricsService.scoreTextMatch(snippet, lyricLine));
       } else {
         conf = LyricsService.scoreTextMatch(blob, lyricLine) * 0.5 + 0.35;
       }
 
-      options.add(PlaybackOption(
-        result: PlaybackResult(
-          videoId: videoId,
-          startTimeSeconds: 0,
-          trackName: hit.title,
-          artistName: hit.artistName,
+      options.add(
+        PlaybackOption(
+          result: PlaybackResult(
+            videoId: videoId,
+            startTimeSeconds: 0,
+            trackName: hit.title,
+            artistName: hit.artistName,
+          ),
+          confidence: conf.clamp(0, 1).toDouble(),
+          source: 'genius',
+          evidenceText: snippet.isNotEmpty ? snippet : hit.fullTitle,
         ),
-        confidence: conf.clamp(0, 1).toDouble(),
-        source: 'genius',
-        evidenceText: snippet.isNotEmpty ? snippet : hit.fullTitle,
-      ));
+      );
 
       if (options.length >= maxCandidates) break;
     }
@@ -261,7 +314,9 @@ class PlaybackServiceMobile {
     return options;
   }
 
-  Future<List<LyricsMatch>> _searchLyricsAcrossVariants(String lyricLine) async {
+  Future<List<LyricsMatch>> _searchLyricsAcrossVariants(
+    String lyricLine,
+  ) async {
     final queries = _buildLyricQueries(lyricLine);
     final lists = await Future.wait(queries.map(_lyrics.search));
 
@@ -275,7 +330,10 @@ class PlaybackServiceMobile {
     return byId.values.toList();
   }
 
-  Future<String?> _searchBestVideoIdForSong(String trackName, String artistName) async {
+  Future<String?> _searchBestVideoIdForSong(
+    String trackName,
+    String artistName,
+  ) async {
     final base = '$trackName $artistName'.trim();
     if (base.isEmpty) return null;
 
@@ -302,8 +360,16 @@ class PlaybackServiceMobile {
     if (pool.isEmpty) return null;
 
     pool.sort((a, b) {
-      final right = _scoreOriginalSongCandidate(song: b, trackName: trackName, artistName: artistName);
-      final left = _scoreOriginalSongCandidate(song: a, trackName: trackName, artistName: artistName);
+      final right = _scoreOriginalSongCandidate(
+        song: b,
+        trackName: trackName,
+        artistName: artistName,
+      );
+      final left = _scoreOriginalSongCandidate(
+        song: a,
+        trackName: trackName,
+        artistName: artistName,
+      );
       return right.compareTo(left);
     });
 
@@ -312,7 +378,10 @@ class PlaybackServiceMobile {
     return topId.isEmpty ? null : topId;
   }
 
-  Future<List<PlaybackOption>> _resolveFromGlobalYoutubeOptions(String lyricLine, {int maxCandidates = 5}) async {
+  Future<List<PlaybackOption>> _resolveFromGlobalYoutubeOptions(
+    String lyricLine, {
+    int maxCandidates = 5,
+  }) async {
     final queries = _buildYoutubeQueries(lyricLine);
     final seenIds = <String>{};
     final merged = <Map<String, dynamic>>[];
@@ -329,7 +398,12 @@ class PlaybackServiceMobile {
 
     if (merged.isEmpty) return const [];
 
-    merged.sort((a, b) => _scoreYoutubeCandidate(b, lyricLine).compareTo(_scoreYoutubeCandidate(a, lyricLine)));
+    merged.sort(
+      (a, b) => _scoreYoutubeCandidate(
+        b,
+        lyricLine,
+      ).compareTo(_scoreYoutubeCandidate(a, lyricLine)),
+    );
 
     final options = <PlaybackOption>[];
     for (final picked in merged.take(maxCandidates)) {
@@ -347,28 +421,35 @@ class PlaybackServiceMobile {
         userLyricLine: lyricLine,
       );
 
-      final result = enriched != null
-          ? PlaybackResult(
-              videoId: videoId,
-              startTimeSeconds: _applyLinePreroll(enriched.startTimeSeconds),
-              trackName: enriched.trackName,
-              artistName: enriched.artistName,
-            )
-          : PlaybackResult(
-              videoId: videoId,
-              startTimeSeconds: 0,
-              trackName: parsed?.track ?? pickedTitle,
-              artistName: parsed?.artist ?? pickedArtist,
-            );
+      final result =
+          enriched != null
+              ? PlaybackResult(
+                videoId: videoId,
+                startTimeSeconds: _applyLinePreroll(enriched.startTimeSeconds),
+                trackName: enriched.trackName,
+                artistName: enriched.artistName,
+                matchedLineTimeSeconds: enriched.exactLineTimeSeconds,
+                matchedLyricLine: enriched.matchedLyricLine,
+              )
+              : PlaybackResult(
+                videoId: videoId,
+                startTimeSeconds: 0,
+                trackName: parsed?.track ?? pickedTitle,
+                artistName: parsed?.artist ?? pickedArtist,
+              );
 
-      options.add(PlaybackOption(
-        result: result,
-        confidence: (_scoreYoutubeCandidate(picked, lyricLine) + _timingConfidenceBoost(result.startTimeSeconds))
-            .clamp(0, 1)
-            .toDouble(),
-        source: 'youtube',
-        evidenceText: picked['title'] as String?,
-      ));
+      options.add(
+        PlaybackOption(
+          result: result,
+          confidence:
+              (_scoreYoutubeCandidate(picked, lyricLine) +
+                      _timingConfidenceBoost(result.startTimeSeconds))
+                  .clamp(0, 1)
+                  .toDouble(),
+          source: 'youtube',
+          evidenceText: result.matchedLyricLine ?? picked['title'] as String?,
+        ),
+      );
     }
 
     return options;
@@ -397,11 +478,13 @@ class PlaybackServiceMobile {
     final text = '$title $channel';
     var score = LyricsService.scoreTextMatch(text, expected);
 
-    if (_containsAny(title, _badVersionKeywords) || _containsAny(description, _badVersionKeywords)) {
+    if (_containsAny(title, _badVersionKeywords) ||
+        _containsAny(description, _badVersionKeywords)) {
       score -= 0.45;
     }
 
-    if (_containsAny(title, _goodVersionKeywords) || _containsAny(channel, _goodVersionKeywords)) {
+    if (_containsAny(title, _goodVersionKeywords) ||
+        _containsAny(channel, _goodVersionKeywords)) {
       score += 0.18;
     }
 
@@ -410,7 +493,8 @@ class PlaybackServiceMobile {
     }
 
     if (title.contains(trackName.toLowerCase())) score += 0.12;
-    if (title.contains(artistName.toLowerCase()) || channel.contains(artistName.toLowerCase())) {
+    if (title.contains(artistName.toLowerCase()) ||
+        channel.contains(artistName.toLowerCase())) {
       score += 0.12;
     }
     if (durationSeconds >= 150) score += 0.1;
@@ -450,10 +534,12 @@ class PlaybackServiceMobile {
 
     if (candidates.isEmpty) return null;
 
-    final hydrated = await Future.wait(candidates.take(16).map((m) async {
-      if ((m.syncedLyrics ?? '').isNotEmpty) return m;
-      return await _lyrics.getById(m.id) ?? m;
-    }));
+    final hydrated = await Future.wait(
+      candidates.take(16).map((m) async {
+        if ((m.syncedLyrics ?? '').isNotEmpty) return m;
+        return await _lyrics.getById(m.id) ?? m;
+      }),
+    );
 
     LyricPlayResult? best;
     double bestScore = -1.0;
@@ -464,18 +550,23 @@ class PlaybackServiceMobile {
       final synced = m.syncedLyrics ?? '';
       if (synced.isEmpty) continue;
 
-      final lineScore = LyricsService.scoreSyncedLyricsMatch(synced, userLyricLine);
+      final lineScore = LyricsService.scoreSyncedLyricsMatch(
+        synced,
+        userLyricLine,
+      );
       final identityScore = LyricsService.scoreTextMatch(
         '${m.trackName} ${m.artistName}',
         expectedIdentity,
       );
       final titleScore = LyricsService.scoreTextMatch(m.trackName, trackName);
-      final combined = (0.60 * lineScore) + (0.30 * identityScore) + (0.10 * titleScore);
+      final combined =
+          (0.60 * lineScore) + (0.30 * identityScore) + (0.10 * titleScore);
 
       var result = _lyrics.toPlayResult(m, userLyricLine);
 
       // Fallback: allow a looser hit if strict threshold left timestamp at 0.
-      if ((result == null || result.startTimeSeconds == 0) && lineScore >= 0.30) {
+      if ((result == null || result.startTimeSeconds == 0) &&
+          lineScore >= 0.30) {
         final looseSeconds = LyricsService.bestMatchingLineSeconds(
           synced,
           userLyricLine,
@@ -487,6 +578,11 @@ class PlaybackServiceMobile {
             artistName: m.artistName,
             durationSeconds: m.durationSeconds,
             startTimeSeconds: looseSeconds,
+            exactLineTimeSeconds: looseSeconds,
+            matchedLyricLine: LyricsService.bestMatchingLineText(
+              synced,
+              userLyricLine,
+            ),
             syncedLyrics: synced,
           );
         }
@@ -501,6 +597,19 @@ class PlaybackServiceMobile {
     return best;
   }
 
+  bool _shouldPreferOption(PlaybackOption incoming, PlaybackOption existing) {
+    final incomingHasLine =
+        (incoming.result.matchedLyricLine ?? '').trim().isNotEmpty ||
+        (incoming.result.matchedLineTimeSeconds ?? 0) > 0;
+    final existingHasLine =
+        (existing.result.matchedLyricLine ?? '').trim().isNotEmpty ||
+        (existing.result.matchedLineTimeSeconds ?? 0) > 0;
+    if (incomingHasLine != existingHasLine) {
+      return incomingHasLine;
+    }
+    return incoming.confidence > existing.confidence;
+  }
+
   List<String> _buildLrclibSeedsForYoutubeCandidate({
     required String trackName,
     required String artistName,
@@ -512,8 +621,17 @@ class PlaybackServiceMobile {
       return s
           .replaceAll(RegExp(r'\([^)]*\)'), ' ')
           .replaceAll(RegExp(r'\[[^\]]*\]'), ' ')
-          .replaceAll(RegExp(r'\b(official|audio|video|lyrics?|visualizer|topic|hd|4k)\b', caseSensitive: false), ' ')
-          .replaceAll(RegExp(r'\b(feat|ft)\.?[^-–|]*', caseSensitive: false), ' ')
+          .replaceAll(
+            RegExp(
+              r'\b(official|audio|video|lyrics?|visualizer|topic|hd|4k)\b',
+              caseSensitive: false,
+            ),
+            ' ',
+          )
+          .replaceAll(
+            RegExp(r'\b(feat|ft)\.?[^-–|]*', caseSensitive: false),
+            ' ',
+          )
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
     }
@@ -544,22 +662,34 @@ class PlaybackServiceMobile {
         .toList();
   }
 
-  _TrackArtist? _extractTrackArtistFromTitle(String rawTitle, String fallbackArtist) {
-    final cleaned = rawTitle
-        .replaceAll(RegExp(r'\([^)]*\)'), ' ')
-        .replaceAll(RegExp(r'\[[^\]]*\]'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+  _TrackArtist? _extractTrackArtistFromTitle(
+    String rawTitle,
+    String fallbackArtist,
+  ) {
+    final cleaned =
+        rawTitle
+            .replaceAll(RegExp(r'\([^)]*\)'), ' ')
+            .replaceAll(RegExp(r'\[[^\]]*\]'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
 
     if (cleaned.isEmpty) return null;
 
-    final separator = cleaned.contains(' - ') ? ' - ' : (cleaned.contains(' | ') ? ' | ' : null);
+    final separator =
+        cleaned.contains(' - ')
+            ? ' - '
+            : (cleaned.contains(' | ') ? ' | ' : null);
     if (separator == null) {
       if (fallbackArtist.trim().isEmpty) return null;
       return _TrackArtist(track: cleaned, artist: fallbackArtist.trim());
     }
 
-    final parts = cleaned.split(separator).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    final parts =
+        cleaned
+            .split(separator)
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty)
+            .toList();
     if (parts.length < 2) return null;
 
     final first = parts[0];
@@ -573,7 +703,10 @@ class PlaybackServiceMobile {
 
   bool _looksLikeArtist(String text) {
     final lowered = text.toLowerCase();
-    return lowered.contains('feat') || lowered.contains('&') || lowered.contains('x ') || lowered.contains('official');
+    return lowered.contains('feat') ||
+        lowered.contains('&') ||
+        lowered.contains('x ') ||
+        lowered.contains('official');
   }
 
   bool _containsAny(String value, List<String> terms) {
@@ -616,6 +749,7 @@ class _ScoredLyricsCandidate {
     required this.trackName,
     required this.artistName,
     required this.startTimeSeconds,
+    required this.matchedLineTimeSeconds,
     required this.score,
     required this.evidenceText,
   });
@@ -623,6 +757,7 @@ class _ScoredLyricsCandidate {
   final String trackName;
   final String artistName;
   final int startTimeSeconds;
+  final int? matchedLineTimeSeconds;
   final double score;
   final String evidenceText;
 }

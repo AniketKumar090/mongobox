@@ -23,6 +23,11 @@ import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
 import '../screens/generate_song_screen.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// How many seconds before the matched lyric line playback should begin.
+// ─────────────────────────────────────────────────────────────────────────────
+const int _kPreRollSeconds = 8;
+
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
 
@@ -48,7 +53,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   bool _foregroundAudioSuppressedForBackground = false;
   bool _isRestoringForeground = false;
   Duration _backgroundSyncPosition = Duration.zero;
-  Duration _loopStartPosition = Duration.zero;
   double _playerVolume = 1.0;
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
@@ -358,15 +362,29 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     super.dispose();
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Computes the actual start time for playback.
+  //
+  // If the result has a confirmed matched lyric timestamp, we rewind
+  // _kPreRollSeconds (8 s) so the user hears the song in context before
+  // the searched line arrives.  We clamp to 0 so we never seek to a
+  // negative position.
+  // ─────────────────────────────────────────────────────────────────────────
+  int _resolvePlaybackStart(PlaybackResult result) {
+    final lineTs = result.matchedLineTimeSeconds;
+    if (lineTs != null && lineTs > 0) {
+      return math.max(0, lineTs - _kPreRollSeconds);
+    }
+    // Fall back to whatever the service already computed.
+    return result.startTimeSeconds;
+  }
+
   void _playResult(PlaybackResult result) {
     if (BackgroundAudioPlayerService.instance.isPlaying) {
       unawaited(BackgroundAudioPlayerService.instance.stop());
     }
     _backgroundSyncPosition = Duration.zero;
     _foregroundAudioSuppressedForBackground = false;
-    _loopStartPosition = Duration(
-      seconds: result.startTimeSeconds < 0 ? 0 : result.startTimeSeconds,
-    );
     final oldController = _ytController;
     _ytController = null;
     setState(() {
@@ -377,10 +395,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // ── KEY FIX: honour the pre-roll offset ──
+      final startSeconds = _resolvePlaybackStart(result);
       final controller =
           YouTubePlayerBackgroundHelper.createBackgroundAwareController(
             videoId: result.videoId,
-            startSeconds: result.startTimeSeconds,
+            startSeconds: startSeconds,
             autoPlay: true,
             loop: false,
           );
@@ -592,9 +612,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                       startTimeSeconds: result.startTimeSeconds,
                       trackName: result.trackName,
                       artistName: result.artistName,
+                      matchedLineTimeSeconds: result.matchedLineTimeSeconds,
+                      matchedLyricLine: result.matchedLyricLine,
                     ),
                     confidence: result.confidence,
                     source: result.source,
+                    evidenceText: result.matchedLyricLine,
                   ),
                 )
                 .toList();
@@ -768,201 +791,46 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     );
   }
 
+  String _formatClockLabel(int seconds) {
+    final safe = seconds < 0 ? 0 : seconds;
+    final minutes = safe ~/ 60;
+    final remainder = safe % 60;
+    return '$minutes:${remainder.toString().padLeft(2, '0')}';
+  }
+
+  String? _bestEvidenceSnippet(PlaybackOption option) {
+    final line = option.result.matchedLyricLine?.trim();
+    if (line != null && line.isNotEmpty) return line;
+
+    final evidence = option.evidenceText?.trim();
+    if (evidence == null || evidence.isEmpty) return null;
+
+    final compact = evidence.replaceAll(RegExp(r'\s+'), ' ');
+    if (compact.length <= 120) return compact;
+    return '${compact.substring(0, 117)}...';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // REDESIGNED song-picker bottom sheet
+  // ─────────────────────────────────────────────────────────────────────────
   Future<PlaybackOption?> _pickCandidateFromOptions(
     List<PlaybackOption> options,
   ) async {
     if (options.length == 1) return options.first;
+
     return showModalBottomSheet<PlaybackOption>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder:
-          (ctx) => Theme(
-            data: lyricScreenTheme(ctx),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: LyricScreenPalette.background,
-                    borderRadius: BorderRadius.circular(30),
-                    border: Border.all(
-                      color: LyricScreenPalette.outline.withValues(alpha: 0.5),
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(height: 10),
-                      Container(
-                        width: 48,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: LyricScreenPalette.outline,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Choose your song',
-                              style: Theme.of(ctx).textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w900),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'We found multiple strong matches. Pick the one that feels right and jump straight in.',
-                              style: Theme.of(
-                                ctx,
-                              ).textTheme.bodyMedium?.copyWith(
-                                color:
-                                    Theme.of(ctx).colorScheme.onSurfaceVariant,
-                                height: 1.45,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Flexible(
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                          itemCount: options.length,
-                          separatorBuilder:
-                              (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (_, i) {
-                            final option = options[i];
-                            final result = option.result;
-                            final confidencePct =
-                                (option.confidence * 100).clamp(0, 100).round();
-
-                            return Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () => Navigator.of(ctx).pop(option),
-                                borderRadius: BorderRadius.circular(22),
-                                child: Container(
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: LyricScreenPalette.surface,
-                                    borderRadius: BorderRadius.circular(22),
-                                    border: Border.all(
-                                      color: LyricScreenPalette.outline
-                                          .withValues(alpha: 0.45),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      // Modified: Circular image with fallback
-                                      _CircularThumbnail(
-                                        imageUrl:
-                                            'https://img.youtube.com/vi/${result.videoId}/0.jpg',
-                                        size: 56,
-                                        fallbackText: 'LyricQSK',
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              result.trackName,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(
-                                                ctx,
-                                              ).textTheme.titleSmall?.copyWith(
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              result.artistName,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(
-                                                ctx,
-                                              ).textTheme.bodySmall?.copyWith(
-                                                color:
-                                                    Theme.of(ctx)
-                                                        .colorScheme
-                                                        .onSurfaceVariant,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 10),
-                                            Wrap(
-                                              spacing: 8,
-                                              runSpacing: 8,
-                                              children: [
-                                                LyricTag(
-                                                  label:
-                                                      '${result.startTimeSeconds}s',
-                                                  icon: Icons.timer_rounded,
-                                                ),
-                                                LyricTag(
-                                                  label: option.source,
-                                                  icon: Icons.tune_rounded,
-                                                ),
-                                                LyricTag(
-                                                  label: '$confidencePct%',
-                                                  icon:
-                                                      Icons.auto_graph_rounded,
-                                                  highlighted:
-                                                      confidencePct >= 80,
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        width: 34,
-                                        height: 34,
-                                        decoration: BoxDecoration(
-                                          color: LyricScreenPalette.accentSoft,
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.chevron_right_rounded,
-                                          color: LyricScreenPalette.ink,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                child: const Text('Cancel'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
+      builder: (ctx) {
+        return _SongPickerSheet(
+          options: options,
+          formatClock: _formatClockLabel,
+          bestSnippet: _bestEvidenceSnippet,
+          preRollSeconds: _kPreRollSeconds,
+        );
+      },
     );
   }
 
@@ -996,7 +864,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
               final availW = constraints.maxWidth;
               return Stack(
                 children: [
-                  // 🎵  Hidden YouTube player (off-screen, 1% opacity) 🎵 🎵 🎵  🎵
+                  // 🎵  Hidden YouTube player (off-screen, 1% opacity)
                   if (_ytController != null)
                     Positioned(
                       left: hPad,
@@ -1019,7 +887,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                         ),
                       ),
                     ),
-                  // 🎵  Main non-scrollable column 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵
+                  // 🎵  Main non-scrollable column
                   Padding(
                     padding: EdgeInsets.fromLTRB(hPad, vGap, hPad, vGap),
                     child: Column(
@@ -1084,9 +952,492 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   }
 }
 
-// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
-// _TurntablePlayerCard
-// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
+// ─────────────────────────────────────────────────────────────────────────────
+// _SongPickerSheet — redesigned bottom sheet for multi-result song selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SongPickerSheet extends StatelessWidget {
+  const _SongPickerSheet({
+    required this.options,
+    required this.formatClock,
+    required this.bestSnippet,
+    required this.preRollSeconds,
+  });
+
+  final List<PlaybackOption> options;
+  final String Function(int) formatClock;
+  final String? Function(PlaybackOption) bestSnippet;
+  final int preRollSeconds;
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.72,
+      minChildSize: 0.45,
+      maxChildSize: 0.94,
+      expand: false,
+      builder: (ctx, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFF5F3EF),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            children: [
+              // ── drag handle ──
+              Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                child: Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFCBC8C2),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── header ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Pick a match',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.black,
+                              height: 1.1,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          RichText(
+                            text: TextSpan(
+                              style: const TextStyle(
+                                fontFamily: 'Inter',
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF888888),
+                                height: 1.45,
+                              ),
+                              children: [
+                                const TextSpan(
+                                  text: 'Exact lyric hits play ',
+                                ),
+                                TextSpan(
+                                  text: '${preRollSeconds}s before',
+                                  style: const TextStyle(
+                                    color: Colors.black,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const TextSpan(text: ' the matched line.'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // result count badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${options.length} result${options.length == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // ── list ──
+              Expanded(
+                child: ListView.separated(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  itemCount: options.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (_, i) {
+                    return _SongPickerCard(
+                      option: options[i],
+                      rank: i,
+                      formatClock: formatClock,
+                      snippet: bestSnippet(options[i]),
+                      preRollSeconds: preRollSeconds,
+                      onTap: () => Navigator.of(context).pop(options[i]),
+                    );
+                  },
+                ),
+              ),
+
+              // ── cancel bar ──
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF444444),
+                        side: const BorderSide(color: Color(0xFFD8D4CC)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _SongPickerCard — a single result row inside the sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SongPickerCard extends StatelessWidget {
+  const _SongPickerCard({
+    required this.option,
+    required this.rank,
+    required this.formatClock,
+    required this.snippet,
+    required this.preRollSeconds,
+    required this.onTap,
+  });
+
+  final PlaybackOption option;
+  final int rank;
+  final String Function(int) formatClock;
+  final String? snippet;
+  final int preRollSeconds;
+  final VoidCallback onTap;
+
+  // Confidence-based accent colour
+  static Color _confidenceColor(double c) {
+    if (c >= 0.80) return const Color(0xFF11C979); // strong green
+    if (c >= 0.60) return const Color(0xFFFFB830); // amber
+    return const Color(0xFFCCCCCC); // muted
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final result = option.result;
+    final hasExactLine =
+        (result.matchedLyricLine ?? '').trim().isNotEmpty &&
+        result.matchedLineTimeSeconds != null &&
+        result.matchedLineTimeSeconds! >= 0;
+
+    final playStart =
+        hasExactLine
+            ? math.max(0, result.matchedLineTimeSeconds! - preRollSeconds)
+            : result.startTimeSeconds;
+
+    final confidencePct = (option.confidence * 100).clamp(0, 100).round();
+    final accentColor = _confidenceColor(option.confidence);
+    final isTopResult = rank == 0;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isTopResult ? const Color(0xFFF0EDE7) : const Color(0xFFFAF8F5),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isTopResult
+                  ? const Color(0xFFD8D4CC)
+                  : const Color(0xFFEAE6E0),
+              width: isTopResult ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── thumbnail + rank badge ──
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _CircularThumbnail(
+                    imageUrl:
+                        'https://img.youtube.com/vi/${result.videoId}/0.jpg',
+                    size: 58,
+                    fallbackText: result.trackName,
+                  ),
+                  if (isTopResult)
+                    Positioned(
+                      bottom: -4,
+                      right: -4,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: const BoxDecoration(
+                          color: Colors.black,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.star_rounded,
+                          size: 12,
+                          color: Color(0xFFFFD000),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+
+              const SizedBox(width: 12),
+
+              // ── text content ──
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // title row
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            result.trackName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // confidence pill
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accentColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Text(
+                            '$confidencePct%',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: accentColor == const Color(0xFFCCCCCC)
+                                  ? const Color(0xFF888888)
+                                  : accentColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 3),
+
+                    // artist
+                    Text(
+                      result.artistName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF777777),
+                      ),
+                    ),
+
+                    // matched lyric snippet
+                    if (snippet != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 11,
+                          vertical: 9,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEAE6DF),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.only(top: 1),
+                              child: Icon(
+                                Icons.format_quote_rounded,
+                                size: 13,
+                                color: Color(0xFF888888),
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                snippet!,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 12,
+                                  fontStyle: FontStyle.italic,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF444444),
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 10),
+
+                    // metadata chips row
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        // play-from timestamp (pre-rolled)
+                        _MetaChip(
+                          icon: Icons.play_circle_outline_rounded,
+                          label: 'Plays from ${formatClock(playStart)}',
+                          highlighted: true,
+                        ),
+                        // line timestamp (if exact)
+                        if (hasExactLine)
+                          _MetaChip(
+                            icon: Icons.lyrics_outlined,
+                            label: 'Line at ${formatClock(result.matchedLineTimeSeconds!)}',
+                          ),
+                        // source
+                        _MetaChip(
+                          icon: Icons.tune_rounded,
+                          label: option.source,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(width: 6),
+
+              // ── chevron ──
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFFAAAAAA),
+                  size: 22,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _MetaChip
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MetaChip extends StatelessWidget {
+  const _MetaChip({
+    required this.icon,
+    required this.label,
+    this.highlighted = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: highlighted ? const Color(0xFF111111) : const Color(0xFFE4E0D9),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 11,
+            color: highlighted ? Colors.white : const Color(0xFF666666),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: highlighted ? Colors.white : const Color(0xFF555555),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _TurntablePlayerCard  (unchanged from original)
+// ─────────────────────────────────────────────────────────────────────────────
 class _TurntablePlayerCard extends StatelessWidget {
   const _TurntablePlayerCard({
     required this.controller,
@@ -1176,7 +1527,6 @@ class _TurntablePlayerCard extends StatelessWidget {
                 0.0,
                 1.0,
               );
-      // Calculate rotation angle - full rotation every 12 seconds of playback time
       final rotationAngle =
           duration.inMilliseconds == 0
               ? 0.0
@@ -1280,7 +1630,6 @@ class _TurntablePlayerCard extends StatelessWidget {
                                             child: SizedBox.expand(),
                                           ),
                                         ),
-                                        // Center label with image - rotates at same speed as vinyl
                                         Transform.rotate(
                                           angle: rotationAngle,
                                           child: Container(
@@ -1308,8 +1657,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                                                             'LYRICQSK',
                                                       )
                                                       : Transform.rotate(
-                                                        angle:
-                                                            math.pi, // 180 degrees rotation
+                                                        angle: math.pi,
                                                         child: Center(
                                                           child: Text(
                                                             artist.length > 12
@@ -1606,9 +1954,9 @@ class _TurntablePlayerCard extends StatelessWidget {
   }
 }
 
-// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵
-// _SearchConsoleCard
-// 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵  🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
+// ─────────────────────────────────────────────────────────────────────────────
+// _SearchConsoleCard  (unchanged from original)
+// ─────────────────────────────────────────────────────────────────────────────
 class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
     required this.lyricController,
@@ -1653,7 +2001,6 @@ class _SearchConsoleCard extends StatefulWidget {
 }
 
 class _SearchConsoleCardState extends State<_SearchConsoleCard> {
-  bool _showDropdown = false;
   final FocusNode _focusNode = FocusNode();
   OverlayEntry? _overlayEntry;
   final LayerLink _layerLink = LayerLink();
@@ -1687,13 +2034,11 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
     }
     _overlayEntry = _buildOverlayEntry();
     Overlay.of(context).insert(_overlayEntry!);
-    setState(() => _showDropdown = true);
   }
 
   void _hideOverlay() {
     _overlayEntry?.remove();
     _overlayEntry = null;
-    if (mounted) setState(() => _showDropdown = false);
   }
 
   void _refreshOverlay() {
@@ -2053,7 +2398,9 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
   }
 }
 
-// New widget: Circular thumbnail with fallback
+// ─────────────────────────────────────────────────────────────────────────────
+// _CircularThumbnail
+// ─────────────────────────────────────────────────────────────────────────────
 class _CircularThumbnail extends StatelessWidget {
   const _CircularThumbnail({
     required this.imageUrl,
@@ -2103,9 +2450,10 @@ class _CircularThumbnail extends StatelessWidget {
   }
 }
 
-// 🎵 🎵 🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵
-// Small reusable deck widgets
-// 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵 🎵 🎵  🎵  🎵 🎵
+// ─────────────────────────────────────────────────────────────────────────────
+// Small deck widgets  (unchanged)
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _DeckScrew extends StatelessWidget {
   const _DeckScrew();
 
@@ -2369,9 +2717,9 @@ class _ScrubbableWaveform extends StatelessWidget {
   }
 }
 
-// 🎵 🎵 🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵
-// _GenerateSongSliderCard - Modified to only proceed when slid the whole way
-// 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵
+// ─────────────────────────────────────────────────────────────────────────────
+// _GenerateSongSliderCard  (unchanged from original)
+// ─────────────────────────────────────────────────────────────────────────────
 class _GenerateSongSliderCard extends StatefulWidget {
   const _GenerateSongSliderCard({
     required this.compact,
@@ -2390,8 +2738,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
     with SingleTickerProviderStateMixin {
   static const double _handleSize = 50;
   static const double _trackPadding = 6;
-  static const double _completeThreshold =
-      0.99; // Changed to 0.99 for full slide
+  static const double _completeThreshold = 0.99;
   double _progress = 0;
   bool _isSubmitting = false;
   bool _isDragging = false;
@@ -2432,7 +2779,6 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   Future<void> _onDragEnd() async {
     setState(() => _isDragging = false);
     if (_isSubmitting) return;
-    // Only proceed if slid to completion (full width)
     if (_progress >= _completeThreshold) {
       setState(() {
         _progress = 1;
@@ -2441,14 +2787,14 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
       try {
         await widget.onCompleted();
       } finally {
-        if (mounted)
+        if (mounted) {
           setState(() {
             _isSubmitting = false;
             _progress = 0;
           });
+        }
       }
     } else {
-      // Reset progress if not fully slid
       setState(() => _progress = 0);
     }
   }
@@ -2661,11 +3007,12 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                 (d) => _updateProgress(d.localPosition, constraints),
             onHorizontalDragEnd: (_) => _onDragEnd(),
             onHorizontalDragCancel: () {
-              if (!_isSubmitting)
+              if (!_isSubmitting) {
                 setState(() {
                   _progress = 0;
                   _isDragging = false;
                 });
+              }
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
@@ -2693,7 +3040,6 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   }
 }
 
-// 🎵 🎵  Shimmer painter (extracted for cleanliness) 🎵  🎵  🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵 🎵 🎵 🎵  🎵 🎵  🎵  🎵  🎵 🎵 🎵 🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵  🎵 🎵
 class _ShimmerPainter extends CustomPainter {
   const _ShimmerPainter({required this.x, required this.bandWidth});
 

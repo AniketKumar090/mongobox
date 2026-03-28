@@ -33,6 +33,8 @@ class LyricPlayResult {
     required this.artistName,
     required this.durationSeconds,
     required this.startTimeSeconds,
+    required this.exactLineTimeSeconds,
+    this.matchedLyricLine,
     this.syncedLyrics,
   });
 
@@ -40,6 +42,8 @@ class LyricPlayResult {
   final String artistName;
   final int durationSeconds;
   final int startTimeSeconds;
+  final int exactLineTimeSeconds;
+  final String? matchedLyricLine;
   final String? syncedLyrics;
 }
 
@@ -52,9 +56,9 @@ class PersonalSongResult {
     required this.inferredGenre,
   });
 
-  final String songTitle;     // e.g. "Midnight Signal"
-  final String lyrics;        // full [Verse]/[Chorus]/[Bridge] text
-  final String inferredMood;  // e.g. "melancholic"
+  final String songTitle; // e.g. "Midnight Signal"
+  final String lyrics; // full [Verse]/[Chorus]/[Bridge] text
+  final String inferredMood; // e.g. "melancholic"
   final String inferredGenre; // e.g. "Indie pop / Synth-pop"
 
   String get fullText => '"$songTitle"\n\n$lyrics';
@@ -183,17 +187,19 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
 
       final data = json.decode(response.body) as Map<String, dynamic>;
 
-      final rawText = (data['content'] as List<dynamic>?)
+      final rawText =
+          (data['content'] as List<dynamic>?)
               ?.whereType<Map<String, dynamic>>()
               .where((b) => b['type'] == 'text')
               .map((b) => b['text'] as String)
               .join('') ??
           '';
 
-      final cleanJson = rawText
-          .replaceAll(RegExp(r'```json\s*'), '')
-          .replaceAll(RegExp(r'```\s*'), '')
-          .trim();
+      final cleanJson =
+          rawText
+              .replaceAll(RegExp(r'```json\s*'), '')
+              .replaceAll(RegExp(r'```\s*'), '')
+              .trim();
 
       final parsed = json.decode(cleanJson) as Map<String, dynamic>;
 
@@ -221,9 +227,9 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final cached = _searchCache[cacheKey];
     if (cached != null) return cached;
 
-    final uri = Uri.parse('$_baseUrl/api/search').replace(
-      queryParameters: {'q': q},
-    );
+    final uri = Uri.parse(
+      '$_baseUrl/api/search',
+    ).replace(queryParameters: {'q': q});
 
     try {
       final response = await _client
@@ -241,16 +247,17 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
         return const [];
       }
 
-      final parsed = list.map((e) {
-        final m = e as Map<String, dynamic>;
-        return LyricsMatch(
-          id: (m['id'] as num?)?.toInt() ?? 0,
-          trackName: (m['trackName'] as String?) ?? '',
-          artistName: (m['artistName'] as String?) ?? '',
-          durationSeconds: (m['duration'] as num?)?.toInt() ?? 0,
-          syncedLyrics: m['syncedLyrics'] as String?,
-        );
-      }).toList();
+      final parsed =
+          list.map((e) {
+            final m = e as Map<String, dynamic>;
+            return LyricsMatch(
+              id: (m['id'] as num?)?.toInt() ?? 0,
+              trackName: (m['trackName'] as String?) ?? '',
+              artistName: (m['artistName'] as String?) ?? '',
+              durationSeconds: (m['duration'] as num?)?.toInt() ?? 0,
+              syncedLyrics: m['syncedLyrics'] as String?,
+            );
+          }).toList();
 
       _searchCache[cacheKey] = parsed;
       return parsed;
@@ -304,7 +311,8 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final normalized = line.trim().replaceAll(RegExp(r'[\s]+'), ' ').trim();
     if (normalized.isEmpty) return const [];
 
-    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words =
+        normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final out = <String>[];
     final seen = <String>{normalized.toLowerCase()};
 
@@ -323,7 +331,9 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       final idx = w.length ~/ 2;
       final oneLess = w.substring(0, idx) + w.substring(idx + 1);
       if (oneLess.length < 3) continue;
-      add([...words.sublist(0, wi), oneLess, ...words.sublist(wi + 1)].join(' '));
+      add(
+        [...words.sublist(0, wi), oneLess, ...words.sublist(wi + 1)].join(' '),
+      );
       if (out.length >= maxVariants) return out;
     }
 
@@ -334,7 +344,9 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       final i = w.length ~/ 2;
       if (i + 1 >= w.length) continue;
       final swapped = w.substring(0, i) + w[i + 1] + w[i] + w.substring(i + 2);
-      add([...words.sublist(0, wi), swapped, ...words.sublist(wi + 1)].join(' '));
+      add(
+        [...words.sublist(0, wi), swapped, ...words.sublist(wi + 1)].join(' '),
+      );
       if (out.length >= maxVariants) return out;
       break;
     }
@@ -348,7 +360,11 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       final lower = ch.toLowerCase();
       final alt = _keyboardNeighborChar(lower);
       if (alt == null) continue;
-      final nw = w.replaceRange(i, i + 1, ch == lower ? alt : alt.toUpperCase());
+      final nw = w.replaceRange(
+        i,
+        i + 1,
+        ch == lower ? alt : alt.toUpperCase(),
+      );
       add([...words.sublist(0, wi), nw, ...words.sublist(wi + 1)].join(' '));
       if (out.length >= maxVariants) return out;
       break;
@@ -360,7 +376,13 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       for (var i = 0; i < w.length - 1; i++) {
         if (w[i].toLowerCase() == w[i + 1].toLowerCase()) {
           final collapsed = w.substring(0, i) + w.substring(i + 1);
-          add([...words.sublist(0, wi), collapsed, ...words.sublist(wi + 1)].join(' '));
+          add(
+            [
+              ...words.sublist(0, wi),
+              collapsed,
+              ...words.sublist(wi + 1),
+            ].join(' '),
+          );
           if (out.length >= maxVariants) return out;
           break;
         }
@@ -374,7 +396,9 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
       final i = w.length ~/ 2;
       final c = w[i];
       final doubled = w.substring(0, i) + c + c + w.substring(i + 1);
-      add([...words.sublist(0, wi), doubled, ...words.sublist(wi + 1)].join(' '));
+      add(
+        [...words.sublist(0, wi), doubled, ...words.sublist(wi + 1)].join(' '),
+      );
       if (out.length >= maxVariants) return out;
       break;
     }
@@ -415,16 +439,21 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
   }
 
   /// Prioritized LRCLIB search strings for one user line (rap/long lines get extra windows).
-  static List<String> lyricSearchQueryVariants(String line, {int maxQueries = 22}) {
+  static List<String> lyricSearchQueryVariants(
+    String line, {
+    int maxQueries = 22,
+  }) {
     final trimmed = line.trim();
     if (trimmed.isEmpty) return const [];
 
-    final normalized = trimmed
-        .replaceAll(RegExp(r'[\s]+'), ' ')
-        .replaceAll(RegExp(r'[\"]|[“”‘’]'), '')
-        .trim();
+    final normalized =
+        trimmed
+            .replaceAll(RegExp(r'[\s]+'), ' ')
+            .replaceAll(RegExp(r'[\"]|[“”‘’]'), '')
+            .trim();
 
-    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words =
+        normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final out = <String>[];
     final seen = <String>{};
 
@@ -487,16 +516,22 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
   }
 
   /// YouTube search query variants when resolving a lyric line (LRCLIB miss / rap depth).
-  static List<String> youtubeLyricSearchVariants(String line, {int maxQueries = 32}) {
+  static List<String> youtubeLyricSearchVariants(
+    String line, {
+    int maxQueries = 32,
+  }) {
     final trimmed = line.trim();
     if (trimmed.isEmpty) return const [];
 
-    final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words =
+        trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final shortHead = words.take(8).join(' ');
-    final midWindow = words.length > 10
-        ? words.skip((words.length / 3).floor()).take(8).join(' ')
-        : '';
-    final tailWindow = words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
+    final midWindow =
+        words.length > 10
+            ? words.skip((words.length / 3).floor()).take(8).join(' ')
+            : '';
+    final tailWindow =
+        words.length > 10 ? words.skip(words.length - 8).join(' ') : '';
 
     final out = <String>[];
     final seen = <String>{};
@@ -584,7 +619,8 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final normalized = _normalizeLine(line);
     if (normalized.isEmpty) return const [];
 
-    final words = normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words =
+        normalized.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     final out = <String>[normalized];
     final seen = <String>{normalized};
 
@@ -662,21 +698,35 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
   ];
 
   /// Rank a YouTube search result against a user lyric line (shared by playback + lightweight search).
-  static double scoreYoutubeCandidateForLyricLine(Map<String, dynamic> song, String lyricLine) {
+  static double scoreYoutubeCandidateForLyricLine(
+    Map<String, dynamic> song,
+    String lyricLine,
+  ) {
     final title = song['title'] as String? ?? '';
     final artist = song['artist'] as String? ?? '';
     final description = song['description'] as String? ?? '';
     final durationSeconds = (song['durationSeconds'] as num?)?.toInt() ?? 0;
 
-    var score = bestTextMatchForLyricLine(title, artist, description, lyricLine);
+    var score = bestTextMatchForLyricLine(
+      title,
+      artist,
+      description,
+      lyricLine,
+    );
 
     final loweredTitle = title.toLowerCase();
     final loweredDescription = description.toLowerCase();
     if (loweredTitle.contains('lyrics')) score += 0.08;
     if (loweredTitle.contains('official')) score += 0.05;
-    if (_containsAnyKeyword(loweredTitle, youtubeBadVersionKeywords)) score -= 0.28;
-    if (_containsAnyKeyword(loweredDescription, youtubeBadVersionKeywords)) score -= 0.2;
-    if (_containsAnyKeyword(loweredTitle, youtubeGoodVersionKeywords)) score += 0.12;
+    if (_containsAnyKeyword(loweredTitle, youtubeBadVersionKeywords)) {
+      score -= 0.28;
+    }
+    if (_containsAnyKeyword(loweredDescription, youtubeBadVersionKeywords)) {
+      score -= 0.2;
+    }
+    if (_containsAnyKeyword(loweredTitle, youtubeGoodVersionKeywords)) {
+      score += 0.12;
+    }
     if (durationSeconds >= 150) score += 0.08;
 
     return score;
@@ -701,7 +751,10 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     return total == 0 || (latin / total) >= 0.62;
   }
 
-  static List<String> _distinctiveWords(List<String> words, {int maxWords = 8}) {
+  static List<String> _distinctiveWords(
+    List<String> words, {
+    int maxWords = 8,
+  }) {
     final out = <String>[];
     for (final w in words) {
       final lw = w.toLowerCase();
@@ -714,16 +767,121 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
   }
 
   static const Set<String> _englishStopWords = {
-    'the', 'a', 'an', 'to', 'and', 'or', 'but', 'in', 'on', 'at', 'for', 'of', 'with', 'by',
-    'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
-    'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
-    'can', 'need', 'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'we',
-    'they', 'them', 'me', 'my', 'your', 'his', 'her', 'our', 'their', 'what', 'which', 'who',
-    'when', 'where', 'why', 'how', 'if', 'then', 'so', 'than', 'too', 'very', 'just', 'not',
-    'no', 'yes', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such',
-    'only', 'same', 'own', 'into', 'out', 'up', 'down', 'about', 'over', 'under', 'again',
-    'after', 'before', 'once', 'here', 'there', 'now', 'im', 'dont', 'gonna', 'wanna', 'got',
-    'get', 'like', 'know', 'yeah', 'oh', 'uh', 'na',
+    'the',
+    'a',
+    'an',
+    'to',
+    'and',
+    'or',
+    'but',
+    'in',
+    'on',
+    'at',
+    'for',
+    'of',
+    'with',
+    'by',
+    'from',
+    'as',
+    'is',
+    'was',
+    'are',
+    'were',
+    'be',
+    'been',
+    'being',
+    'have',
+    'has',
+    'had',
+    'do',
+    'does',
+    'did',
+    'will',
+    'would',
+    'could',
+    'should',
+    'may',
+    'might',
+    'must',
+    'shall',
+    'can',
+    'need',
+    'it',
+    'its',
+    'this',
+    'that',
+    'these',
+    'those',
+    'i',
+    'you',
+    'he',
+    'she',
+    'we',
+    'they',
+    'them',
+    'me',
+    'my',
+    'your',
+    'his',
+    'her',
+    'our',
+    'their',
+    'what',
+    'which',
+    'who',
+    'when',
+    'where',
+    'why',
+    'how',
+    'if',
+    'then',
+    'so',
+    'than',
+    'too',
+    'very',
+    'just',
+    'not',
+    'no',
+    'yes',
+    'all',
+    'each',
+    'every',
+    'both',
+    'few',
+    'more',
+    'most',
+    'other',
+    'some',
+    'such',
+    'only',
+    'same',
+    'own',
+    'into',
+    'out',
+    'up',
+    'down',
+    'about',
+    'over',
+    'under',
+    'again',
+    'after',
+    'before',
+    'once',
+    'here',
+    'there',
+    'now',
+    'im',
+    'dont',
+    'gonna',
+    'wanna',
+    'got',
+    'get',
+    'like',
+    'know',
+    'yeah',
+    'oh',
+    'uh',
+    'na',
   };
 
   /// Find the best matching line in LRC text and return its start time in seconds.
@@ -736,12 +894,7 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final normalizedUser = _normalizeLine(userLine);
     final queryTokens = _splitTokens(normalizedUser);
 
-    // Long dense lines (rap): slightly looser bar; short lines stay strict.
-    final threshold = queryTokens.length >= 12
-        ? 0.42
-        : queryTokens.length >= 6
-            ? 0.46
-            : 0.40;
+    final threshold = _timedMatchThreshold(queryTokens.length);
     return best.score >= threshold ? best.seconds : 0;
   }
 
@@ -769,6 +922,17 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final best = _bestTimedMatch(syncedLyrics, userLine);
     if (best == null) return null;
     return best.score >= minScore ? best.seconds : null;
+  }
+
+  static double _timedMatchThreshold(int tokenCount) {
+    // Long dense lines (rap): slightly looser bar; short lines stay strict.
+    if (tokenCount >= 12) {
+      return 0.42;
+    }
+    if (tokenCount >= 6) {
+      return 0.46;
+    }
+    return 0.40;
   }
 
   /// Scores free text similarity (0..1), useful for ranking global fallbacks.
@@ -836,7 +1000,8 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     if (normalizedText.isEmpty) return 0;
 
     if (normalizedText == normalizedUser) return 1.0;
-    if (normalizedText.contains(normalizedUser) || normalizedUser.contains(normalizedText)) {
+    if (normalizedText.contains(normalizedUser) ||
+        normalizedUser.contains(normalizedText)) {
       return 0.92;
     }
 
@@ -901,7 +1066,10 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     return msPerWord.clamp(200, 1200); // sane range 200–1200 ms/word
   }
 
-  static double _maxContiguousOverlapRatio(List<String> queryTokens, List<String> textTokens) {
+  static double _maxContiguousOverlapRatio(
+    List<String> queryTokens,
+    List<String> textTokens,
+  ) {
     if (queryTokens.isEmpty || textTokens.isEmpty) return 0;
 
     int best = 0;
@@ -919,7 +1087,10 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     return best / queryTokens.length;
   }
 
-  static double _orderedWindowCoverage(List<String> queryTokens, List<String> textTokens) {
+  static double _orderedWindowCoverage(
+    List<String> queryTokens,
+    List<String> textTokens,
+  ) {
     if (queryTokens.isEmpty || textTokens.isEmpty) return 0;
 
     var qi = 0;
@@ -1012,12 +1183,20 @@ Respond ONLY with this exact JSON (no markdown, no backticks, no extra text):
     final synced = match.syncedLyrics;
     if (synced == null || synced.isEmpty) return null;
 
-    final startSeconds = findStartTimeSeconds(synced, userLine);
+    final best = _bestTimedMatch(synced, userLine);
+    final tokenCount = _splitTokens(_normalizeLine(userLine)).length;
+    final exactLineTimeSeconds = best?.seconds ?? 0;
+    final startSeconds =
+        best != null && best.score >= _timedMatchThreshold(tokenCount)
+            ? best.seconds
+            : 0;
     return LyricPlayResult(
       trackName: match.trackName,
       artistName: match.artistName,
       durationSeconds: match.durationSeconds,
       startTimeSeconds: startSeconds,
+      exactLineTimeSeconds: exactLineTimeSeconds,
+      matchedLyricLine: best?.lineText,
       syncedLyrics: synced,
     );
   }
