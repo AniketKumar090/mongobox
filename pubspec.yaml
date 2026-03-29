@@ -33,7 +33,7 @@ dependencies:
   google_fonts: ^8.0.2
   flutter_twemoji: ^1.1.0
   volume_controller: ^3.4.2
-  
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

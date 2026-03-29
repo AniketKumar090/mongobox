@@ -364,18 +364,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
   // ─────────────────────────────────────────────────────────────────────────
   // Computes the actual start time for playback.
-  //
-  // If the result has a confirmed matched lyric timestamp, we rewind
-  // _kPreRollSeconds (8 s) so the user hears the song in context before
-  // the searched line arrives.  We clamp to 0 so we never seek to a
-  // negative position.
   // ─────────────────────────────────────────────────────────────────────────
   int _resolvePlaybackStart(PlaybackResult result) {
     final lineTs = result.matchedLineTimeSeconds;
     if (lineTs != null && lineTs > 0) {
       return math.max(0, lineTs - _kPreRollSeconds);
     }
-    // Fall back to whatever the service already computed.
     return result.startTimeSeconds;
   }
 
@@ -395,7 +389,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // ── KEY FIX: honour the pre-roll offset ──
       final startSeconds = _resolvePlaybackStart(result);
       final controller =
           YouTubePlayerBackgroundHelper.createBackgroundAwareController(
@@ -1436,7 +1429,7 @@ class _MetaChip extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _TurntablePlayerCard  (unchanged from original)
+// _TurntablePlayerCard
 // ─────────────────────────────────────────────────────────────────────────────
 class _TurntablePlayerCard extends StatelessWidget {
   const _TurntablePlayerCard({
@@ -1955,7 +1948,7 @@ class _TurntablePlayerCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SearchConsoleCard  (unchanged from original)
+// _SearchConsoleCard
 // ─────────────────────────────────────────────────────────────────────────────
 class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
@@ -2451,7 +2444,7 @@ class _CircularThumbnail extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small deck widgets  (unchanged)
+// Small deck widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DeckScrew extends StatelessWidget {
@@ -2718,7 +2711,7 @@ class _ScrubbableWaveform extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _GenerateSongSliderCard  (unchanged from original)
+// _GenerateSongSliderCard  — FIXED: drag must start ON the handle
 // ─────────────────────────────────────────────────────────────────────────────
 class _GenerateSongSliderCard extends StatefulWidget {
   const _GenerateSongSliderCard({
@@ -2739,9 +2732,17 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   static const double _handleSize = 50;
   static const double _trackPadding = 6;
   static const double _completeThreshold = 0.99;
+
   double _progress = 0;
   bool _isSubmitting = false;
   bool _isDragging = false;
+
+  // ── NEW: handle-anchored drag state ──────────────────────────────────────
+  bool _isDragValid = false;   // true only when drag started on the handle
+  double _dragStartDx = 0;     // x position where the drag began
+  double _dragStartProgress = 0; // progress value at drag start
+  // ─────────────────────────────────────────────────────────────────────────
+
   late AnimationController _shimmerController;
 
   @override
@@ -2765,20 +2766,52 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
         double.infinity,
       );
 
-  void _updateProgress(Offset local, BoxConstraints c) {
+  // ── REPLACED: only move handle via delta from drag-start position ─────────
+  void _onDragStart(DragStartDetails details, BoxConstraints c) {
     if (_isSubmitting) return;
-    final t = ((local.dx - _trackPadding - _handleSize / 2) / _maxTravel(c))
-        .clamp(0.0, 1.0);
-    if (t == _progress) return;
-    setState(() {
-      _progress = t;
-      _isDragging = t > 0;
-    });
+
+    final maxTravel = _maxTravel(c);
+    final handleLeft = _trackPadding + maxTravel * _progress;
+    final handleRight = handleLeft + _handleSize;
+    final tapX = details.localPosition.dx;
+
+    // Only activate if the finger landed on the handle
+    if (tapX >= handleLeft && tapX <= handleRight) {
+      _isDragValid = true;
+      _dragStartDx = tapX;
+      _dragStartProgress = _progress;
+      HapticFeedback.lightImpact();
+      setState(() => _isDragging = true);
+    } else {
+      _isDragValid = false;
+    }
   }
 
+  void _onDragUpdate(DragUpdateDetails details, BoxConstraints c) {
+    if (_isSubmitting || !_isDragValid) return;
+
+    final maxTravel = _maxTravel(c);
+    if (maxTravel <= 0) return;
+
+    final delta = details.localPosition.dx - _dragStartDx;
+    final t = (_dragStartProgress + delta / maxTravel).clamp(0.0, 1.0);
+    if (t == _progress) return;
+
+    setState(() {
+      _progress = t;
+      _isDragging = true;
+    });
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   Future<void> _onDragEnd() async {
-    setState(() => _isDragging = false);
+    setState(() {
+      _isDragging = false;
+      _isDragValid = false; // reset validity on every lift
+    });
+
     if (_isSubmitting) return;
+
     if (_progress >= _completeThreshold) {
       setState(() {
         _progress = 1;
@@ -2988,7 +3021,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
     return Semantics(
       button: true,
       label: 'Generate My Song',
-      hint: 'Slide right to open the AI song generator.',
+      hint: 'Slide the handle right to open the AI song generator.',
       child: LayoutBuilder(
         builder: (context, constraints) {
           final maxTravel = _maxTravel(constraints);
@@ -2999,18 +3032,16 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           );
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: (d) {
-              HapticFeedback.lightImpact();
-              _updateProgress(d.localPosition, constraints);
-            },
-            onHorizontalDragUpdate:
-                (d) => _updateProgress(d.localPosition, constraints),
+            // ── use the new handle-anchored handlers ──
+            onHorizontalDragStart: (d) => _onDragStart(d, constraints),
+            onHorizontalDragUpdate: (d) => _onDragUpdate(d, constraints),
             onHorizontalDragEnd: (_) => _onDragEnd(),
             onHorizontalDragCancel: () {
               if (!_isSubmitting) {
                 setState(() {
                   _progress = 0;
                   _isDragging = false;
+                  _isDragValid = false;
                 });
               }
             },
