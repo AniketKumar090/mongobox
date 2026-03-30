@@ -122,6 +122,7 @@ void _recoverPlaybackState() {
         // When the player reaches the end of the track (not looping),
         // clear the loading/starting flags so the UI is responsive again.
         if (state.processingState == ProcessingState.completed) {
+          unawaited(_audio.player.pause());
           setState(() {
             _isStartingStreamPlayback = false;
             // Keep _nowPlaying so the user can see what just finished and
@@ -592,6 +593,8 @@ void _recoverPlaybackState() {
     if (_isLoading) return;
 
     final p = _audio.player;
+    final isCompleted = p.processingState == ProcessingState.completed;
+    final isEffectivelyPlaying = _audio.isPlaying && !isCompleted;
 
     if (_nowPlaying == null) {
       // Nothing loaded — run a search.
@@ -609,11 +612,11 @@ void _recoverPlaybackState() {
       return;
     }
 
-    if (_audio.isPlaying) {
+    if (isEffectivelyPlaying) {
       unawaited(p.pause());
     } else {
       // If the track finished (completed state), seek back to the start.
-      if (p.processingState == ProcessingState.completed) {
+      if (isCompleted) {
         final startSeconds = _resolvePlaybackStart(_nowPlaying!);
         unawaited(p.seek(Duration(seconds: startSeconds)));
       }
@@ -1738,7 +1741,9 @@ class _TurntablePlayerCard extends StatelessWidget {
           stream: player.playerStateStream,
           builder: (context, stateSnap) {
             final state = stateSnap.data;
-            final playing = state?.playing ?? audio.isPlaying;
+            final isCompleted =
+                state?.processingState == ProcessingState.completed;
+            final playing = (state?.playing ?? audio.isPlaying) && !isCompleted;
             final duration =
                 (player.duration != null && player.duration! > Duration.zero)
                     ? player.duration!
