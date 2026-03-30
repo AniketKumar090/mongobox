@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import dataclass
 
 # Disable numba JIT cache if disk/cache dir is unwritable (avoids RuntimeError)
 os.environ.setdefault("NUMBA_DISABLE_JIT_CACHE", "1")
@@ -42,6 +43,24 @@ app.add_middleware(
 # XTTS-v2 is downloaded once to ~/.local/share/tts on first run.
 _tts: TTS | None = None
 _device: str = "cpu"
+_fallback_tts_models: dict[str, TTS] = {}
+
+
+@dataclass(frozen=True)
+class CloneRequestParams:
+    lyrics: str
+    mood: str
+    genre: str
+    language: str
+    accent_hint: str
+    tts_language_code: str
+    espeak_voice: str
+    coqui_model_hint: str
+    is_hindi: bool
+    reference_track_title: str
+    reference_artist_name: str
+    reference_lyric_snippet: str
+    reference_video_id: str
 
 
 
@@ -64,6 +83,43 @@ def _strip_section_tags(text: str) -> str:
         if line.strip() and not re.match(r"^\[", line.strip(), re.IGNORECASE)
     ]
     return "\n".join(lines)
+
+
+def _parse_bool_flag(value: str) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_clone_request(
+    *,
+    lyrics: str,
+    mood: str,
+    genre: str,
+    language: str,
+    accent_hint: str,
+    tts_language_code: str,
+    espeak_voice: str,
+    coqui_model_hint: str,
+    is_hindi: str,
+    reference_track_title: str,
+    reference_artist_name: str,
+    reference_lyric_snippet: str,
+    reference_video_id: str,
+) -> CloneRequestParams:
+    return CloneRequestParams(
+        lyrics=lyrics,
+        mood=mood,
+        genre=genre,
+        language=language,
+        accent_hint=accent_hint,
+        tts_language_code=tts_language_code,
+        espeak_voice=espeak_voice,
+        coqui_model_hint=coqui_model_hint,
+        is_hindi=_parse_bool_flag(is_hindi),
+        reference_track_title=reference_track_title,
+        reference_artist_name=reference_artist_name,
+        reference_lyric_snippet=reference_lyric_snippet,
+        reference_video_id=reference_video_id,
+    )
 
 
 def _chunk_lyrics(text: str, max_chars: int = 220) -> list[str]:
@@ -216,7 +272,10 @@ def _resolve_language_code(
     reference_track_title: str = "",
     reference_artist_name: str = "",
     reference_lyric_snippet: str = "",
+    tts_language_code: str = "",
+    is_hindi: bool = False,
 ) -> str:
+    explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
     normalized = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
     combined_reference_text = "\n".join(
         part
@@ -229,6 +288,64 @@ def _resolve_language_code(
         ]
         if part and part.strip()
     )
+
+    supported_xtts_codes = {
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "pl",
+        "tr",
+        "ru",
+        "nl",
+        "cs",
+        "ar",
+        "zh",
+        "ja",
+        "hu",
+        "ko",
+        "hi",
+    }
+
+    if explicit_tts_code:
+        prefix = explicit_tts_code.split("-", 1)[0]
+        explicit_map = {
+            "en": "en",
+            "es": "es",
+            "fr": "fr",
+            "de": "de",
+            "it": "it",
+            "pt": "pt",
+            "pl": "pl",
+            "tr": "tr",
+            "ru": "ru",
+            "nl": "nl",
+            "cs": "cs",
+            "ar": "ar",
+            "zh": "zh",
+            "ja": "ja",
+            "hu": "hu",
+            "ko": "ko",
+            "hi": "hi",
+            "ur": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
+            "pa": "hi",
+            "bn": "hi",
+            "ta": "hi",
+            "te": "hi",
+            "mr": "hi",
+            "gu": "hi",
+            "kn": "hi",
+            "ml": "hi",
+        }
+        mapped = explicit_map.get(prefix)
+        if mapped in supported_xtts_codes:
+            return mapped
+
+    if is_hindi:
+        return "hi"
+
     combined_lower = combined_reference_text.lower()
     if normalized:
         hint_map = {
@@ -300,6 +417,7 @@ def _resolve_accent_hint(
     reference_track_title: str,
     reference_artist_name: str,
     reference_lyric_snippet: str,
+    is_hindi: bool = False,
 ) -> str:
     """
     Best-effort accent resolver.
@@ -310,6 +428,8 @@ def _resolve_accent_hint(
     normalized = re.sub(r"[^a-z]+", " ", (accent_hint or "").strip().lower()).strip()
     if normalized in {"indian", "british", "american"}:
         return normalized
+    if normalized in {"hindi", "urdu", "punjabi", "desi", "south asian"}:
+        return "indian"
 
     combined = " ".join(
         part.lower()
@@ -322,6 +442,8 @@ def _resolve_accent_hint(
         ]
         if part and part.strip()
     )
+    if is_hindi:
+        return "indian"
     # If metadata suggests South Asian content, prefer Indian.
     if any(token in combined for token in ["urdu", "hindi", "bollywood", "ghazal", "qawwali", "desi"]):
         return "indian"
@@ -360,6 +482,108 @@ def _shape_english_pronunciation(text: str, accent: str) -> str:
     for pattern, replacement in _INDIAN_EN_REPLACEMENTS:
         shaped = pattern.sub(replacement, shaped)
     return shaped
+
+
+def _get_or_load_tts_model(model_name: str) -> TTS:
+    model_key = (model_name or "").strip()
+    if not model_key:
+        raise RuntimeError("No Coqui model hint was provided for fallback synthesis.")
+
+    model = _fallback_tts_models.get(model_key)
+    if model is not None:
+        return model
+
+    log.info("Loading fallback TTS model %s …", model_key)
+    model = TTS(model_key)
+    try:
+        model = model.to(_device)
+    except Exception:
+        log.info("Fallback model %s stays on its default device", model_key)
+    _fallback_tts_models[model_key] = model
+    return model
+
+
+def _synthesise_chunks_with_xtts(
+    *,
+    chunks: list[str],
+    speaker_wav: str,
+    xtts_language: str,
+    accent: str,
+    tmp_dir: str,
+) -> list[str]:
+    if _tts is None:
+        raise RuntimeError("XTTS model is not loaded yet.")
+
+    chunk_wavs: list[str] = []
+    for i, chunk in enumerate(chunks):
+        spoken_chunk = (
+            _shape_english_pronunciation(chunk, accent=accent)
+            if xtts_language == "en"
+            else chunk
+        )
+        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_raw.wav")
+        _tts.tts_to_file(
+            text=spoken_chunk,
+            speaker_wav=speaker_wav,
+            language=xtts_language,
+            file_path=out_chunk,
+        )
+        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
+        _normalize_generated_wav(out_chunk, normalized_chunk)
+        chunk_wavs.append(normalized_chunk)
+    return chunk_wavs
+
+
+def _synthesise_chunks_with_coqui_model(
+    *,
+    chunks: list[str],
+    model_name: str,
+    tmp_dir: str,
+) -> list[str]:
+    model = _get_or_load_tts_model(model_name)
+    chunk_wavs: list[str] = []
+    for i, chunk in enumerate(chunks):
+        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_fallback_raw.wav")
+        model.tts_to_file(text=chunk, file_path=out_chunk)
+        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_fallback.wav")
+        _normalize_generated_wav(out_chunk, normalized_chunk)
+        chunk_wavs.append(normalized_chunk)
+    return chunk_wavs
+
+
+def _synthesise_chunks_with_espeak(
+    *,
+    chunks: list[str],
+    espeak_voice: str,
+    tmp_dir: str,
+) -> list[str]:
+    voice = (espeak_voice or "").strip() or "en-gb"
+    chunk_wavs: list[str] = []
+    for i, chunk in enumerate(chunks):
+        raw_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak_raw.wav")
+        cmd = ["espeak-ng", "-v", voice, "-w", raw_chunk, chunk]
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "espeak-ng not found. Install it:\n"
+                "  macOS: brew install espeak-ng\n"
+                "  Ubuntu: sudo apt install espeak-ng"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            raise RuntimeError(f"espeak-ng synthesis failed: {detail or 'unknown error'}") from exc
+
+        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak.wav")
+        _normalize_generated_wav(raw_chunk, normalized_chunk)
+        chunk_wavs.append(normalized_chunk)
+    return chunk_wavs
 
 
 # ── Option B: extract instrumental from reference song & mix ────────────────────
@@ -505,6 +729,10 @@ async def clone_voice(
     genre: str = Form("", description="Song genre e.g. Lo-fi"),
     language: str = Form("", description="Requested song language e.g. Urdu"),
     accent_hint: str = Form("", description="Pronunciation/accent hint e.g. indian/british/american"),
+    tts_language_code: str = Form("", description="Explicit TTS language code e.g. hi-IN or en-GB"),
+    espeak_voice: str = Form("", description="eSpeak-NG voice id used for last-resort synthesis"),
+    coqui_model_hint: str = Form("", description="Fallback Coqui model name if XTTS cannot be used"),
+    is_hindi: str = Form("", description="Convenience boolean for Hindi or other South-Asian flows"),
     reference_track_title: str = Form("", description="Reference song title used for lyric generation"),
     reference_artist_name: str = Form("", description="Reference artist name used for lyric generation"),
     reference_lyric_snippet: str = Form("", description="Reference lyric snippet used for lyric generation"),
@@ -513,11 +741,24 @@ async def clone_voice(
     """
     Clone user voice with lyrics.
     """
-    if _tts is None:
-        raise HTTPException(503, "Model not loaded yet — try again in a moment.")
-
     if not lyrics.strip():
         raise HTTPException(400, "Lyrics must not be empty.")
+
+    params = _parse_clone_request(
+        lyrics=lyrics,
+        mood=mood,
+        genre=genre,
+        language=language,
+        accent_hint=accent_hint,
+        tts_language_code=tts_language_code,
+        espeak_voice=espeak_voice,
+        coqui_model_hint=coqui_model_hint,
+        is_hindi=is_hindi,
+        reference_track_title=reference_track_title,
+        reference_artist_name=reference_artist_name,
+        reference_lyric_snippet=reference_lyric_snippet,
+        reference_video_id=reference_video_id,
+    )
 
     tmp_dir = tempfile.mkdtemp(prefix="mongobox_")
     try:
@@ -533,63 +774,107 @@ async def clone_voice(
         _convert_to_ref_wav(src_path, ref_wav)
 
         # 3) Clean + chunk lyrics
-        clean_lyrics = _strip_section_tags(lyrics)
+        clean_lyrics = _strip_section_tags(params.lyrics)
         chunks = _chunk_lyrics(clean_lyrics)
         if not chunks:
             raise HTTPException(400, "Lyrics are empty after stripping section tags.")
 
         detected_lang = _resolve_language_code(
-            language,
+            params.language,
             clean_lyrics,
-            genre_hint=genre,
-            reference_track_title=reference_track_title,
-            reference_artist_name=reference_artist_name,
-            reference_lyric_snippet=reference_lyric_snippet,
+            genre_hint=params.genre,
+            reference_track_title=params.reference_track_title,
+            reference_artist_name=params.reference_artist_name,
+            reference_lyric_snippet=params.reference_lyric_snippet,
+            tts_language_code=params.tts_language_code,
+            is_hindi=params.is_hindi,
         )
         pronunciation_profile = _resolve_pronunciation_profile(
-            language,
-            genre,
-            reference_track_title,
-            reference_artist_name,
-            reference_lyric_snippet,
+            params.language,
+            params.genre,
+            params.reference_track_title,
+            params.reference_artist_name,
+            params.reference_lyric_snippet,
         )
         accent = _resolve_accent_hint(
-            accent_hint,
-            language,
-            genre,
-            reference_track_title,
-            reference_artist_name,
-            reference_lyric_snippet,
+            params.accent_hint,
+            params.language,
+            params.genre,
+            params.reference_track_title,
+            params.reference_artist_name,
+            params.reference_lyric_snippet,
+            is_hindi=params.is_hindi,
         )
         log.info(
-            "Clone request: chunks=%d lang=%s accent=%s pronunciation_profile=%s requested_language=%s mood=%s genre=%s reference=%s / %s video=%s",
+            "Clone request: chunks=%d lang=%s accent=%s pronunciation_profile=%s requested_language=%s tts_language_code=%s espeak_voice=%s coqui_model_hint=%s is_hindi=%s mood=%s genre=%s reference=%s / %s video=%s",
             len(chunks),
             detected_lang,
             accent,
             pronunciation_profile,
-            language or "-",
-            mood or "-",
-            genre or "-",
-            reference_track_title or "-",
-            reference_artist_name or "-",
-            reference_video_id or "-",
+            params.language or "-",
+            params.tts_language_code or "-",
+            params.espeak_voice or "-",
+            params.coqui_model_hint or "-",
+            params.is_hindi,
+            params.mood or "-",
+            params.genre or "-",
+            params.reference_track_title or "-",
+            params.reference_artist_name or "-",
+            params.reference_video_id or "-",
         )
 
-        # 4) XTTS inference (one wav per chunk)
-        chunk_wavs: list[str] = []
-        for i, chunk in enumerate(chunks):
-            if detected_lang == "en":
-                chunk = _shape_english_pronunciation(chunk, accent=accent)
-            out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_raw.wav")
-            _tts.tts_to_file(
-                text=chunk,
+        # 4) Synthesis: prefer XTTS voice cloning, then degrade gracefully.
+        chunk_wavs: list[str]
+        synthesis_engine = "xtts_v2"
+        try:
+            chunk_wavs = _synthesise_chunks_with_xtts(
+                chunks=chunks,
                 speaker_wav=ref_wav,
-                language=detected_lang,
-                file_path=out_chunk,
+                xtts_language=detected_lang,
+                accent=accent,
+                tmp_dir=tmp_dir,
             )
-            normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
-            _normalize_generated_wav(out_chunk, normalized_chunk)
-            chunk_wavs.append(normalized_chunk)
+        except Exception as xtts_exc:
+            log.warning("XTTS synthesis failed (%s); attempting fallbacks", xtts_exc)
+            fallback_model = (params.coqui_model_hint or "").strip()
+            can_try_fallback_model = (
+                fallback_model and "xtts_v2" not in fallback_model.lower()
+            )
+
+            if can_try_fallback_model:
+                try:
+                    chunk_wavs = _synthesise_chunks_with_coqui_model(
+                        chunks=chunks,
+                        model_name=fallback_model,
+                        tmp_dir=tmp_dir,
+                    )
+                    synthesis_engine = fallback_model
+                except Exception as fallback_exc:
+                    log.warning(
+                        "Fallback Coqui model failed (%s); trying eSpeak-NG",
+                        fallback_exc,
+                    )
+                    espeak_fallback_voice = (
+                        (params.espeak_voice or "").strip()
+                        or ("hi" if params.is_hindi else "en-gb")
+                    )
+                    chunk_wavs = _synthesise_chunks_with_espeak(
+                        chunks=chunks,
+                        espeak_voice=espeak_fallback_voice,
+                        tmp_dir=tmp_dir,
+                    )
+                    synthesis_engine = f"espeak:{espeak_fallback_voice}"
+            else:
+                espeak_fallback_voice = (
+                    (params.espeak_voice or "").strip()
+                    or ("hi" if params.is_hindi else "en-gb")
+                )
+                chunk_wavs = _synthesise_chunks_with_espeak(
+                    chunks=chunks,
+                    espeak_voice=espeak_fallback_voice,
+                    tmp_dir=tmp_dir,
+                )
+                synthesis_engine = f"espeak:{espeak_fallback_voice}"
 
         # 5) Merge
         final_wav = os.path.join(tmp_dir, "cloned_voice.wav")
@@ -598,8 +883,11 @@ async def clone_voice(
         else:
             _merge_wav_chunks(chunk_wavs, final_wav)
 
+        mix_status = "voice_only"
+        mix_label = ""
+
         # 5b) Option B: if reference video ID provided, extract instrumental & mix
-        video_id = (reference_video_id or "").strip()
+        video_id = (params.reference_video_id or "").strip()
         if video_id:
             yt_wav = os.path.join(tmp_dir, "yt_reference.wav")
             if _download_youtube_audio(video_id, yt_wav, tmp_dir):
@@ -608,18 +896,28 @@ async def clone_voice(
                     mixed_wav = os.path.join(tmp_dir, "cloned_mixed.wav")
                     _mix_vocal_with_instrumental(final_wav, inst_path, mixed_wav)
                     final_wav = mixed_wav
+                    mix_status = "mixed"
+                    mix_label = "Original instrumental mixed into preview"
                     log.info("Mixed cloned voice with extracted instrumental")
                 else:
                     log.warning("Demucs separation failed; returning voice-only")
             else:
                 log.warning("YouTube download failed; returning voice-only")
 
-        log.info("Pipeline complete: audio_bytes=%d", os.path.getsize(final_wav))
+        log.info(
+            "Pipeline complete: audio_bytes=%d synthesis_engine=%s",
+            os.path.getsize(final_wav),
+            synthesis_engine,
+        )
 
         # 6) Return WAV file
         return FileResponse(
             final_wav,
             media_type="audio/wav",
+            headers={
+                "X-MongoBox-Mix-Status": mix_status,
+                "X-MongoBox-Mix-Label": mix_label,
+            },
             background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
         )
 

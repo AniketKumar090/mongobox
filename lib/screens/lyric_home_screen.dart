@@ -18,6 +18,7 @@ import '../services/lyric_audio_registry.dart';
 import '../services/lyric_audio_playback.dart';
 import '../services/youtube_audio_stream_service.dart';
 import '../services/audio_session_service.dart';
+import '../services/voice_backend_bootstrap_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
@@ -80,39 +81,40 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     _recoverPlaybackState();
   }
 
-void _recoverPlaybackState() {
-  final player = _audio.player;
- 
-  // Nothing to recover if the player is idle or finished.
-  if (player.processingState == ProcessingState.idle ||
-      player.processingState == ProcessingState.completed) {
-    return;
+  void _recoverPlaybackState() {
+    final player = _audio.player;
+
+    // Nothing to recover if the player is idle or finished.
+    if (player.processingState == ProcessingState.idle ||
+        player.processingState == ProcessingState.completed) {
+      return;
+    }
+
+    // just_audio stores the MediaItem we passed as the AudioSource tag.
+    final sequence = player.sequence;
+    final index = player.currentIndex ?? 0;
+    if (sequence == null || sequence.isEmpty) return;
+
+    final tag = sequence[index].tag;
+    if (tag is! MediaItem) return;
+
+    final videoId = tag.id;
+    if (videoId.isEmpty) return;
+
+    debugPrint('[LyricHome] Recovering playback state for "$videoId"');
+
+    setState(() {
+      _nowPlaying = PlaybackResult(
+        videoId: videoId,
+        startTimeSeconds: 0,
+        trackName: tag.title,
+        artistName: tag.artist ?? '',
+        matchedLineTimeSeconds: null,
+        matchedLyricLine: null,
+      );
+    });
   }
- 
-  // just_audio stores the MediaItem we passed as the AudioSource tag.
-  final sequence = player.sequence;
-  final index = player.currentIndex ?? 0;
-  if (sequence == null || sequence.isEmpty) return;
- 
-  final tag = sequence[index].tag;
-  if (tag is! MediaItem) return;
- 
-  final videoId = tag.id;
-  if (videoId.isEmpty) return;
- 
-  debugPrint('[LyricHome] Recovering playback state for "$videoId"');
- 
-  setState(() {
-    _nowPlaying = PlaybackResult(
-      videoId: videoId,
-      startTimeSeconds: 0,
-      trackName: tag.title,
-      artistName: tag.artist ?? '',
-      matchedLineTimeSeconds: null,
-      matchedLyricLine: null,
-    );
-  });
-}
+
   // ── Bind a listener that reacts when the track finishes naturally ──────────
   void _bindPlayerCompletionListener() {
     _playerStateSubscription?.cancel();
@@ -133,8 +135,7 @@ void _recoverPlaybackState() {
         // Also clear the stream-start spinner as soon as the player is ready
         // or playing — this handles the case where _isStartingStreamPlayback
         // was left true by a previous call.
-        if (state.processingState == ProcessingState.ready ||
-            state.playing) {
+        if (state.processingState == ProcessingState.ready || state.playing) {
           if (_isStartingStreamPlayback) {
             setState(() => _isStartingStreamPlayback = false);
           }
@@ -285,8 +286,7 @@ void _recoverPlaybackState() {
       if (mounted) setState(() => _isStartingStreamPlayback = false);
     }
 
-    final resolvedSearchQuery =
-        (searchQuery ?? _lyricController.text).trim();
+    final resolvedSearchQuery = (searchQuery ?? _lyricController.text).trim();
 
     _lightweightService.cachePlaybackResult(result, resolvedSearchQuery);
     _suggestions?.addRecentLine(resolvedSearchQuery);
@@ -559,10 +559,13 @@ void _recoverPlaybackState() {
     );
   }
 
-  void _openGenerateSong() {
-    Navigator.of(
+  Future<void> _openGenerateSong() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => GenerateSongScreen()));
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   void _openDownloads() {
@@ -571,10 +574,105 @@ void _recoverPlaybackState() {
     ).push(MaterialPageRoute(builder: (_) => const SavedVoiceSongsScreen()));
   }
 
+  void _showScreenMessage(
+    String message, {
+    bool isError = false,
+    IconData? icon,
+  }) {
+    final messenger = ScaffoldMessenger.of(context);
+    final borderColor =
+        isError ? const Color(0xFFE47A7A) : const Color(0xFF7BE7BE);
+    final iconColor =
+        isError ? const Color(0xFFB54545) : const Color(0xFF11C979);
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          margin: const EdgeInsets.fromLTRB(24, 0, 24, 26),
+          duration: const Duration(seconds: 4),
+          content: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F4EE),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: borderColor, width: 1.4),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: borderColor.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon ??
+                        (isError
+                            ? Icons.warning_amber_rounded
+                            : Icons.check_circle_rounded),
+                    size: 18,
+                    color: iconColor,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+  }
+
   Future<void> _openGenerateSongBySlide() async {
     await HapticFeedback.mediumImpact();
     if (!mounted) return;
-    _openGenerateSong();
+
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final player = _audio.player;
+    final isCompleted = player.processingState == ProcessingState.completed;
+    if (_audio.isPlaying && !isCompleted) {
+      await player.pause();
+    }
+
+    final backendStatus =
+        await VoiceBackendBootstrapService.ensureBackendReady();
+    if (mounted && backendStatus.message != null) {
+      _showScreenMessage(
+        backendStatus.message!,
+        isError: !backendStatus.didStart && !backendStatus.isHealthy,
+        icon:
+            backendStatus.didStart
+                ? Icons.settings_suggest_rounded
+                : Icons.warning_amber_rounded,
+      );
+    }
+
+    await _openGenerateSong();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -588,7 +686,7 @@ void _recoverPlaybackState() {
   //   • If playing → pause.
   //   • If paused / completed → play (restart from beginning if completed).
   // ─────────────────────────────────────────────────────────────────────────
-  void _togglePrimaryPlayback() {
+  Future<void> _togglePrimaryPlayback() async {
     // Only block during the search phase, not during stream startup.
     if (_isLoading) return;
 
@@ -598,13 +696,13 @@ void _recoverPlaybackState() {
 
     if (_nowPlaying == null) {
       // Nothing loaded — run a search.
-      _onSearch();
+      await _onSearch();
       return;
     }
 
     if (_isStartingStreamPlayback) {
       // Stream is still being initialised — let the user cancel by stopping.
-      unawaited(_audio.stop());
+      await _audio.stop();
       setState(() {
         _isStartingStreamPlayback = false;
         _nowPlaying = null;
@@ -613,14 +711,14 @@ void _recoverPlaybackState() {
     }
 
     if (isEffectivelyPlaying) {
-      unawaited(p.pause());
+      await p.pause();
     } else {
-      // If the track finished (completed state), seek back to the start.
+      // If the track finished, replay from the true beginning instead of the
+      // lyric-match preroll that is only meant for the initial search result.
       if (isCompleted) {
-        final startSeconds = _resolvePlaybackStart(_nowPlaying!);
-        unawaited(p.seek(Duration(seconds: startSeconds)));
+        await p.seek(Duration.zero);
       }
-      unawaited(p.play());
+      await p.play();
     }
   }
 
@@ -1291,8 +1389,36 @@ class _TurntablePlayerCard extends StatelessWidget {
   final ValueChanged<double> onSeekToFraction;
 
   static const List<double> _waveformHeights = [
-    10, 14, 18, 24, 16, 12, 20, 28, 18, 12, 26, 14, 22, 32, 16,
-    12, 18, 26, 30, 16, 12, 18, 22, 26, 18, 14, 16, 20, 14, 12,
+    10,
+    14,
+    18,
+    24,
+    16,
+    12,
+    20,
+    28,
+    18,
+    12,
+    26,
+    14,
+    22,
+    32,
+    16,
+    12,
+    18,
+    26,
+    30,
+    16,
+    12,
+    18,
+    22,
+    26,
+    18,
+    14,
+    16,
+    20,
+    14,
+    12,
   ];
 
   @override
@@ -1370,10 +1496,26 @@ class _TurntablePlayerCard extends StatelessWidget {
                     ),
                     child: Stack(
                       children: [
-                        const Positioned(top: 10, left: 10, child: _DeckScrew()),
-                        const Positioned(top: 10, right: 10, child: _DeckScrew()),
-                        const Positioned(bottom: 10, left: 10, child: _DeckScrew()),
-                        const Positioned(bottom: 10, right: 10, child: _DeckScrew()),
+                        const Positioned(
+                          top: 10,
+                          left: 10,
+                          child: _DeckScrew(),
+                        ),
+                        const Positioned(
+                          top: 10,
+                          right: 10,
+                          child: _DeckScrew(),
+                        ),
+                        const Positioned(
+                          bottom: 10,
+                          left: 10,
+                          child: _DeckScrew(),
+                        ),
+                        const Positioned(
+                          bottom: 10,
+                          right: 10,
+                          child: _DeckScrew(),
+                        ),
                         Positioned(
                           top: 18,
                           left: 18,
@@ -1450,16 +1592,30 @@ class _TurntablePlayerCard extends StatelessWidget {
                                                           child: Text(
                                                             artist.length > 12
                                                                 ? artist
-                                                                    .substring(0, 12)
+                                                                    .substring(
+                                                                      0,
+                                                                      12,
+                                                                    )
                                                                     .toUpperCase()
-                                                                : artist.toUpperCase(),
-                                                            textAlign: TextAlign.center,
+                                                                : artist
+                                                                    .toUpperCase(),
+                                                            textAlign:
+                                                                TextAlign
+                                                                    .center,
                                                             style: TextStyle(
-                                                              fontFamily: 'Inter',
-                                                              fontSize: labelFontSize,
-                                                              fontWeight: FontWeight.w700,
-                                                              color: const Color(0xFF6B6B6B),
-                                                              letterSpacing: 0.6,
+                                                              fontFamily:
+                                                                  'Inter',
+                                                              fontSize:
+                                                                  labelFontSize,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              color:
+                                                                  const Color(
+                                                                    0xFF6B6B6B,
+                                                                  ),
+                                                              letterSpacing:
+                                                                  0.6,
                                                             ),
                                                           ),
                                                         ),
@@ -1673,48 +1829,50 @@ class _TurntablePlayerCard extends StatelessWidget {
                         // Button is always tappable unless we're in the pure
                         // search phase (isLoading && !isStreamStarting).
                         onPressed: buttonEnabled ? onPlayPause : null,
-                        icon: showSearchSpinner
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                        icon:
+                            showSearchSpinner
+                                ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.4,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
                                   ),
-                                ),
-                              )
-                            : isStreamStarting
+                                )
+                                : isStreamStarting
                                 // Stream loading: show a smaller spinner but
                                 // with a stop-square overlay so user knows
                                 // they can tap to cancel.
                                 ? Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      SizedBox(
-                                        width: playBtnSize * 0.42,
-                                        height: playBtnSize * 0.42,
-                                        child: const CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(
-                                            Color(0x88FFFFFF),
-                                          ),
-                                        ),
+                                  alignment: Alignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: playBtnSize * 0.42,
+                                      height: playBtnSize * 0.42,
+                                      child: const CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Color(0x88FFFFFF),
+                                            ),
                                       ),
-                                      Icon(
-                                        Icons.stop_rounded,
-                                        color: Colors.white,
-                                        size: playBtnSize * 0.28,
-                                      ),
-                                    ],
-                                  )
+                                    ),
+                                    Icon(
+                                      Icons.stop_rounded,
+                                      color: Colors.white,
+                                      size: playBtnSize * 0.28,
+                                    ),
+                                  ],
+                                )
                                 : Icon(
-                                    isPlaying
-                                        ? Icons.pause_rounded
-                                        : Icons.play_arrow,
-                                    color: Colors.white,
-                                    size: playBtnSize * 0.47,
-                                  ),
+                                  isPlaying
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow,
+                                  color: Colors.white,
+                                  size: playBtnSize * 0.47,
+                                ),
                       ),
                     ),
                     _SeekButton(
@@ -2334,7 +2492,8 @@ class _DeckLoopButton extends StatelessWidget {
           child: Icon(
             isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded,
             size: 18,
-            color: isLooping ? const Color(0xFF111111) : const Color(0xFF4E4E4E),
+            color:
+                isLooping ? const Color(0xFF111111) : const Color(0xFF4E4E4E),
           ),
         ),
       ),
@@ -2376,7 +2535,10 @@ class _ToneArm extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: [Color(0xFFF2F2F2), Color(0xFF9D9D9D)],
                   ),
-                  border: Border.all(color: const Color(0xFF6B6B6B), width: 1.4),
+                  border: Border.all(
+                    color: const Color(0xFF6B6B6B),
+                    width: 1.4,
+                  ),
                 ),
                 child: Center(
                   child: Container(
@@ -2385,7 +2547,10 @@ class _ToneArm extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: const Color(0xFFD8D8D8),
-                      border: Border.all(color: const Color(0xFF818181), width: 1.2),
+                      border: Border.all(
+                        color: const Color(0xFF818181),
+                        width: 1.2,
+                      ),
                     ),
                   ),
                 ),
@@ -2411,7 +2576,10 @@ class _ToneArm extends StatelessWidget {
                           colors: [Color(0xFFF3F3F3), Color(0xFF9F9F9F)],
                         ),
                         borderRadius: BorderRadius.circular(99),
-                        border: Border.all(color: const Color(0xFF707070), width: 1),
+                        border: Border.all(
+                          color: const Color(0xFF707070),
+                          width: 1,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -2421,7 +2589,10 @@ class _ToneArm extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: const Color(0xFFF4F4F4),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF707070), width: 1),
+                        border: Border.all(
+                          color: const Color(0xFF707070),
+                          width: 1,
+                        ),
                       ),
                     ),
                   ],
@@ -2487,9 +2658,10 @@ class _ScrubbableWaveform extends StatelessWidget {
                       width: 4,
                       height: heights[index],
                       decoration: BoxDecoration(
-                        color: isActive
-                            ? const Color(0xFF141414)
-                            : const Color(0xFFD6D6D6),
+                        color:
+                            isActive
+                                ? const Color(0xFF141414)
+                                : const Color(0xFFD6D6D6),
                         borderRadius: BorderRadius.circular(99),
                       ),
                     ),
@@ -2551,7 +2723,10 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   }
 
   double _maxTravel(BoxConstraints c) =>
-      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(0.0, double.infinity);
+      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(
+        0.0,
+        double.infinity,
+      );
 
   void _onDragStart(DragStartDetails details, BoxConstraints c) {
     if (_isSubmitting) return;
@@ -2627,7 +2802,8 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
             animation: _shimmerController,
             builder: (_, __) {
               final bandW = c.maxWidth * 0.30;
-              final x = -bandW + (_shimmerController.value * (c.maxWidth + bandW));
+              final x =
+                  -bandW + (_shimmerController.value * (c.maxWidth + bandW));
               return CustomPaint(
                 painter: _ShimmerPainter(x: x, bandWidth: bandW),
               );
@@ -2652,21 +2828,24 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: _isDragging
-                ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
-                : [const Color(0xFF383838), const Color(0xFF262626)],
+            colors:
+                _isDragging
+                    ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
+                    : [const Color(0xFF383838), const Color(0xFF262626)],
           ),
           borderRadius: BorderRadius.circular(17),
           border: Border.all(
-            color: _isDragging
-                ? Colors.white.withValues(alpha: 0.45)
-                : const Color(0xFF565656),
+            color:
+                _isDragging
+                    ? Colors.white.withValues(alpha: 0.45)
+                    : const Color(0xFF565656),
           ),
           boxShadow: [
             BoxShadow(
-              color: _isDragging
-                  ? const Color(0xFF11F08A).withValues(alpha: 0.35)
-                  : Colors.black.withValues(alpha: 0.4),
+              color:
+                  _isDragging
+                      ? const Color(0xFF11F08A).withValues(alpha: 0.35)
+                      : Colors.black.withValues(alpha: 0.4),
               blurRadius: _isDragging ? 16 : 8,
               offset: Offset(0, _isDragging ? 4 : 2),
             ),
@@ -2674,22 +2853,23 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          child: _isSubmitting
-              ? const SizedBox(
-                  key: ValueKey('loading'),
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    valueColor: AlwaysStoppedAnimation(Colors.white),
+          child:
+              _isSubmitting
+                  ? const SizedBox(
+                    key: ValueKey('loading'),
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                  : Icon(
+                    Icons.auto_awesome_rounded,
+                    key: const ValueKey('icon'),
+                    size: 22,
+                    color: _isDragging ? Colors.black : Colors.white,
                   ),
-                )
-              : Icon(
-                  Icons.auto_awesome_rounded,
-                  key: const ValueKey('icon'),
-                  size: 22,
-                  color: _isDragging ? Colors.black : Colors.white,
-                ),
         ),
       ),
     );
@@ -2716,9 +2896,10 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                       Icon(
                         Icons.auto_awesome_rounded,
                         size: titleSize + 1,
-                        color: _isDragging
-                            ? const Color(0xFF11F08A)
-                            : const Color(0xFFCCCCCC),
+                        color:
+                            _isDragging
+                                ? const Color(0xFF11F08A)
+                                : const Color(0xFFCCCCCC),
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -2726,17 +2907,18 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                           _isSubmitting
                               ? 'Opening generator…'
                               : _isDragging
-                                  ? 'Slide to create 🎵 '
-                                  : 'Generate My Song',
+                              ? 'Slide to create music '
+                              : 'Generate My Song',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: titleSize,
                             fontWeight: FontWeight.w900,
-                            color: _isDragging
-                                ? const Color(0xFF11F08A)
-                                : Colors.white,
+                            color:
+                                _isDragging
+                                    ? const Color(0xFF11F08A)
+                                    : Colors.white,
                           ),
                         ),
                       ),
@@ -2935,29 +3117,30 @@ class _HeaderQuickMenu extends StatelessWidget {
       color: const Color(0xFFF4EFE7),
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      itemBuilder: (context) => const [
-        PopupMenuItem<_HeaderMenuAction>(
-          value: _HeaderMenuAction.hostParty,
-          child: _HeaderMenuItem(
-            icon: Icons.celebration_rounded,
-            label: 'Host a party',
-          ),
-        ),
-        PopupMenuItem<_HeaderMenuAction>(
-          value: _HeaderMenuAction.joinParty,
-          child: _HeaderMenuItem(
-            icon: Icons.group_add_rounded,
-            label: 'Join a party',
-          ),
-        ),
-        PopupMenuItem<_HeaderMenuAction>(
-          value: _HeaderMenuAction.downloads,
-          child: _HeaderMenuItem(
-            icon: Icons.download_rounded,
-            label: 'Downloads',
-          ),
-        ),
-      ],
+      itemBuilder:
+          (context) => const [
+            PopupMenuItem<_HeaderMenuAction>(
+              value: _HeaderMenuAction.hostParty,
+              child: _HeaderMenuItem(
+                icon: Icons.celebration_rounded,
+                label: 'Host a party',
+              ),
+            ),
+            PopupMenuItem<_HeaderMenuAction>(
+              value: _HeaderMenuAction.joinParty,
+              child: _HeaderMenuItem(
+                icon: Icons.group_add_rounded,
+                label: 'Join a party',
+              ),
+            ),
+            PopupMenuItem<_HeaderMenuAction>(
+              value: _HeaderMenuAction.downloads,
+              child: _HeaderMenuItem(
+                icon: Icons.download_rounded,
+                label: 'Downloads',
+              ),
+            ),
+          ],
       child: Container(
         height: compact ? 28 : 20,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -3024,10 +3207,11 @@ class _VinylPainter extends CustomPainter {
           stops: [0.2, 0.72, 1],
         ).createShader(Rect.fromCircle(center: center, radius: radius)),
     );
-    final groovePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..color = const Color(0x14FFFFFF)
-      ..strokeWidth = 1;
+    final groovePaint =
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = const Color(0x14FFFFFF)
+          ..strokeWidth = 1;
     for (double groove = radius * 0.35; groove < radius * 0.96; groove += 9) {
       canvas.drawCircle(center, groove, groovePaint);
     }

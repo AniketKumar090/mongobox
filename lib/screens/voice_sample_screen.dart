@@ -8,9 +8,27 @@ import 'package:record/record.dart';
 import '../models/song_reference.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
-import '../theme/lyric_screen_theme.dart';
-import '../widgets/flow_step_header.dart';
+import '../widgets/song_flow_timeline.dart';
 import 'voice_song_screen.dart';
+
+// ─── HOME SCREEN PALETTE ──────────────────────────────────────────────────────
+class _HP {
+  static const background = Color(0xFFF5F3EF);
+  static const card = Color(0xFFF0EDE7);
+  static const border = Color(0xFFD8D4CC);
+  static const black = Color(0xFF111111);
+  static const blackSoft = Color(0xFF1E1E1E);
+  static const grey1 = Color(0xFF444444);
+  static const grey2 = Color(0xFF666666);
+  static const grey3 = Color(0xFF888888);
+  static const grey4 = Color(0xFFAAAAAA);
+  static const chip = Color(0xFFE8E3DC);
+  static const chipDark = Color(0xFFD8D4CC);
+  static const green = Color(0xFF11F08A);
+  static const red = Color(0xFFFF3B30);
+  static const redSoft = Color(0xFFFFF0EE);
+  static const redBorder = Color(0xFFFFCCCC);
+}
 
 class VoiceSampleScreen extends StatefulWidget {
   const VoiceSampleScreen({
@@ -43,7 +61,9 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
   final _bpmService = BpmService();
+  final _lyricsService = LyricsService();
   late ScrollController _scrollController;
+
   String? _recordedPath;
   bool _isRecording = false;
   bool _isPlaying = false;
@@ -51,6 +71,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   Timer? _timer;
   Timer? _karaokeTicker;
   final Stopwatch _karaokeWatch = Stopwatch();
+
   List<String> _karaokeFlowLines = const [];
   List<String> _karaokeWords = const [];
   List<int> _karaokeLineWordStart = const [];
@@ -61,11 +82,13 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   double _activeLineProgress = 0;
   String? _paceFeedback;
   bool _showFullLyrics = true;
+
+  late final String _cloneLanguage;
+  late final bool _isHindiDominant;
   late final String _targetLyrics;
   late final List<String> _preparedFlowPromptLines;
   late final int _fallbackTargetWpm;
   late AnimationController _waveController;
-  final _lyricsService = LyricsService();
 
   @override
   void initState() {
@@ -80,18 +103,17 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   }
 
   void _prepareRecordingAssets() {
-    final isHindiDominant = widget.dominantLanguage.toLowerCase().contains(
-      'hindi',
-    );
+    _isHindiDominant = widget.dominantLanguage.toLowerCase().contains('hindi');
+    _cloneLanguage = _isHindiDominant ? 'Hindi' : 'English';
     _targetLyrics =
-        isHindiDominant
+        _isHindiDominant
             ? (widget.hinglishLyrics?.isNotEmpty == true
                 ? widget.hinglishLyrics!
                 : widget.hindiLyrics)
             : widget.englishLyrics;
     _preparedFlowPromptLines = _extractFlowPromptLines(
       _targetLyrics,
-      isHindiDominant: isHindiDominant,
+      isHindiDominant: _isHindiDominant,
     );
     _fallbackTargetWpm = _estimateTargetWpm(_targetLyrics);
   }
@@ -149,41 +171,83 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     super.dispose();
   }
 
+  // ── Permissions ────────────────────────────────────────────────────────────
   Future<void> _showMicSettingsDialog() async {
     await showDialog<void>(
       context: context,
       builder:
           (ctx) => AlertDialog(
-            title: Row(
+            backgroundColor: _HP.card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: const Row(
               children: [
-                Icon(
-                  Icons.mic_off_rounded,
-                  color: Theme.of(ctx).colorScheme.error,
+                Icon(Icons.mic_off_rounded, color: _HP.red, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Microphone Required',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                    color: _HP.black,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                const Text('Microphone Permission Required'),
               ],
             ),
             content: const Text(
               'Microphone access is disabled. Please enable it in Settings to continue recording.',
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: _HP.grey1,
+              ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Cancel'),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w700,
+                    color: _HP.grey2,
+                  ),
+                ),
               ),
-              FilledButton(
-                onPressed: () async {
+              GestureDetector(
+                onTap: () async {
                   Navigator.of(ctx).pop();
                   await openAppSettings();
                 },
-                child: const Text('Open Settings'),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _HP.black,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Open Settings',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
     );
   }
 
+  // ── Recording ──────────────────────────────────────────────────────────────
   Future<void> _startRecording() async {
     final current = await Permission.microphone.status;
     if (current.isPermanentlyDenied || current.isRestricted) {
@@ -202,13 +266,12 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       return;
     }
     try {
-      if (mounted) {
+      if (mounted)
         setState(() {
           _isRecording = true;
           _recordedPath = null;
           _paceFeedback = null;
         });
-      }
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_sample.m4a';
       await _recorder.start(
@@ -236,10 +299,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         targetWpm: targetWpm,
       );
     } catch (e) {
-      if (mounted) {
-        setState(() => _isRecording = false);
-      }
-      _showSnack('Recording failed: ${e.toString()}');
+      if (mounted) setState(() => _isRecording = false);
+      _showSnack('Recording failed: $e');
     }
   }
 
@@ -263,7 +324,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() => _isRecording = false);
-      _showSnack('Stop failed: ${e.toString()}');
+      _showSnack('Stop failed: $e');
     }
   }
 
@@ -281,13 +342,30 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            msg,
+            style: const TextStyle(
+              fontFamily: 'Inter',
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: Colors.white,
+            ),
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _HP.black,
+          elevation: 0,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
   }
 
   Future<void> _startVoiceCloneFlow() async {
@@ -303,7 +381,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
               hindiLyrics: widget.hindiLyrics,
               englishLyrics: widget.englishLyrics,
               hinglishLyrics: widget.hinglishLyrics,
-              dominantLanguage: widget.dominantLanguage,
+              dominantLanguage: _cloneLanguage,
               mood: widget.mood,
               genre: widget.genre,
               referenceSong: widget.referenceSong,
@@ -323,43 +401,42 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   ];
   static const _englishSections = ['chorus', 'outro', 'hook'];
 
-  List<String> _linesForDominantLanguage(String lyrics, bool isHindiDominant) {
+  List<String> _linesForDominantLanguage(String lyrics, bool isHindi) {
     final raw = lyrics.split('\n');
     final result = <String>[];
-    var currentSection = '';
+    var section = '';
     for (final line in raw) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      final lower = trimmed.toLowerCase();
+      final t = line.trim();
+      if (t.isEmpty) continue;
+      final lower = t.toLowerCase();
       if (RegExp(r'^\[.+\]').hasMatch(lower)) {
-        currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
+        section = lower.replaceAll(RegExp(r'[\[\]]'), '');
         continue;
       }
-      final sectionMatch =
-          isHindiDominant
-              ? _hindiSections.any((s) => currentSection.contains(s))
-              : _englishSections.any((s) => currentSection.contains(s));
-      if (sectionMatch && trimmed.length >= 8) result.add(trimmed);
+      final match =
+          isHindi
+              ? _hindiSections.any((s) => section.contains(s))
+              : _englishSections.any((s) => section.contains(s));
+      if (match && t.length >= 8) result.add(t);
     }
     if (result.isEmpty) return _cleanSingableLines(lyrics);
     return result;
   }
 
-  List<String> _cleanSingableLines(String lyrics) {
-    return lyrics
-        .split('\n')
-        .map((l) => l.trim())
-        .where(
-          (l) =>
-              l.isNotEmpty &&
-              !l.startsWith('[') &&
-              l
-                      .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
-                      .length >=
-                  8,
-        )
-        .toList();
-  }
+  List<String> _cleanSingableLines(String lyrics) =>
+      lyrics
+          .split('\n')
+          .map((l) => l.trim())
+          .where(
+            (l) =>
+                l.isNotEmpty &&
+                !l.startsWith('[') &&
+                l
+                        .replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '')
+                        .length >=
+                    8,
+          )
+          .toList();
 
   List<String> _extractFlowPromptLines(
     String lyrics, {
@@ -375,24 +452,20 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   List<String> _getAllLyricsLines(String lyrics) {
     final raw = lyrics.split('\n');
     final result = <String>[];
-    var currentSection = '';
+    var section = '';
     for (final line in raw) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      final lower = trimmed.toLowerCase();
+      final t = line.trim();
+      if (t.isEmpty) continue;
+      final lower = t.toLowerCase();
       if (RegExp(r'^\[.+\]').hasMatch(lower)) {
-        currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
-        result.add(trimmed);
+        section = lower.replaceAll(RegExp(r'[\[\]]'), '');
+        result.add(t);
         continue;
       }
-      final sectionMatch =
-          _hindiSections.any((s) => currentSection.contains(s)) ||
-          _englishSections.any((s) => currentSection.contains(s));
-      if (sectionMatch && trimmed.length >= 8) {
-        result.add(trimmed);
-      } else if (trimmed.length >= 5) {
-        result.add(trimmed);
-      }
+      final match =
+          _hindiSections.any((s) => section.contains(s)) ||
+          _englishSections.any((s) => section.contains(s));
+      if ((match && t.length >= 8) || t.length >= 5) result.add(t);
     }
     return result;
   }
@@ -404,8 +477,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         .take(10)
         .map((l) => l.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length)
         .fold<int>(0, (a, b) => a + b);
-    final avgWordsPerLine = words / lines.take(10).length;
-    return (avgWordsPerLine * 18).round().clamp(90, 150);
+    return ((words / lines.take(10).length) * 18).round().clamp(90, 150);
   }
 
   List<String> _splitWords(String line) =>
@@ -421,6 +493,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _karaokeCurrentLine = 0;
     _activeLineProgress = 0;
     _paceFeedback = null;
+
     final starts = <int>[];
     final words = <String>[];
     var cursor = 0;
@@ -436,6 +509,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _karaokeWatch
       ..reset()
       ..start();
+
     _karaokeTicker = Timer.periodic(const Duration(milliseconds: 120), (_) {
       if (!mounted || _karaokeWords.isEmpty) return;
       final msPerWord =
@@ -467,9 +541,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             lineIndex + 1 < _karaokeLineWordStart.length
                 ? _karaokeLineWordStart[lineIndex + 1]
                 : _karaokeWords.length;
-        final lineWordCount = (lineEnd - lineStart).clamp(1, 9999);
-        final inLine = (safeIndex - lineStart).clamp(0, lineWordCount - 1);
-        _activeLineProgress = (inLine + 1) / lineWordCount;
+        final lineCount = (lineEnd - lineStart).clamp(1, 9999);
+        _activeLineProgress = ((safeIndex - lineStart) + 1) / lineCount;
       });
     });
   }
@@ -488,819 +561,365 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     final targetWords = flowLines.expand(_splitWords).length.clamp(1, 9999);
     final ratio = spokenSeconds / (targetWords * 60 / targetWpm);
     if (ratio < 0.85) return 'Too fast — slow down to stay on beat.';
-    if (ratio > 1.2) return 'Too slow — tighten delivery to match flow.';
+    if (ratio > 1.20) return 'Too slow — tighten delivery to match flow.';
     return 'Great pacing — close to target flow.';
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // BUILD
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── BUILD ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final pageTheme = lyricScreenTheme(context);
-    final cs = pageTheme.colorScheme;
-    final tt = pageTheme.textTheme;
+    final mq = MediaQuery.of(context);
+    final sw = mq.size.width;
+    final hPad = sw < 600 ? sw * 0.05 : sw * 0.08;
+
     final hasRecording = _recordedPath != null;
     final isShort = _recordingSeconds < 5 && hasRecording;
-    final isHindiDominant = widget.dominantLanguage.toLowerCase().contains(
-      'hindi',
-    );
-    final targetLyrics = _targetLyrics;
 
-    return Theme(
-      data: pageTheme,
-      child: Scaffold(
-        backgroundColor: LyricScreenPalette.background,
-        body: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final horizontalPadding = flowHorizontalPadding(
-                constraints.maxWidth,
-              );
-              final contentMaxWidth = flowContentMaxWidth(constraints.maxWidth);
+    return Scaffold(
+      backgroundColor: _HP.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // ── Top bar ───────────────────────────────────────────────────
+            Padding(
+              padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 12),
+              child: _TopBar(
+                hPad: hPad,
+                songTitle: widget.songTitle,
+                referenceSong: widget.referenceSong,
+              ),
+            ),
 
-              return Column(
-                children: [
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      16,
-                      horizontalPadding,
-                      12,
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: const FlowStepHeader(
-                          title: 'Record your voice',
-                          subtitle:
-                              'Read a short sample clearly so we can build a solid voice clone for your song.',
-                          steps: ['Song', 'Voice', 'Preview'],
-                          currentStep: 2,
-                        ),
+            // ── Scrollable body ───────────────────────────────────────────
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Pre-record: hint + lyrics preview
+                    if (!_isRecording && !hasRecording) ...[
+                      _HintCard(
+                        text:
+                            'Record yourself reading the lyrics aloud for 10–15 seconds.',
                       ),
-                    ),
-                  ),
-                  if (hasRecording && !_isRecording)
-                    Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          horizontalPadding,
-                          0,
-                          horizontalPadding,
-                          16,
-                        ),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: contentMaxWidth,
+                      const SizedBox(height: 14),
+                      _SpeakingLinesCard(
+                        targetLyrics: _targetLyrics,
+                        isHindiDominant: _isHindiDominant,
+                      ),
+                      const SizedBox(height: 14),
+                      _LyricsCard(
+                        lines: _getAllLyricsLines(_targetLyrics),
+                        scrollController: _scrollController,
+                        showFull: _showFullLyrics,
+                        onToggle:
+                            () => setState(
+                              () => _showFullLyrics = !_showFullLyrics,
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+
+                    // Recording: wave bar + karaoke
+                    if (_isRecording) ...[
+                      _WaveBar(
+                        controller: _waveController,
+                        seconds: _recordingSeconds,
+                      ),
+                      const SizedBox(height: 16),
+                      if (_karaokeFlowLines.isNotEmpty) ...[
+                        const Text(
+                          'Follow the highlighted words',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: _HP.grey1,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _KaraokeBox(
+                          flowLines: _karaokeFlowLines,
+                          lineWordStart: _karaokeLineWordStart,
+                          currentWord: _karaokeCurrentWord,
+                          currentLine: _karaokeCurrentLine,
+                          activeLineProgress: _activeLineProgress,
+                          targetWpm: _karaokeTargetWpm,
+                          referenceMsPerWord: _referenceMsPerWord,
+                          splitWords: _splitWords,
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                    ],
+
+                    // Post-record: lyrics display
+                    if (hasRecording && !_isRecording) ...[
+                      _LyricsCard(
+                        lines: _getAllLyricsLines(_targetLyrics),
+                        scrollController: _scrollController,
+                        showFull: _showFullLyrics,
+                        onToggle:
+                            () => setState(
+                              () => _showFullLyrics = !_showFullLyrics,
+                            ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Bottom action bar ─────────────────────────────────────────
+            Container(
+              padding: EdgeInsets.fromLTRB(hPad, 14, hPad, 22),
+              decoration: const BoxDecoration(
+                color: _HP.background,
+                border: Border(top: BorderSide(color: _HP.border)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Recorded flow lines summary
+                  if (hasRecording &&
+                      !_isRecording &&
+                      _karaokeFlowLines.isNotEmpty) ...[
+                    _RecordedLinesCard(lines: _karaokeFlowLines),
+                    const SizedBox(height: 10),
+                  ],
+
+                  // Pace feedback
+                  if ((_paceFeedback ?? '').isNotEmpty && !_isRecording) ...[
+                    _PaceBanner(text: _paceFeedback!),
+                    const SizedBox(height: 10),
+                  ],
+
+                  // Playback row (after recording)
+                  if (hasRecording && !_isRecording) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _OutlineButton(
+                            icon:
+                                _isPlaying
+                                    ? Icons.stop_rounded
+                                    : Icons.play_arrow_rounded,
+                            label: _isPlaying ? 'Stop' : 'Play Recording',
+                            onPressed: _playback,
+                          ),
+                        ),
+                        if (isShort) ...[
+                          const SizedBox(width: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _HP.redSoft,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: _HP.redBorder),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                _InfoCard(
-                                  songTitle: widget.songTitle,
-                                  referenceSong: widget.referenceSong,
-                                  cs: cs,
-                                  tt: tt,
+                                Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 14,
+                                  color: _HP.red,
                                 ),
-                                const SizedBox(height: 16),
-                                Expanded(
-                                  child: Container(
-                                    padding: const EdgeInsets.all(20),
-                                    decoration: BoxDecoration(
-                                      color: cs.surface,
-                                      borderRadius: BorderRadius.circular(24),
-                                      border: Border.all(
-                                        color: cs.outline.withValues(
-                                          alpha: 0.65,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Container(
-                                              width: 36,
-                                              height: 36,
-                                              decoration: BoxDecoration(
-                                                color: cs.secondaryContainer,
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                              ),
-                                              child: Icon(
-                                                Icons.lyrics_rounded,
-                                                size: 18,
-                                                color: cs.secondary,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Text(
-                                              'Generated Lyrics',
-                                              style: tt.titleSmall?.copyWith(
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 14),
-                                        Expanded(
-                                          child: Scrollbar(
-                                            controller: _scrollController,
-                                            thumbVisibility: true,
-                                            child: SingleChildScrollView(
-                                              controller: _scrollController,
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  ..._getAllLyricsLines(
-                                                    targetLyrics,
-                                                  ).map(
-                                                    (line) => Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                            bottom: 6,
-                                                          ),
-                                                      child: Text(
-                                                        line,
-                                                        style: tt.bodyMedium?.copyWith(
-                                                          height: 1.6,
-                                                          color:
-                                                              line.startsWith(
-                                                                    '[',
-                                                                  )
-                                                                  ? cs.onSurfaceVariant
-                                                                  : cs.onSurface,
-                                                          fontWeight:
-                                                              line.startsWith(
-                                                                    '[',
-                                                                  )
-                                                                  ? FontWeight
-                                                                      .w700
-                                                                  : FontWeight
-                                                                      .normal,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                SizedBox(width: 5),
+                                Text(
+                                  'Too short',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: _HP.red,
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ),
-                      ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    // Slide to clone
+                    _SlideToCloneButton(onCompleted: _startVoiceCloneFlow),
+                    const SizedBox(height: 10),
+                  ],
+
+                  // Stop / Record / Re-record button
+                  if (_isRecording)
+                    _RedButton(
+                      label: 'Stop (${_recordingSeconds}s)',
+                      icon: Icons.stop_rounded,
+                      onPressed: _stopRecording,
                     )
                   else
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.fromLTRB(
-                          horizontalPadding,
-                          0,
-                          horizontalPadding,
-                          16,
+                    _PrimaryButton(
+                      label: hasRecording ? 'Re-record' : 'Start Recording',
+                      icon: Icons.mic_rounded,
+                      filled: !hasRecording,
+                      onPressed: _startRecording,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOP BAR
+// ─────────────────────────────────────────────────────────────────────────────
+class _TopBar extends StatelessWidget {
+  const _TopBar({
+    required this.hPad,
+    required this.songTitle,
+    required this.referenceSong,
+  });
+  final double hPad;
+  final String songTitle;
+  final SongReference? referenceSong;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayTitle =
+        referenceSong != null
+            ? '${referenceSong!.trackName} — ${referenceSong!.artistName}'
+            : songTitle;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SongFlowTimeline(currentStep: 2),
+        const SizedBox(height: 12),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: _HP.chip,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _HP.border),
+                ),
+                child: const Icon(
+                  Icons.arrow_back_rounded,
+                  size: 20,
+                  color: _HP.black,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Record your voice',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: _HP.black,
+                      height: 1.05,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Read a short sample clearly for your voice clone.',
+                    style: const TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: _HP.grey2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _HP.chip,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _HP.border),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.music_note_rounded,
+                          size: 12,
+                          color: _HP.grey2,
                         ),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: contentMaxWidth,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _InfoCard(
-                                  songTitle: widget.songTitle,
-                                  referenceSong: widget.referenceSong,
-                                  cs: cs,
-                                  tt: tt,
-                                ),
-                                const SizedBox(height: 16),
-                                if (!_isRecording && !hasRecording) ...[
-                                  _HintBanner(
-                                    text:
-                                        'Record yourself reading the lyrics aloud for 10-15 seconds.',
-                                    color: cs.secondary,
-                                    cs: cs,
-                                    tt: tt,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  _SpeakingLinesDropdown(
-                                    targetLyrics: targetLyrics,
-                                    isHindiDominant: isHindiDominant,
-                                    cs: cs,
-                                    tt: tt,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  LayoutBuilder(
-                                    builder: (context, innerConstraints) {
-                                      final compactHeader =
-                                          innerConstraints.maxWidth < 420;
-                                      return compactHeader
-                                          ? Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'Lyrics to Record',
-                                                style: tt.titleSmall?.copyWith(
-                                                  fontWeight: FontWeight.w800,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              TextButton.icon(
-                                                onPressed: () {
-                                                  setState(
-                                                    () =>
-                                                        _showFullLyrics =
-                                                            !_showFullLyrics,
-                                                  );
-                                                },
-                                                icon: AnimatedRotation(
-                                                  turns:
-                                                      _showFullLyrics ? 0.5 : 0,
-                                                  duration: const Duration(
-                                                    milliseconds: 200,
-                                                  ),
-                                                  child: const Icon(
-                                                    Icons.keyboard_arrow_down,
-                                                    size: 20,
-                                                  ),
-                                                ),
-                                                label: Text(
-                                                  _showFullLyrics
-                                                      ? 'Hide'
-                                                      : 'Show',
-                                                ),
-                                                style: TextButton.styleFrom(
-                                                  foregroundColor: cs.onSurface,
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 0,
-                                                        vertical: 4,
-                                                      ),
-                                                ),
-                                              ),
-                                            ],
-                                          )
-                                          : Row(
-                                            children: [
-                                              Text(
-                                                'Lyrics to Record',
-                                                style: tt.titleSmall?.copyWith(
-                                                  fontWeight: FontWeight.w800,
-                                                ),
-                                              ),
-                                              const Spacer(),
-                                              TextButton.icon(
-                                                onPressed: () {
-                                                  setState(
-                                                    () =>
-                                                        _showFullLyrics =
-                                                            !_showFullLyrics,
-                                                  );
-                                                },
-                                                icon: AnimatedRotation(
-                                                  turns:
-                                                      _showFullLyrics ? 0.5 : 0,
-                                                  duration: const Duration(
-                                                    milliseconds: 200,
-                                                  ),
-                                                  child: const Icon(
-                                                    Icons.keyboard_arrow_down,
-                                                    size: 20,
-                                                  ),
-                                                ),
-                                                label: Text(
-                                                  _showFullLyrics
-                                                      ? 'Hide'
-                                                      : 'Show',
-                                                ),
-                                                style: TextButton.styleFrom(
-                                                  foregroundColor: cs.onSurface,
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 8,
-                                                        vertical: 4,
-                                                      ),
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                    },
-                                  ),
-                                  const SizedBox(height: 8),
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 300),
-                                    curve: Curves.easeInOut,
-                                    constraints: BoxConstraints(
-                                      maxHeight: _showFullLyrics ? 320 : 0,
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(24),
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: cs.surface,
-                                          border: Border.all(
-                                            color: cs.outline.withValues(
-                                              alpha: 0.65,
-                                            ),
-                                          ),
-                                        ),
-                                        child: Scrollbar(
-                                          controller: _scrollController,
-                                          thumbVisibility: true,
-                                          child: SingleChildScrollView(
-                                            controller: _scrollController,
-                                            padding: const EdgeInsets.all(16),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                ..._getAllLyricsLines(
-                                                  targetLyrics,
-                                                ).map(
-                                                  (line) => Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                          bottom: 6,
-                                                        ),
-                                                    child: Text(
-                                                      line,
-                                                      style: tt.bodyMedium?.copyWith(
-                                                        height: 1.6,
-                                                        color:
-                                                            line.startsWith('[')
-                                                                ? cs.onSurfaceVariant
-                                                                : cs.onSurface,
-                                                        fontWeight:
-                                                            line.startsWith('[')
-                                                                ? FontWeight
-                                                                    .w700
-                                                                : FontWeight
-                                                                    .normal,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 20),
-                                ],
-                                if (_isRecording) ...[
-                                  _WaveBar(
-                                    controller: _waveController,
-                                    seconds: _recordingSeconds,
-                                    cs: cs,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  if (_karaokeFlowLines.isNotEmpty) ...[
-                                    Text(
-                                      'Follow the highlighted words',
-                                      style: tt.labelLarge?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    _KaraokeBox(
-                                      flowLines: _karaokeFlowLines,
-                                      lineWordStart: _karaokeLineWordStart,
-                                      currentWord: _karaokeCurrentWord,
-                                      currentLine: _karaokeCurrentLine,
-                                      activeLineProgress: _activeLineProgress,
-                                      targetWpm: _karaokeTargetWpm,
-                                      referenceMsPerWord: _referenceMsPerWord,
-                                      splitWords: _splitWords,
-                                      cs: cs,
-                                      tt: tt,
-                                    ),
-                                  ],
-                                  const SizedBox(height: 20),
-                                ],
-                              ],
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _HP.grey1,
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  Container(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      12,
-                      horizontalPadding,
-                      20,
-                    ),
-                    decoration: BoxDecoration(
-                      color: LyricScreenPalette.background,
-                      border: Border(
-                        top: BorderSide(
-                          color: cs.outline.withValues(alpha: 0.35),
-                        ),
-                      ),
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (hasRecording && !_isRecording) ...[
-                              if (_karaokeFlowLines.isNotEmpty) ...[
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: cs.surface,
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: cs.outline.withValues(alpha: 0.55),
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            width: 32,
-                                            height: 32,
-                                            decoration: BoxDecoration(
-                                              color: cs.secondaryContainer,
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                            ),
-                                            child: Icon(
-                                              Icons.article_outlined,
-                                              size: 16,
-                                              color: cs.secondary,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            'Lines You Recorded',
-                                            style: tt.labelLarge?.copyWith(
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 12),
-                                      ..._karaokeFlowLines.map(
-                                        (line) => Padding(
-                                          padding: const EdgeInsets.only(
-                                            bottom: 6,
-                                          ),
-                                          child: Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                '›  ',
-                                                style: tt.bodyMedium?.copyWith(
-                                                  color: cs.secondary,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                              Expanded(
-                                                child: Text(
-                                                  line,
-                                                  style: tt.bodyMedium
-                                                      ?.copyWith(
-                                                        color: cs.onSurface,
-                                                      ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                              ],
-                              if ((_paceFeedback ?? '').isNotEmpty) ...[
-                                _PaceBanner(
-                                  text: _paceFeedback!,
-                                  cs: cs,
-                                  tt: tt,
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                              LayoutBuilder(
-                                builder: (context, footerConstraints) {
-                                  final stackPlayback =
-                                      isShort &&
-                                      footerConstraints.maxWidth < 470;
-                                  final playButton = SizedBox(
-                                    width:
-                                        stackPlayback ? double.infinity : null,
-                                    child: OutlinedButton.icon(
-                                      onPressed: _playback,
-                                      icon: Icon(
-                                        _isPlaying
-                                            ? Icons.stop_rounded
-                                            : Icons.play_arrow_rounded,
-                                        size: 20,
-                                      ),
-                                      label: Text(_isPlaying ? 'Stop' : 'Play'),
-                                    ),
-                                  );
-                                  final shortBadge = Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: cs.errorContainer,
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: cs.error.withValues(alpha: 0.25),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.warning_amber_rounded,
-                                          size: 16,
-                                          color: cs.error,
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Too short',
-                                          style: tt.labelSmall?.copyWith(
-                                            color: cs.error,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-
-                                  if (stackPlayback) {
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        playButton,
-                                        const SizedBox(height: 10),
-                                        Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: shortBadge,
-                                        ),
-                                      ],
-                                    );
-                                  }
-
-                                  return Row(
-                                    children: [
-                                      Expanded(child: playButton),
-                                      if (isShort) ...[
-                                        const SizedBox(width: 12),
-                                        shortBadge,
-                                      ],
-                                    ],
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 12),
-                              SizedBox(
-                                height: 68,
-                                width: double.infinity,
-                                child: _SlideToConfirmButton(
-                                  label: 'Slide to clone my voice',
-                                  hint:
-                                      'Complete the swipe to start the Python voice-cloning backend.',
-                                  handleIcon: Icons.record_voice_over_rounded,
-                                  onCompleted: _startVoiceCloneFlow,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                            ],
-                            _isRecording
-                                ? SizedBox(
-                                  height: 56,
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: _stopRecording,
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: cs.error,
-                                      backgroundColor: cs.errorContainer,
-                                      side: BorderSide(
-                                        color: cs.error.withValues(alpha: 0.55),
-                                      ),
-                                    ),
-                                    icon: const Icon(
-                                      Icons.stop_rounded,
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      'Stop (${_recordingSeconds}s)',
-                                      style: tt.labelLarge?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                                : SizedBox(
-                                  height: 56,
-                                  width: double.infinity,
-                                  child:
-                                      hasRecording
-                                          ? OutlinedButton.icon(
-                                            onPressed: _startRecording,
-                                            icon: const Icon(
-                                              Icons.mic_rounded,
-                                              size: 18,
-                                            ),
-                                            label: Text(
-                                              'Re-record',
-                                              style: tt.labelLarge?.copyWith(
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                          )
-                                          : FilledButton.icon(
-                                            onPressed: _startRecording,
-                                            icon: const Icon(
-                                              Icons.mic_rounded,
-                                              size: 18,
-                                            ),
-                                            label: Text(
-                                              'Start Recording',
-                                              style: tt.labelLarge?.copyWith(
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                          ),
-                                ),
-                          ],
-                        ),
-                      ),
+                      ],
                     ),
                   ),
                 ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PRIVATE SUB-WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({
-    required this.songTitle,
-    required this.referenceSong,
-    required this.cs,
-    required this.tt,
-  });
-
-  final String songTitle;
-  final SongReference? referenceSong;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [cs.primaryContainer, cs.secondaryContainer],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: cs.surface.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(
-              Icons.record_voice_over_rounded,
-              color: cs.onSurface,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              referenceSong != null
-                  ? '${referenceSong!.trackName} — ${referenceSong!.artistName}'
-                  : songTitle,
-              style: tt.titleSmall?.copyWith(
-                fontWeight: FontWeight.w800,
-                color: cs.onSurface,
               ),
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
+      ],
     );
   }
 }
 
-class _HintBanner extends StatelessWidget {
-  const _HintBanner({
-    required this.text,
-    required this.color,
-    required this.cs,
-    required this.tt,
-  });
-
+// ─────────────────────────────────────────────────────────────────────────────
+// HINT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+class _HintCard extends StatelessWidget {
+  const _HintCard({required this.text});
   final String text;
-  final Color color;
-  final ColorScheme cs;
-  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: cs.secondaryContainer,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.35), width: 1),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_outline, size: 18, color: color),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PaceBanner extends StatelessWidget {
-  const _PaceBanner({required this.text, required this.cs, required this.tt});
-
-  final String text;
-  final ColorScheme cs;
-  final TextTheme tt;
-
-  @override
-  Widget build(BuildContext context) {
-    final isPositive = text.toLowerCase().contains('great');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: isPositive ? cs.secondaryContainer : cs.errorContainer,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: (isPositive ? cs.secondary : cs.error).withValues(alpha: 0.22),
-        ),
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _HP.border),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.speed_rounded,
-            size: 18,
-            color: isPositive ? cs.secondary : cs.error,
-          ),
+          const Icon(Icons.info_outline_rounded, size: 16, color: _HP.grey3),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               text,
-              style: tt.bodyMedium?.copyWith(
-                color: cs.onSurface,
-                fontWeight: FontWeight.w600,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: _HP.grey1,
               ),
             ),
           ),
@@ -1310,70 +929,55 @@ class _PaceBanner extends StatelessWidget {
   }
 }
 
-class _SpeakingLinesDropdown extends StatefulWidget {
-  const _SpeakingLinesDropdown({
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEAKING LINES CARD (expandable)
+// ─────────────────────────────────────────────────────────────────────────────
+class _SpeakingLinesCard extends StatefulWidget {
+  const _SpeakingLinesCard({
     required this.targetLyrics,
     required this.isHindiDominant,
-    required this.cs,
-    required this.tt,
   });
-
   final String targetLyrics;
   final bool isHindiDominant;
-  final ColorScheme cs;
-  final TextTheme tt;
 
   @override
-  State<_SpeakingLinesDropdown> createState() => _SpeakingLinesDropdownState();
+  State<_SpeakingLinesCard> createState() => _SpeakingLinesCardState();
 }
 
-class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
-  bool _isExpanded = false;
-  late final List<String> _speakingLines;
-  late ScrollController _scrollController;
+class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
+  bool _expanded = false;
+  late final List<String> _lines;
+  final _sc = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController();
-    _speakingLines = _extractFlowPromptLines(
-      widget.targetLyrics,
-      isHindiDominant: widget.isHindiDominant,
-    );
+    _lines = _extract(widget.targetLyrics, widget.isHindiDominant);
   }
 
-  List<String> _extractFlowPromptLines(
-    String lyrics, {
-    required bool isHindiDominant,
-  }) {
+  List<String> _extract(String lyrics, bool isHindi) {
     final raw = lyrics.split('\n');
     final result = <String>[];
-    var currentSection = '';
+    var section = '';
     for (final line in raw) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      final lower = trimmed.toLowerCase();
+      final t = line.trim();
+      if (t.isEmpty) continue;
+      final lower = t.toLowerCase();
       if (RegExp(r'^\[.+\]').hasMatch(lower)) {
-        currentSection = lower.replaceAll(RegExp(r'[\[\]]'), '');
+        section = lower.replaceAll(RegExp(r'[\[\]]'), '');
         continue;
       }
-      final sectionMatch =
-          isHindiDominant
+      final match =
+          isHindi
               ? [
                 'verse 1',
                 'verse 2',
                 'verse 3',
                 'bridge',
                 'pre-chorus',
-              ].any((s) => currentSection.contains(s))
-              : [
-                'chorus',
-                'outro',
-                'hook',
-              ].any((s) => currentSection.contains(s));
-      if (sectionMatch && trimmed.length >= 8) {
-        result.add(trimmed);
-      }
+              ].any((s) => section.contains(s))
+              : ['chorus', 'outro', 'hook'].any((s) => section.contains(s));
+      if (match && t.length >= 8) result.add(t);
     }
     if (result.isEmpty) {
       return lyrics
@@ -1397,68 +1001,73 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
 
   @override
   void dispose() {
-    _scrollController.dispose();
+    _sc.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_speakingLines.isEmpty) return const SizedBox.shrink();
+    if (_lines.isEmpty) return const SizedBox.shrink();
     return Container(
       decoration: BoxDecoration(
-        color: widget.cs.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: widget.cs.outline.withValues(alpha: 0.55)),
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _HP.border),
       ),
       child: Column(
         children: [
-          InkWell(
-            onTap: () => setState(() => _isExpanded = !_isExpanded),
-            borderRadius: BorderRadius.circular(22),
+          GestureDetector(
+            onTap: () => setState(() => _expanded = !_expanded),
+            behavior: HitTestBehavior.opaque,
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: Row(
                 children: [
                   Container(
-                    width: 36,
-                    height: 36,
+                    width: 34,
+                    height: 34,
                     decoration: BoxDecoration(
-                      color: widget.cs.secondaryContainer,
-                      borderRadius: BorderRadius.circular(12),
+                      color: _HP.black,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(
+                    child: const Icon(
                       Icons.mic_rounded,
-                      color: widget.cs.secondary,
-                      size: 18,
+                      size: 16,
+                      color: Colors.white,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'Your Speaking Lines',
-                          style: widget.tt.titleSmall?.copyWith(
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 14,
                             fontWeight: FontWeight.w800,
+                            color: _HP.black,
                           ),
                         ),
-                        const SizedBox(height: 2),
                         Text(
-                          '${_speakingLines.length} lines to record',
-                          style: widget.tt.bodySmall?.copyWith(
-                            color: widget.cs.onSurfaceVariant,
+                          '${_lines.length} lines to record',
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: _HP.grey3,
                           ),
                         ),
                       ],
                     ),
                   ),
                   AnimatedRotation(
-                    turns: _isExpanded ? 0.5 : 0,
+                    turns: _expanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: Icon(
-                      Icons.keyboard_arrow_down,
-                      color: widget.cs.onSurface,
+                    child: const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: _HP.grey2,
                       size: 20,
                     ),
                   ),
@@ -1467,53 +1076,59 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
             ),
           ),
           AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
+            duration: const Duration(milliseconds: 280),
             curve: Curves.easeInOut,
-            constraints: BoxConstraints(maxHeight: _isExpanded ? 200 : 0),
+            constraints: BoxConstraints(maxHeight: _expanded ? 200 : 0),
             child: ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(18),
+              ),
               child: Container(
-                decoration: BoxDecoration(
-                  border: Border(
-                    top: BorderSide(
-                      color: widget.cs.outline.withValues(alpha: 0.35),
-                      width: 1,
-                    ),
-                  ),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: _HP.border)),
                 ),
                 child: Scrollbar(
-                  controller: _scrollController,
+                  controller: _sc,
                   thumbVisibility: true,
                   child: SingleChildScrollView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(12),
+                    controller: _sc,
+                    padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Practice these lines before recording:',
-                          style: widget.tt.labelSmall?.copyWith(
-                            color: widget.cs.onSurfaceVariant,
+                        const Text(
+                          'Practice these before recording:',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 11,
                             fontWeight: FontWeight.w700,
+                            color: _HP.grey3,
                           ),
                         ),
                         const SizedBox(height: 8),
-                        ..._speakingLines.map(
+                        ..._lines.map(
                           (line) => Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.only(bottom: 7),
                             child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  '• ',
-                                  style: widget.tt.bodyMedium?.copyWith(
-                                    color: widget.cs.secondary,
+                                const Text(
+                                  '›  ',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 13,
                                     fontWeight: FontWeight.w700,
+                                    color: _HP.grey3,
                                   ),
                                 ),
                                 Expanded(
                                   child: Text(
                                     line,
-                                    style: widget.tt.bodyMedium?.copyWith(
-                                      color: widget.cs.onSurface,
+                                    style: const TextStyle(
+                                      fontFamily: 'Inter',
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: _HP.grey1,
                                     ),
                                   ),
                                 ),
@@ -1534,36 +1149,162 @@ class _SpeakingLinesDropdownState extends State<_SpeakingLinesDropdown> {
   }
 }
 
-class _WaveBar extends StatelessWidget {
-  const _WaveBar({
-    required this.controller,
-    required this.seconds,
-    required this.cs,
+// ─────────────────────────────────────────────────────────────────────────────
+// LYRICS CARD (collapsible)
+// ─────────────────────────────────────────────────────────────────────────────
+class _LyricsCard extends StatelessWidget {
+  const _LyricsCard({
+    required this.lines,
+    required this.scrollController,
+    required this.showFull,
+    required this.onToggle,
   });
-
-  final AnimationController controller;
-  final int seconds;
-  final ColorScheme cs;
+  final List<String> lines;
+  final ScrollController scrollController;
+  final bool showFull;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 64,
+      decoration: BoxDecoration(
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _HP.border),
+      ),
+      child: Column(
+        children: [
+          GestureDetector(
+            onTap: onToggle,
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: _HP.chip,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _HP.border),
+                    ),
+                    child: const Icon(
+                      Icons.lyrics_outlined,
+                      size: 16,
+                      color: _HP.black,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Generated Lyrics',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: _HP.black,
+                      ),
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: showFull ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: _HP.grey2,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeInOut,
+            constraints: BoxConstraints(maxHeight: showFull ? 320 : 0),
+            child: ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(18),
+              ),
+              child: Container(
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: _HP.border)),
+                ),
+                child: Scrollbar(
+                  controller: scrollController,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children:
+                          lines
+                              .map(
+                                (line) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Text(
+                                    line,
+                                    style: TextStyle(
+                                      fontFamily: 'Inter',
+                                      fontSize: 13,
+                                      fontWeight:
+                                          line.startsWith('[')
+                                              ? FontWeight.w800
+                                              : FontWeight.w500,
+                                      color:
+                                          line.startsWith('[')
+                                              ? _HP.grey3
+                                              : _HP.grey1,
+                                      height: 1.6,
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WAVE BAR
+// ─────────────────────────────────────────────────────────────────────────────
+class _WaveBar extends StatelessWidget {
+  const _WaveBar({required this.controller, required this.seconds});
+  final AnimationController controller;
+  final int seconds;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 60,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: cs.errorContainer,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: cs.error.withValues(alpha: 0.2)),
+        color: _HP.redSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _HP.redBorder),
       ),
       child: Row(
         children: [
-          _PulsingDot(color: cs.error),
+          _PulsingDot(color: _HP.red),
           const SizedBox(width: 8),
           Text(
             'REC ${seconds}s / 30s',
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: cs.error,
+            style: const TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 13,
               fontWeight: FontWeight.w800,
+              color: _HP.red,
             ),
           ),
           const SizedBox(width: 10),
@@ -1576,14 +1317,14 @@ class _WaveBar extends StatelessWidget {
                   builder: (_, __) {
                     final h =
                         4.0 +
-                        22.0 *
+                        20.0 *
                             (0.3 + 0.7 * ((controller.value + i * 0.12) % 1.0));
                     return Container(
                       width: 3,
                       height: h,
                       margin: const EdgeInsets.symmetric(horizontal: 1),
                       decoration: BoxDecoration(
-                        color: cs.error.withValues(alpha: 0.75),
+                        color: _HP.red.withValues(alpha: 0.65),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     );
@@ -1598,213 +1339,9 @@ class _WaveBar extends StatelessWidget {
   }
 }
 
-class _SlideToConfirmButton extends StatefulWidget {
-  const _SlideToConfirmButton({
-    required this.label,
-    required this.hint,
-    required this.handleIcon,
-    required this.onCompleted,
-  });
-
-  final String label;
-  final String hint;
-  final IconData handleIcon;
-  final Future<void> Function() onCompleted;
-
-  @override
-  State<_SlideToConfirmButton> createState() => _SlideToConfirmButtonState();
-}
-
-class _SlideToConfirmButtonState extends State<_SlideToConfirmButton> {
-  static const double _handleSize = 56;
-  static const double _trackPadding = 6;
-  static const double _completeThreshold = 0.9;
-
-  double _progress = 0;
-  bool _isSubmitting = false;
-
-  double _maxTravel(BoxConstraints constraints) {
-    return (constraints.maxWidth - _handleSize - (_trackPadding * 2)).clamp(
-      0.0,
-      double.infinity,
-    );
-  }
-
-  void _updateProgress(Offset localPosition, BoxConstraints constraints) {
-    if (_isSubmitting) return;
-    final maxTravel = _maxTravel(constraints);
-    if (maxTravel <= 0) return;
-    final next = ((localPosition.dx - _trackPadding - (_handleSize / 2)) /
-            maxTravel)
-        .clamp(0.0, 1.0);
-    if (next == _progress) return;
-    setState(() => _progress = next);
-  }
-
-  Future<void> _handleDragEnd() async {
-    if (_isSubmitting) return;
-    if (_progress < _completeThreshold) {
-      setState(() => _progress = 0);
-      return;
-    }
-    setState(() {
-      _progress = 1;
-      _isSubmitting = true;
-    });
-    try {
-      await widget.onCompleted();
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-          _progress = 0;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-
-    return Semantics(
-      button: true,
-      label: widget.label,
-      hint: widget.hint,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final maxTravel = _maxTravel(constraints);
-          final knobOffset = maxTravel * _progress;
-          final fillWidth = (_handleSize + (_trackPadding * 2) + knobOffset)
-              .clamp(_handleSize + (_trackPadding * 2), constraints.maxWidth);
-
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart:
-                (details) =>
-                    _updateProgress(details.localPosition, constraints),
-            onHorizontalDragUpdate:
-                (details) =>
-                    _updateProgress(details.localPosition, constraints),
-            onHorizontalDragEnd: (_) => _handleDragEnd(),
-            onHorizontalDragCancel: () {
-              if (_isSubmitting) return;
-              setState(() => _progress = 0);
-            },
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1D191B),
-                borderRadius: BorderRadius.circular(36),
-                border: Border.all(color: const Color(0xFF2C272A), width: 1.5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x20000000),
-                    blurRadius: 18,
-                    offset: Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Stack(
-                alignment: Alignment.centerLeft,
-                children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOut,
-                    width: fillWidth,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF2A2427), Color(0xFF1D191B)],
-                      ),
-                      borderRadius: BorderRadius.circular(36),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 28),
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 44),
-                        Expanded(
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 120),
-                            opacity:
-                                _isSubmitting ? 0.75 : (1 - (_progress * 0.5)),
-                            child: Text(
-                              _isSubmitting
-                                  ? 'Starting voice clone...'
-                                  : widget.label,
-                              textAlign: TextAlign.center,
-                              style: tt.titleMedium?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.2,
-                              ),
-                            ),
-                          ),
-                        ),
-                        AnimatedOpacity(
-                          duration: const Duration(milliseconds: 120),
-                          opacity:
-                              _isSubmitting ? 0.3 : (0.95 - (_progress * 0.7)),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: List.generate(
-                              3,
-                              (_) => const Icon(
-                                Icons.chevron_right_rounded,
-                                color: Color(0xFFD4CED1),
-                                size: 24,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 120),
-                    curve: Curves.easeOut,
-                    left: _trackPadding + knobOffset,
-                    top: _trackPadding,
-                    child: Container(
-                      width: _handleSize,
-                      height: _handleSize,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: const Color(0xFF2E292C),
-                        border: Border.all(
-                          color: const Color(0xFF3C3539),
-                          width: 1.5,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x33000000),
-                            blurRadius: 12,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        widget.handleIcon,
-                        color: const Color(0xFFFF5A47),
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
 class _PulsingDot extends StatefulWidget {
   const _PulsingDot({required this.color});
-
   final Color color;
-
   @override
   State<_PulsingDot> createState() => _PulsingDotState();
 }
@@ -1812,7 +1349,6 @@ class _PulsingDot extends StatefulWidget {
 class _PulsingDotState extends State<_PulsingDot>
     with SingleTickerProviderStateMixin {
   late AnimationController _c;
-
   @override
   void initState() {
     super.initState();
@@ -1829,22 +1365,23 @@ class _PulsingDotState extends State<_PulsingDot>
   }
 
   @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      builder:
-          (_, __) => Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: widget.color.withValues(alpha: 0.4 + 0.6 * _c.value),
-              shape: BoxShape.circle,
-            ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _c,
+    builder:
+        (_, __) => Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: widget.color.withValues(alpha: 0.4 + 0.6 * _c.value),
+            shape: BoxShape.circle,
           ),
-    );
-  }
+        ),
+  );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// KARAOKE BOX
+// ─────────────────────────────────────────────────────────────────────────────
 class _KaraokeBox extends StatelessWidget {
   const _KaraokeBox({
     required this.flowLines,
@@ -1855,10 +1392,7 @@ class _KaraokeBox extends StatelessWidget {
     required this.targetWpm,
     required this.referenceMsPerWord,
     required this.splitWords,
-    required this.cs,
-    required this.tt,
   });
-
   final List<String> flowLines;
   final List<int> lineWordStart;
   final int currentWord;
@@ -1867,31 +1401,37 @@ class _KaraokeBox extends StatelessWidget {
   final int targetWpm;
   final int? referenceMsPerWord;
   final List<String> Function(String) splitWords;
-  final ColorScheme cs;
-  final TextTheme tt;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.55)),
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _HP.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            referenceMsPerWord != null
-                ? 'Karaoke Guide (Reference Tempo)'
-                : 'Karaoke Guide ($targetWpm WPM)',
-            style: tt.labelSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: cs.onSurfaceVariant,
-            ),
+          Row(
+            children: [
+              const Icon(Icons.queue_music_rounded, size: 13, color: _HP.grey3),
+              const SizedBox(width: 5),
+              Text(
+                referenceMsPerWord != null
+                    ? 'Karaoke Guide (Reference Tempo)'
+                    : 'Karaoke Guide ($targetWpm WPM)',
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: _HP.grey3,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           ...List.generate(flowLines.length, (i) {
             final line = flowLines[i];
             final lineWords = splitWords(line);
@@ -1899,7 +1439,7 @@ class _KaraokeBox extends StatelessWidget {
             final currentInLine = currentWord - start;
             final activeLine = i == currentLine;
             return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1922,7 +1462,7 @@ class _KaraokeBox extends StatelessWidget {
                                 child: Container(
                                   height: 2,
                                   decoration: BoxDecoration(
-                                    color: cs.secondary.withValues(alpha: 0.25),
+                                    color: _HP.chipDark,
                                     borderRadius: BorderRadius.circular(2),
                                   ),
                                 ),
@@ -1935,8 +1475,8 @@ class _KaraokeBox extends StatelessWidget {
                                 child: Container(
                                   width: 6,
                                   height: 6,
-                                  decoration: BoxDecoration(
-                                    color: cs.secondary,
+                                  decoration: const BoxDecoration(
+                                    color: _HP.black,
                                     shape: BoxShape.circle,
                                   ),
                                 ),
@@ -1958,28 +1498,30 @@ class _KaraokeBox extends StatelessWidget {
                         duration: const Duration(milliseconds: 100),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 6,
-                          vertical: 2,
+                          vertical: 3,
                         ),
                         decoration: BoxDecoration(
                           color:
                               isCurrent
-                                  ? cs.secondary
+                                  ? _HP.black
                                   : isPast
-                                  ? cs.secondaryContainer
+                                  ? _HP.chipDark
                                   : Colors.transparent,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           lineWords[wi],
-                          style: tt.bodyMedium?.copyWith(
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 14,
+                            fontWeight:
+                                isCurrent ? FontWeight.w800 : FontWeight.w500,
                             color:
                                 isCurrent
-                                    ? cs.onSecondary
+                                    ? Colors.white
                                     : isPast
-                                    ? cs.onSurface
-                                    : cs.onSurfaceVariant,
-                            fontWeight:
-                                isCurrent ? FontWeight.w700 : FontWeight.normal,
+                                    ? _HP.grey1
+                                    : _HP.grey3,
                           ),
                         ),
                       );
@@ -1990,6 +1532,629 @@ class _KaraokeBox extends StatelessWidget {
             );
           }),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORDED LINES CARD
+// ─────────────────────────────────────────────────────────────────────────────
+class _RecordedLinesCard extends StatelessWidget {
+  const _RecordedLinesCard({required this.lines});
+  final List<String> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _HP.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.article_outlined, size: 13, color: _HP.grey3),
+              SizedBox(width: 5),
+              Text(
+                'Lines You Recorded',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: _HP.grey2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...lines.map(
+            (line) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '›  ',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _HP.grey3,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      line,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: _HP.grey1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PACE BANNER
+// ─────────────────────────────────────────────────────────────────────────────
+class _PaceBanner extends StatelessWidget {
+  const _PaceBanner({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final isGood = text.toLowerCase().contains('great');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: isGood ? const Color(0xFFEAFAF2) : _HP.redSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isGood ? const Color(0xFFB3EDD3) : _HP.redBorder,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.speed_rounded,
+            size: 16,
+            color: isGood ? const Color(0xFF0A9B5A) : _HP.red,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isGood ? const Color(0xFF0A9B5A) : _HP.red,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLIDE TO CLONE BUTTON  (matches _GenerateSongSliderCard aesthetic)
+// ─────────────────────────────────────────────────────────────────────────────
+class _SlideToCloneButton extends StatefulWidget {
+  const _SlideToCloneButton({required this.onCompleted});
+  final Future<void> Function() onCompleted;
+  @override
+  State<_SlideToCloneButton> createState() => _SlideToCloneButtonState();
+}
+
+class _SlideToCloneButtonState extends State<_SlideToCloneButton>
+    with SingleTickerProviderStateMixin {
+  static const double _handleSize = 50;
+  static const double _trackPadding = 6;
+  static const double _threshold = 0.90;
+
+  double _progress = 0;
+  bool _isSubmitting = false;
+  bool _isDragging = false;
+  bool _isDragValid = false;
+  double _dragStartDx = 0;
+  double _dragStartProg = 0;
+
+  late AnimationController _shimmer;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmer = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3000),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  double _maxTravel(BoxConstraints c) =>
+      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(
+        0.0,
+        double.infinity,
+      );
+
+  void _onStart(DragStartDetails d, BoxConstraints c) {
+    if (_isSubmitting) return;
+    final maxTravel = _maxTravel(c);
+    final handleLeft = _trackPadding + maxTravel * _progress;
+    final tapX = d.localPosition.dx;
+    if (tapX >= handleLeft && tapX <= handleLeft + _handleSize) {
+      _isDragValid = true;
+      _dragStartDx = tapX;
+      _dragStartProg = _progress;
+      HapticFeedback.lightImpact();
+      setState(() => _isDragging = true);
+    } else {
+      _isDragValid = false;
+    }
+  }
+
+  void _onUpdate(DragUpdateDetails d, BoxConstraints c) {
+    if (_isSubmitting || !_isDragValid) return;
+    final maxTravel = _maxTravel(c);
+    if (maxTravel <= 0) return;
+    final t = (_dragStartProg + (d.localPosition.dx - _dragStartDx) / maxTravel)
+        .clamp(0.0, 1.0);
+    if (t == _progress) return;
+    setState(() {
+      _progress = t;
+      _isDragging = true;
+    });
+  }
+
+  Future<void> _onEnd() async {
+    setState(() {
+      _isDragging = false;
+      _isDragValid = false;
+    });
+    if (_isSubmitting) return;
+    if (_progress < _threshold) {
+      setState(() => _progress = 0);
+      return;
+    }
+    setState(() {
+      _progress = 1;
+      _isSubmitting = true;
+    });
+    try {
+      await widget.onCompleted();
+    } finally {
+      if (mounted)
+        setState(() {
+          _isSubmitting = false;
+          _progress = 0;
+        });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 62,
+      width: double.infinity,
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final maxTravel = _maxTravel(c);
+          final knobOffset = maxTravel * _progress;
+          final revealW = (_handleSize + _trackPadding * 2 + knobOffset).clamp(
+            _handleSize + _trackPadding * 2,
+            c.maxWidth,
+          );
+          final titleSize = (c.maxWidth * 0.037).clamp(13.0, 15.5);
+          final subSize = (c.maxWidth * 0.026).clamp(10.0, 11.5);
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: (d) => _onStart(d, c),
+            onHorizontalDragUpdate: (d) => _onUpdate(d, c),
+            onHorizontalDragEnd: (_) => _onEnd(),
+            onHorizontalDragCancel: () {
+              if (!_isSubmitting)
+                setState(() {
+                  _progress = 0;
+                  _isDragging = false;
+                  _isDragValid = false;
+                });
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              decoration: BoxDecoration(
+                color: _HP.black,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color:
+                      _isDragging
+                          ? _HP.green.withValues(alpha: 0.6)
+                          : Colors.transparent,
+                  width: 1.5,
+                ),
+              ),
+              child: Stack(
+                children: [
+                  // Fill reveal
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    width: revealW,
+                    decoration: BoxDecoration(
+                      color: _HP.blackSoft,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                  ),
+                  // Shimmer
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(22),
+                        child: AnimatedBuilder(
+                          animation: _shimmer,
+                          builder: (_, __) {
+                            final bw = c.maxWidth * 0.28;
+                            final x =
+                                -bw + (_shimmer.value * (c.maxWidth + bw));
+                            return CustomPaint(
+                              painter: _ShimmerPainter(x: x, bw: bw),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Content
+                  Positioned.fill(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        _handleSize + _trackPadding + 14,
+                        0,
+                        14,
+                        0,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 120),
+                              opacity:
+                                  _isSubmitting ? 0.6 : (1 - _progress * 0.45),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.record_voice_over_rounded,
+                                        size: titleSize + 1,
+                                        color:
+                                            _isDragging
+                                                ? _HP.green
+                                                : const Color(0xFFCCCCCC),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          _isSubmitting
+                                              ? 'Starting voice clone…'
+                                              : _isDragging
+                                              ? 'Keep sliding…'
+                                              : 'Slide to Clone My Voice',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontFamily: 'Inter',
+                                            fontSize: titleSize,
+                                            fontWeight: FontWeight.w900,
+                                            color:
+                                                _isDragging
+                                                    ? _HP.green
+                                                    : Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _isDragging
+                                        ? 'Release to start cloning'
+                                        : 'AI writes in your voice',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontFamily: 'Inter',
+                                      fontSize: subSize,
+                                      fontWeight: FontWeight.w500,
+                                      color: _HP.grey3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          AnimatedOpacity(
+                            duration: const Duration(milliseconds: 120),
+                            opacity:
+                                _isSubmitting
+                                    ? 0.2
+                                    : (_progress < 0.25 ? 0.8 : 0.15),
+                            child: SizedBox(
+                              width: 48,
+                              height: 18,
+                              child: Stack(
+                                children: List.generate(4, (i) {
+                                  const alphas = [1.0, 0.65, 0.38, 0.18];
+                                  return Positioned(
+                                    left: i * 11.0,
+                                    child: Icon(
+                                      Icons.chevron_right_rounded,
+                                      size: 18,
+                                      color: Colors.white.withValues(
+                                        alpha: alphas[i],
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Handle knob
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 110),
+                    curve: Curves.easeOut,
+                    left: _trackPadding + knobOffset,
+                    top: _trackPadding,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      width: _handleSize,
+                      height: _handleSize,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors:
+                              _isDragging
+                                  ? [_HP.green, const Color(0xFF0CC878)]
+                                  : [
+                                    const Color(0xFF383838),
+                                    const Color(0xFF262626),
+                                  ],
+                        ),
+                        borderRadius: BorderRadius.circular(17),
+                        border: Border.all(
+                          color:
+                              _isDragging
+                                  ? Colors.white.withValues(alpha: 0.45)
+                                  : const Color(0xFF565656),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color:
+                                _isDragging
+                                    ? _HP.green.withValues(alpha: 0.35)
+                                    : Colors.black.withValues(alpha: 0.4),
+                            blurRadius: _isDragging ? 16 : 8,
+                            offset: Offset(0, _isDragging ? 4 : 2),
+                          ),
+                        ],
+                      ),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child:
+                            _isSubmitting
+                                ? const SizedBox(
+                                  key: ValueKey('spin'),
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                                : Icon(
+                                  Icons.record_voice_over_rounded,
+                                  key: const ValueKey('icon'),
+                                  size: 22,
+                                  color:
+                                      _isDragging ? Colors.black : Colors.white,
+                                ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ShimmerPainter extends CustomPainter {
+  const _ShimmerPainter({required this.x, required this.bw});
+  final double x, bw;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grad = LinearGradient(
+      colors: [
+        Colors.white.withValues(alpha: 0),
+        Colors.white.withValues(alpha: 0.025),
+        Colors.white.withValues(alpha: 0.09),
+        Colors.white.withValues(alpha: 0.025),
+        Colors.white.withValues(alpha: 0),
+      ],
+    ).createShader(Rect.fromLTWH(x, 0, bw, size.height));
+    canvas.save();
+    canvas.transform(Matrix4.rotationZ(-0.12).storage);
+    canvas.drawRect(
+      Rect.fromLTWH(x - 10, -20, bw, size.height + 40),
+      Paint()..shader = grad,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ShimmerPainter o) => o.x != x;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUTTON HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+class _PrimaryButton extends StatelessWidget {
+  const _PrimaryButton({
+    required this.label,
+    required this.icon,
+    required this.filled,
+    required this.onPressed,
+  });
+  final String label;
+  final IconData icon;
+  final bool filled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        height: 56,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: filled ? _HP.black : _HP.chip,
+          borderRadius: BorderRadius.circular(20),
+          border: filled ? null : Border.all(color: _HP.border),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: filled ? Colors.white : _HP.black),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: filled ? Colors.white : _HP.black,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RedButton extends StatelessWidget {
+  const _RedButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        height: 56,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: _HP.redSoft,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _HP.redBorder),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: _HP.red),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: _HP.red,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OutlineButton extends StatelessWidget {
+  const _OutlineButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        height: 52,
+        decoration: BoxDecoration(
+          color: _HP.chip,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _HP.border),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: _HP.black),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: _HP.black,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

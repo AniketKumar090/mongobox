@@ -48,7 +48,7 @@ def check_python() -> None:
     print(f"{GREEN}✓  Python {major}.{minor}{RESET}")
 
 
-def check_ffmpeg() -> None:
+def check_ffmpeg(auto_continue: bool = False) -> None:
     if shutil.which("ffmpeg"):
         print(f"{GREEN}✓  ffmpeg found{RESET}")
         return
@@ -57,6 +57,9 @@ def check_ffmpeg() -> None:
     print("   macOS:   brew install ffmpeg")
     print("   Ubuntu:  sudo apt install ffmpeg")
     print("   Windows: https://ffmpeg.org/download.html")
+    if auto_continue:
+        print(f"{YELLOW}ℹ  Continuing because auto-boot mode is enabled.{RESET}")
+        return
     answer = input("\n   Continue anyway? [y/N] ").strip().lower()
     if answer != "y":
         sys.exit(1)
@@ -129,15 +132,22 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000, help="Port number (default 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
     parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Non-interactive mode for app-triggered background startup",
+    )
+    parser.add_argument(
         "--skip-install", action="store_true", help="Skip pip install step (faster start)"
     )
     args = parser.parse_args()
+
+    auto_boot = args.auto or os.environ.get("MONGOBOX_AUTO_BOOT") == "1"
 
     banner()
     print(f"{BOLD}Pre-flight checks{RESET}")
     print("─" * 44)
     check_python()
-    check_ffmpeg()
+    check_ffmpeg(auto_continue=auto_boot)
 
     if not args.skip_install:
         install_requirements()
@@ -148,4 +158,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

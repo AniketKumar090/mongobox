@@ -40,12 +40,22 @@ python start.py
 - `genre` (text, optional)
 - `language` (text, optional): requested lyric language, for example `Urdu`
 - `accent_hint` (text, optional): pronunciation hint for English lyrics, one of `indian`, `british`, `american` (defaults to `indian`)
+- `tts_language_code` (text, optional): explicit TTS locale, for example `hi-IN` or `en-GB`
+- `espeak_voice` (text, optional): eSpeak-NG voice id used as the last fallback, for example `hi` or `en-gb`
+- `coqui_model_hint` (text, optional): fallback Coqui model name if XTTS voice cloning fails
+- `is_hindi` (text, optional): boolean convenience flag (`1` or `0`) for Hindi and related flows
 - `reference_track_title` (text, optional): source song title for pronunciation guidance
 - `reference_artist_name` (text, optional): source singer/artist for pronunciation guidance
 - `reference_lyric_snippet` (text, optional): lyric snippet from the selected song
 - `reference_video_id` (text, optional): YouTube video ID of the reference song. When provided, the backend downloads the track, extracts the instrumental with Demucs, mixes it with the cloned vocals, and returns a single blended WAV. First run downloads the Demucs model (~1 GB).
 
 Returns: `audio/wav` (voice-only if no `reference_video_id`, or voice+instrumental mixed when provided)
+
+Language behavior:
+
+- XTTS-v2 is still the primary engine and now honors Flutter's explicit `tts_language_code`.
+- If XTTS cannot synthesize, the backend tries the provided `coqui_model_hint`.
+- If that also fails, it falls back to `espeak-ng` with the provided `espeak_voice`.
 
 ### `GET /health`
 

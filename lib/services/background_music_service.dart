@@ -2,9 +2,14 @@ import 'jamendo_service.dart';
 import 'soundcloud_service.dart';
 
 class BackgroundMusicTrack {
-  const BackgroundMusicTrack({required this.sourceUrl, required this.label});
+  const BackgroundMusicTrack({
+    required this.sourceUrl,
+    required this.label,
+    this.headers,
+  });
   final String sourceUrl;
   final String label;
+  final Map<String, String>? headers;
 }
 
 /// Finds a background instrumental track.
@@ -75,6 +80,7 @@ class BackgroundMusicService {
           return BackgroundMusicTrack(
             sourceUrl: streamSources.first.url,
             label: '${track.title} • ${track.userName}',
+            headers: streamSources.first.headers,
           );
         }
       } catch (_) {
@@ -103,6 +109,7 @@ class BackgroundMusicService {
           return BackgroundMusicTrack(
             sourceUrl: track.audioUrl,
             label: '${track.name} • ${track.artistName}',
+            headers: null,
           );
         }
       } catch (_) {
