@@ -1,445 +1,645 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MongoBox • Join Queue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-      padding: 20px; 
-      max-width: 600px; 
-      margin: 0 auto; 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #F5F3EF;
+      --surface: #F8F4EE;
+      --card: #F0EDE7;
+      --border: #D8D4CC;
+      --border-light: #EAE6E0;
+      --text-primary: #111111;
+      --text-secondary: #575757;
+      --text-muted: #AAAAAA;
+      --accent-green: #11F08A;
+      --accent-green-dim: rgba(17,240,138,0.15);
+      --black: #171717;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
       min-height: 100vh;
+      padding: 0;
+      color: var(--text-primary);
     }
-    .container {
-      background: white;
-      border-radius: 12px;
-      padding: 20px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+
+    .screen {
+      max-width: 430px;
+      margin: 0 auto;
+      min-height: 100vh;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      padding: 0 20px 24px;
     }
-    h1 { 
-      color: #d32f2f; 
-      text-align: center; 
-      margin-bottom: 10px;
-      font-size: 32px;
+
+    /* ── Top safe area ── */
+    .safe-top { height: 52px; }
+
+    /* ── Header / Party Banner ── */
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
     }
-    .subtitle {
-      text-align: center;
-      color: #666;
-      margin-bottom: 20px;
-      font-size: 14px;
+    .header-title {
+      font-size: 22px;
+      font-weight: 900;
+      color: var(--text-primary);
+      line-height: 1.05;
     }
-    #party-info { 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 15px; 
-      border-radius: 8px; 
-      margin-bottom: 20px; 
-      text-align: center; 
+    .header-menu-btn {
+      height: 32px;
+      padding: 0 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .header-menu-btn:hover { background: var(--card); }
+    .header-menu-btn svg { width: 18px; height: 18px; color: #333; }
+
+    .header-subtitle {
       font-size: 13px;
       font-weight: 600;
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+      color: #666;
+      margin-bottom: 14px;
     }
-    #party-info .party-id {
-      font-family: 'Courier New', monospace;
+
+    /* ── Party Banner ── */
+    .party-banner {
+      background: var(--black);
+      border-radius: 18px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+      display: none;
+    }
+    .party-banner.visible { display: block; }
+    .party-banner-label {
       font-size: 11px;
-      opacity: 0.9;
-      margin-top: 5px;
+      font-weight: 700;
+      color: var(--accent-green);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
     }
-    .search-box {
+    .party-banner-id {
+      font-size: 13px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 0.02em;
+    }
+
+    /* ── Search Input ── */
+    .search-container {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 22px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px 0 14px;
+      margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .search-container:focus-within {
+      border-color: var(--accent-green);
+    }
+    .search-icon {
+      width: 20px;
+      height: 20px;
+      color: #555;
+      flex-shrink: 0;
+    }
+    .search-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-family: 'Inter', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      padding: 16px 10px;
+      outline: none;
+    }
+    .search-input::placeholder {
+      font-weight: 500;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    /* ── Action Row ── */
+    .action-row {
       display: flex;
       gap: 10px;
       margin-bottom: 20px;
     }
-    input[type="text"] { 
+    .btn-find {
       flex: 1;
-      padding: 12px 15px; 
-      border: 2px solid #e0e0e0; 
-      border-radius: 8px;
-      font-size: 16px;
-      transition: border 0.3s;
-    }
-    input[type="text"]:focus {
-      outline: none;
-      border-color: #667eea;
-    }
-    button { 
-      padding: 12px 24px; 
-      background: #d32f2f; 
-      color: white; 
-      border: none; 
-      border-radius: 8px; 
+      height: 52px;
+      background: var(--black);
+      color: #fff;
+      border: none;
+      border-radius: 26px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 800;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: opacity 0.15s;
+    }
+    .btn-find:hover { opacity: 0.85; }
+    .btn-find:disabled { background: #333; color: #888; cursor: not-allowed; }
+    .btn-find svg { width: 18px; height: 18px; }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Results List ── */
+    .results-section { flex: 1; }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      gap: 14px;
+    }
+    .empty-icon {
+      width: 52px; height: 52px;
+      background: var(--card);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      border: 1px solid var(--border);
+    }
+    .empty-icon svg { width: 22px; height: 22px; color: #888; }
+    .empty-text {
+      font-size: 14px;
       font-weight: 600;
-      font-size: 16px;
-      transition: all 0.3s;
-      box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3);
+      color: #888;
+      text-align: center;
     }
-    button:hover { 
-      background: #b71c1c;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(211, 47, 47, 0.4);
-    }
-    button:disabled {
-      background: #ccc;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
-    }
-    .results { margin-top: 20px; }
-    .song { 
-      padding: 15px; 
-      border-bottom: 1px solid #f0f0f0;
+
+    /* ── Song Card ── */
+    .song-card {
+      background: var(--surface);
+      border: 1px solid var(--border-light);
+      border-radius: 20px;
+      padding: 14px;
       display: flex;
       align-items: center;
       gap: 12px;
-      transition: background 0.2s;
+      margin-bottom: 10px;
+      transition: background 0.15s;
     }
-    .song:hover {
-      background: #f8f9fa;
+    .song-card:hover { background: var(--card); }
+
+    .song-thumb {
+      width: 58px;
+      height: 58px;
+      border-radius: 12px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--card);
     }
-    .song:last-child {
-      border-bottom: none;
-    }
-    .song img {
-      border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    .song-info {
-      flex: 1;
-    }
+    .song-info { flex: 1; min-width: 0; }
     .song-title {
-      font-weight: 600;
-      color: #333;
-      margin-bottom: 4px;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--text-primary);
+      line-height: 1.2;
+      margin-bottom: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .song-artist {
+      font-size: 12px;
+      font-weight: 600;
+      color: #777;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn-add {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: 18px;
+      background: var(--black);
+      color: #fff;
+      border: none;
+      font-family: 'Inter', sans-serif;
       font-size: 13px;
-      color: #666;
+      font-weight: 800;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 6px;
+      transition: background 0.15s, transform 0.1s;
     }
-    .song button {
-      padding: 8px 16px;
-      font-size: 14px;
-      min-width: 80px;
-    }
-    .song button.added {
-      background: #4caf50;
+    .btn-add:hover { background: #333; }
+    .btn-add:active { transform: scale(0.96); }
+    .btn-add.added {
+      background: #11C979;
+      color: #fff;
       pointer-events: none;
     }
-    #status { 
-      color: white;
-      margin-top: 15px; 
-      padding: 12px; 
-      background: #4caf50; 
-      border-radius: 8px;
-      display: none;
-      text-align: center;
-      font-weight: 500;
-      animation: slideIn 0.3s;
+    .btn-add svg { width: 14px; height: 14px; }
+
+    /* ── Trending Section ── */
+    .section-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
     }
-    #error { 
-      color: white;
-      margin-top: 15px; 
-      padding: 12px; 
-      background: #d32f2f; 
-      border-radius: 8px;
-      display: none;
-      text-align: center;
-      font-weight: 500;
-      animation: slideIn 0.3s;
+    .section-label-text {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
     }
-    .loading { 
-      text-align: center;
-      padding: 40px;
-      color: #999;
+    .section-label-badge {
+      height: 20px;
+      padding: 0 8px;
+      background: var(--black);
+      color: #fff;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
     }
-    .loading::after {
-      content: '...';
-      animation: dots 1.5s infinite;
-    }
-    .empty-state {
-      text-align: center;
-      padding: 60px 20px;
-      color: #999;
-    }
-    .empty-state svg {
-      width: 80px;
-      height: 80px;
+    .trending-scroll {
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 4px;
       margin-bottom: 20px;
-      opacity: 0.5;
+      scrollbar-width: none;
     }
-    @keyframes slideIn {
-      from {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+    .trending-scroll::-webkit-scrollbar { display: none; }
+
+    .trending-chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      max-width: 200px;
     }
-    @keyframes dots {
-      0%, 20% { content: '.'; }
-      40% { content: '..'; }
-      60%, 100% { content: '...'; }
+    .trending-chip:hover { background: var(--card); border-color: var(--border); }
+    .trending-chip:active { transform: scale(0.97); }
+
+    .trending-chip-thumb {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--card);
     }
-    .debug-log {
-      margin-top: 20px;
-      padding: 15px;
-      background: #f5f5f5;
-      border-radius: 8px;
-      font-family: 'Courier New', monospace;
+    .trending-chip-info { min-width: 0; }
+    .trending-chip-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
+    }
+    .trending-chip-artist {
       font-size: 11px;
-      max-height: 200px;
-      overflow-y: auto;
-      display: none; /* Hide in production, show for debugging */
+      font-weight: 600;
+      color: #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
+      margin-top: 2px;
     }
-    .debug-log.show {
-      display: block;
+    .trending-rank {
+      font-size: 10px;
+      font-weight: 900;
+      color: var(--accent-green);
+      margin-right: -2px;
+      flex-shrink: 0;
     }
-    .log-entry {
-      margin: 4px 0;
-      padding: 4px;
+
+    /* divider */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
     }
-    .log-success { color: #4caf50; }
-    .log-error { color: #d32f2f; }
-    .log-info { color: #2196f3; }
+    .divider-line { flex: 1; height: 1px; background: var(--border-light); }
+    .divider-text { font-size: 11px; font-weight: 700; color: #AAA; }
+
+    /* ── Toast ── */
+    .toast-wrap {
+      position: fixed;
+      bottom: 88px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      width: calc(100% - 48px);
+      max-width: 382px;
+    }
+    .toast {
+      background: #F8F4EE;
+      border-radius: 24px;
+      border: 1.4px solid;
+      padding: 14px 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.3s, transform 0.3s;
+      width: 100%;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.success { border-color: #7BE7BE; }
+    .toast.error { border-color: #E47A7A; }
+    .toast-dot {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .toast.success .toast-dot { background: rgba(123,231,190,0.16); }
+    .toast.error .toast-dot { background: rgba(228,122,122,0.16); }
+    .toast-dot svg { width: 18px; height: 18px; }
+    .toast.success .toast-dot svg { color: #11C979; }
+    .toast.error .toast-dot svg { color: #B54545; }
+    .toast-msg {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111;
+      line-height: 1.35;
+      padding-top: 6px;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🎵 MongoBox</h1>
-    <p class="subtitle">Join the party • Add songs • No app needed</p>
 
-    <div id="party-info" style="display:none;">
-      🎪 Connected to party
-      <div class="party-id"><span id="party-id"></span></div>
-    </div>
+<div class="screen">
+  <div class="safe-top"></div>
 
-    <div id="error"></div>
-    <div id="status"></div>
+  <!-- Header -->
+  <div class="header-row">
+    <div class="header-title">Add to the queue</div>
+  </div>
+  <div class="header-subtitle">Search a song and drop it in the party.</div>
 
-    <div class="search-box">
-      <input type="text" id="query" placeholder="Search songs..." onkeypress="if(event.key==='Enter') search()" />
-      <button onclick="search()" id="search-btn">Search</button>
-    </div>
-
-    <div class="results" id="results">
-      <div class="empty-state">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
-        <div>Search for songs to add to the queue</div>
-      </div>
-    </div>
-
-    <!-- Debug log (uncomment to see detailed logs) -->
-    <div class="debug-log" id="debug-log"></div>
+  <!-- Party Banner -->
+  <div class="party-banner" id="party-banner">
+    <div class="party-banner-label">🎪 Connected to party</div>
+    <div class="party-banner-id" id="party-id-label"></div>
   </div>
 
-  <!-- Firebase SDK v9+ (modern version) -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-  <script>
-    // Debug logging system
-    const debugLog = [];
-    function addLog(message, type = 'info') {
-      const timestamp = new Date().toLocaleTimeString();
-      const logEntry = `[${timestamp}] ${message}`;
-      debugLog.push({ message: logEntry, type });
-      console.log(logEntry);
-      
-      // Update debug display
-      const logDiv = document.getElementById('debug-log');
-      if (logDiv) {
-        const entry = document.createElement('div');
-        entry.className = `log-entry log-${type}`;
-        entry.textContent = logEntry;
-        logDiv.appendChild(entry);
-        logDiv.scrollTop = logDiv.scrollHeight;
-      }
-    }
+  <!-- Search -->
+  <div class="search-container">
+    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input
+      class="search-input"
+      id="query"
+      type="text"
+      placeholder="e.g. Kishore Kumar"
+      autocomplete="off"
+      onkeypress="if(event.key==='Enter') search()"
+    />
+  </div>
 
-    addLog('🌐 MongoBox Web Guest - Starting...', 'info');
-    
-    // Extract partyId from URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const partyId = urlParams.get('partyId') || 'default_party';
-    addLog(`👥 GUEST: Extracted Party ID: ${partyId}`, 'success');
-    addLog(`🔗 GUEST: Full URL: ${window.location.href}`, 'info');
-    
-    // Display party info
-    if (partyId && partyId !== 'default_party') {
-      document.getElementById('party-info').style.display = 'block';
-      document.getElementById('party-id').innerText = partyId;
-      addLog('✅ GUEST: Party info displayed', 'success');
-    } else {
-      addLog('⚠️ GUEST: No party ID in URL, using default', 'error');
-    }
-    
-    // Firebase config
-    const firebaseConfig = {
-      apiKey: "AIzaSyCTMwHxyQVJb_0l39uMKIqka-pGYszGexw",
-      authDomain: "mongobox-79a1f.firebaseapp.com",
-      projectId: "mongobox-79a1f",
-      storageBucket: "mongobox-79a1f.firebasestorage.app",
-      messagingSenderId: "850327601337",
-      appId: "1:850327601337:web:97b8ca86cfda6b37e89b68",
-      databaseURL: "https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app"
-    };
-    
-    // Initialize Firebase
+  <!-- Action -->
+  <div class="action-row">
+    <button class="btn-find" id="search-btn" onclick="search()">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      Find &amp; add
+    </button>
+  </div>
+
+  <!-- Trending -->
+  <div id="trending-section">
+    <div class="section-label">
+      <div class="section-label-text">Trending now</div>
+      <div class="section-label-badge">🔥 Hot</div>
+    </div>
+    <div class="trending-scroll" id="trending-scroll">
+      <!-- filled by JS -->
+    </div>
+    <div class="divider">
+      <div class="divider-line"></div>
+      <div class="divider-text">or search below</div>
+      <div class="divider-line"></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="results"></div>
+</div>
+
+<!-- Toast -->
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+  const urlParams = new URLSearchParams(window.location.search);
+  const partyId = urlParams.get('partyId') || 'default_party';
+
+  if (partyId && partyId !== 'default_party') {
+    document.getElementById('party-banner').classList.add('visible');
+    document.getElementById('party-id-label').textContent = partyId;
+  }
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCTMwHxyQVJb_0l39uMKIqka-pGYszGexw",
+    authDomain: "mongobox-79a1f.firebaseapp.com",
+    projectId: "mongobox-79a1f",
+    storageBucket: "mongobox-79a1f.firebasestorage.app",
+    messagingSenderId: "850327601337",
+    appId: "1:850327601337:web:97b8ca86cfda6b37e89b68",
+    databaseURL: "https://mongobox-79a1f-default-rtdb.asia-southeast1.firebasedatabase.app"
+  };
+
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  // ── Trending songs (curated popular tracks) ───────────────────────────────
+  const TRENDING = [
+    { id: 'JGwWNGJdvx8', title: 'Shape of You', artist: 'Ed Sheeran' },
+    { id: 'ktvTqknDobU', title: 'Rockstar', artist: 'Ap Dhillon' },
+    { id: 'ru0K8uYEZWw', title: 'Calm Down', artist: 'Rema & Selena Gomez' },
+    { id: '09R8_2nJtjg', title: 'Sunflower', artist: 'Post Malone' },
+    { id: 'SlPhMPnQ58k', title: 'Kesariya', artist: 'Arijit Singh' },
+    { id: 'nfWlot6h_JM', title: 'Shake It Off', artist: 'Taylor Swift' },
+    { id: 'YqeW9_5kURI', title: 'Perfect', artist: 'Ed Sheeran' },
+    { id: '2Vv-BfVoq4g', title: 'Perfect (Live)', artist: 'Ed Sheeran' },
+    { id: 'OPf0YbXqDm0', title: 'Uptown Funk', artist: 'Bruno Mars' },
+    { id: 'hT_nvWreIhg', title: 'Counting Stars', artist: 'OneRepublic' },
+  ];
+
+  function buildTrendingChips() {
+    const container = document.getElementById('trending-scroll');
+    container.innerHTML = TRENDING.map((s, i) => `
+      <div class="trending-chip" onclick="addTrending('${s.id}','${s.title.replace(/'/g,"\\'")}','${s.artist.replace(/'/g,"\\'")}',this)">
+        <span class="trending-rank">#${i + 1}</span>
+        <img class="trending-chip-thumb"
+          src="https://i.ytimg.com/vi/${s.id}/default.jpg"
+          alt=""
+          onerror="this.style.background='#E8E3DC'"
+        >
+        <div class="trending-chip-info">
+          <div class="trending-chip-title">${s.title}</div>
+          <div class="trending-chip-artist">${s.artist}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  window.addTrending = function(id, title, artist, chipEl) {
+    chipEl.style.opacity = '0.5';
+    chipEl.style.pointerEvents = 'none';
+    db.ref(`parties/${partyId}/queue`).push({
+      id, title, artist,
+      thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`,
+      addedAt: new Date().toISOString()
+    }).then(() => {
+      showToast(`"${title}" added to queue!`);
+      chipEl.style.border = '1.5px solid #11C979';
+      chipEl.style.opacity = '0.6';
+    }).catch(() => {
+      showToast('Could not add song. Try again.', 'error');
+      chipEl.style.opacity = '1';
+      chipEl.style.pointerEvents = 'auto';
+    });
+  };
+
+  function showToast(message, type = 'success') {
+    const wrap = document.getElementById('toast-wrap');
+    const icon = type === 'success'
+      ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.innerHTML = `<div class="toast-dot">${icon}</div><div class="toast-msg">${message}</div>`;
+    wrap.appendChild(t);
+    requestAnimationFrame(() => { requestAnimationFrame(() => t.classList.add('show')); });
+    setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 350);
+    }, 3500);
+  }
+
+  window.search = async function() {
+    const q = document.getElementById('query').value.trim();
+    if (!q) { showToast('Type something to search.', 'error'); return; }
+
+    // Hide trending when user searches
+    document.getElementById('trending-section').style.display = 'none';
+
+    const btn = document.getElementById('search-btn');
+    btn.disabled = true;
+    btn.innerHTML = `<div class="spinner"></div> Finding…`;
+
     try {
-      if (!firebase.apps.length) {
-        firebase.initializeApp(firebaseConfig);
-        addLog('✅ GUEST: Firebase initialized', 'success');
-      } else {
-        addLog('✅ GUEST: Firebase already initialized', 'success');
-      }
-    } catch (error) {
-      addLog(`❌ GUEST: Firebase init error: ${error.message}`, 'error');
-      showError('Firebase initialization failed: ' + error.message);
-    }
-    
-    const db = firebase.database();
-    addLog(`📍 GUEST: Firebase path: parties/${partyId}/queue`, 'info');
-    
-    function showStatus(message) {
-      const el = document.getElementById('status');
-      el.innerText = '✅ ' + message;
-      el.style.display = 'block';
-      addLog(message, 'success');
-      setTimeout(() => el.style.display = 'none', 3000);
-    }
-    
-    function showError(message) {
-      const el = document.getElementById('error');
-      el.innerText = '❌ ' + message;
-      el.style.display = 'block';
-      addLog(message, 'error');
-      setTimeout(() => el.style.display = 'none', 5000);
-    }
-    
-    window.search = async function() {
-      const q = document.getElementById('query').value.trim();
-      if (!q) {
-        showError('Please enter a search query');
+      const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(q)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY`);
+      const data = await res.json();
+
+      if (!data.items || data.items.length === 0) {
+        showToast('No songs found. Try different keywords.', 'error');
+        document.getElementById('results').innerHTML = `<div class="empty-state"><div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><div class="empty-text">No results found.<br>Try a different search.</div></div>`;
         return;
       }
-      
-      const searchBtn = document.getElementById('search-btn');
-      searchBtn.disabled = true;
-      searchBtn.textContent = 'Searching...';
-      
-      addLog(`🔍 GUEST: Searching for: "${q}"`, 'info');
-      
-      try {
-        const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(q)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY`);
-        const data = await res.json();
-        
-        if (!data.items || data.items.length === 0) {
-          addLog(`⚠️ GUEST: No songs found for "${q}"`, 'error');
-          showError('No songs found for: ' + q);
-          document.getElementById('results').innerHTML = '<div class="empty-state"><div>No songs found. Try a different search.</div></div>';
-          return;
-        }
-        
-        addLog(`✅ GUEST: Found ${data.items.length} songs`, 'success');
-        
-        const html = data.items.map(item => `
-          <div class="song">
-            <img src="${item.snippet.thumbnails.default.url}" width="60" height="60" alt="">
+
+      const html = data.items.map(item => {
+        const safeTitle = item.snippet.title.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const safeArtist = item.snippet.channelTitle.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        return `
+          <div class="song-card">
+            <img class="song-thumb" src="${item.snippet.thumbnails.default.url}" alt="" onerror="this.style.background='#E8E3DC'">
             <div class="song-info">
               <div class="song-title">${item.snippet.title}</div>
               <div class="song-artist">${item.snippet.channelTitle}</div>
             </div>
-            <button onclick='addToQueue("${item.id.videoId}", "${item.snippet.title.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}", "${item.snippet.channelTitle.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}", this)'>Add</button>
-          </div>
-        `).join('');
-        
-        document.getElementById('results').innerHTML = html;
-      } catch (error) {
-        addLog(`❌ GUEST: Search error: ${error.message}`, 'error');
-        showError('Search failed: ' + error.message);
-      } finally {
-        searchBtn.disabled = false;
-        searchBtn.textContent = 'Search';
-      }
-    };
+            <button class="btn-add" onclick='addToQueue("${item.id.videoId}", "${safeTitle}", "${safeArtist}", this)'>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add
+            </button>
+          </div>`;
+      }).join('');
 
-    window.addToQueue = function(id, title, artist, buttonElement) {
-      const queuePath = `parties/${partyId}/queue`;
-      
-      addLog('➕ ========================================', 'info');
-      addLog(`➕ GUEST: Adding song to queue`, 'info');
-      addLog(`➕ Party ID: ${partyId}`, 'info');
-      addLog(`➕ Firebase Path: ${queuePath}`, 'info');
-      addLog(`➕ Video ID: ${id}`, 'info');
-      addLog(`➕ Title: ${title}`, 'info');
-      addLog(`➕ Artist: ${artist}`, 'info');
-      
-      // Disable button immediately
-      buttonElement.disabled = true;
-      buttonElement.textContent = 'Adding...';
-      
-      const songData = {
-        id: id,
-        title: title,
-        artist: artist,
-        thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`,
-        addedAt: new Date().toISOString()
-      };
-      
-      addLog(`➕ Song data: ${JSON.stringify(songData)}`, 'info');
-      
-      db.ref(queuePath).push(songData)
-        .then((ref) => {
-          addLog(`✅ GUEST: Song added successfully!`, 'success');
-          addLog(`✅ Firebase key: ${ref.key}`, 'success');
-          addLog('➕ ========================================', 'info');
-          
-          showStatus(`Added "${title}" to queue!`);
-          buttonElement.textContent = '✓ Added';
-          buttonElement.classList.add('added');
-        })
-        .catch((error) => {
-          addLog(`❌ GUEST: Error adding song: ${error.message}`, 'error');
-          addLog(`❌ Error code: ${error.code}`, 'error');
-          addLog('➕ ========================================', 'error');
-          
-          showError('Failed to add song: ' + error.message);
-          buttonElement.disabled = false;
-          buttonElement.textContent = 'Retry';
-        });
-    };
-    
-    // Test Firebase connection on load
-    window.addEventListener('load', function() {
-      addLog('🔗 GUEST: Testing Firebase connection...', 'info');
-      
-      db.ref(`parties/${partyId}`).once('value')
-        .then((snapshot) => {
-          const data = snapshot.val();
-          addLog('✅ GUEST: Firebase connection working!', 'success');
-          addLog(`📦 GUEST: Party data exists: ${data ? 'YES' : 'NO'}`, 'info');
-          if (data && data.queue) {
-            addLog(`🎵 GUEST: Current queue has ${Object.keys(data.queue).length} songs`, 'info');
-          }
-        })
-        .catch((error) => {
-          addLog(`❌ GUEST: Firebase connection error: ${error.message}`, 'error');
-          showError('Cannot connect to database. Check your internet connection.');
-        });
-      
-      // Auto-focus search input
-      document.getElementById('query').focus();
+      document.getElementById('results').innerHTML = html;
+
+    } catch (e) {
+      showToast('Search failed. Check your connection.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Find &amp; add`;
+    }
+  };
+
+  window.addToQueue = function(id, title, artist, btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<div class="spinner" style="border-top-color:#fff;border-color:rgba(255,255,255,.3);width:12px;height:12px;"></div>`;
+
+    db.ref(`parties/${partyId}/queue`).push({
+      id, title, artist,
+      thumbnail: `https://i.ytimg.com/vi/${id}/default.jpg`,
+      addedAt: new Date().toISOString()
+    }).then(() => {
+      showToast(`"${title}" added to queue!`);
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="20 6 9 17 4 12"/></svg> Added`;
+      btn.classList.add('added');
+    }).catch(err => {
+      showToast('Could not add song. Try again.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Retry`;
     });
+  };
 
-    // Optional: Uncomment to show debug log
-    // document.getElementById('debug-log').classList.add('show');
-  </script>
+  window.addEventListener('load', () => {
+    buildTrendingChips();
+    document.getElementById('query').focus();
+  });
+</script>
 </body>
 </html>
