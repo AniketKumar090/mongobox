@@ -1,15 +1,41 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
+import 'package:audio_service/audio_service.dart';
 import 'screens/web/home_screen_web.dart' if (dart.library.io) 'screens/home_screen_stub.dart' as jukebox;
 import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/env_config.dart';
 import 'services/audio_session_service.dart';
+import 'services/lyric_audio_registry.dart';
+import 'services/lyric_background_audio_handler.dart';
 import 'theme/pixel_theme.dart';
+
+bool get _isIosOrAndroid =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.android);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (_isIosOrAndroid) {
+    try {
+      final handler = await AudioService.init(
+        builder: () => LyricBackgroundAudioHandler(),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.mongobox.audio',
+          androidNotificationChannelName: 'MongoBox Playback',
+          androidNotificationOngoing: true,
+          androidStopForegroundOnPause: true,
+        ),
+      );
+      LyricAudioRegistry.register(handler);
+    } catch (e, st) {
+      debugPrint('AudioService init failed (fallback to plain player): $e\n$st');
+    }
+  }
 
   // Load environment variables from .env file (best effort)
   try {

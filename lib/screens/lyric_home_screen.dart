@@ -7,17 +7,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:volume_controller/volume_controller.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:audio_service/audio_service.dart';
+import 'package:just_audio/just_audio.dart';
 import '../services/playback_service_mobile.dart';
 import '../services/local_suggestions_service.dart';
 import '../services/youtube_quota_monitor.dart';
 import '../services/lightweight_search_service.dart';
 import '../services/tts_service.dart';
-import '../services/youtube_player_background_helper.dart';
-import '../services/background_audio_player_service.dart';
-import '../services/soundcloud_service.dart';
-import '../theme/lyric_screen_theme.dart';
-import '../widgets/lyric_page_scaffold.dart';
+import '../services/lyric_audio_registry.dart';
+import '../services/lyric_audio_playback.dart';
+import '../services/youtube_audio_stream_service.dart';
+import '../services/audio_session_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
@@ -35,27 +35,30 @@ class LyricHomeScreen extends StatefulWidget {
   State<LyricHomeScreen> createState() => _LyricHomeScreenState();
 }
 
-class _LyricHomeScreenState extends State<LyricHomeScreen>
-    with WidgetsBindingObserver {
+class _LyricHomeScreenState extends State<LyricHomeScreen> {
   final _lyricController = TextEditingController();
   final _playbackService = PlaybackServiceMobile();
   final _quotaMonitor = YouTubeQuotaMonitor();
   final _lightweightService = LightweightSearchService();
-  YoutubePlayerController? _ytController;
   PlaybackResult? _nowPlaying;
   bool _isLoading = false;
+
+  // ── Stream-playback loading state ─────────────────────────────────────────
+  // Tracks only the URL-resolution + just_audio-init phase.
+  // Once play() succeeds this is cleared immediately, regardless of whether
+  // _isLoading (the search phase) is still true.
+  bool _isStartingStreamPlayback = false;
+
   bool _isListening = false;
   bool _isQuotaSavingMode = false;
-  bool _wasPlayingBeforeBackground = false;
   bool _isLooping = false;
-  bool _isHandlingLoopRestart = false;
-  bool _backgroundMirrorFailed = false;
-  bool _foregroundAudioSuppressedForBackground = false;
-  bool _isRestoringForeground = false;
-  Duration _backgroundSyncPosition = Duration.zero;
   double _playerVolume = 1.0;
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
+
+  // ── Completion listener ───────────────────────────────────────────────────
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+
   static const String _volumeFetchInitialKey = 'fetchInitialVolume';
   static const String _volumeEventChannelName =
       'com.kurenai7968.volume_controller.volume_listener_event';
@@ -64,237 +67,88 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   List<RecentTrack> _recentTracks = [];
   final SpeechToText _speech = SpeechToText();
   final TtsService _tts = TtsService();
-  final SoundCloudService _soundcloud = SoundCloudService();
-  bool _isBackgroundAudioLoading = false;
-  bool _appIsInBackground = false;
-  int _backgroundMirrorRequestId = 0;
 
+  LyricAudioPlayback get _audio => LyricAudioRegistry.instance;
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     unawaited(_initVolumeController());
     _loadSuggestions();
     _initTts();
+    _bindPlayerCompletionListener();
+    // Re-sync UI with any playback that survived a hot-restart.
+    _recoverPlaybackState();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    final c = _ytController;
-    if (c == null) return;
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      _appIsInBackground = true;
-      _wasPlayingBeforeBackground =
-          c.value.isPlaying ||
-          c.value.playerState == PlayerState.playing ||
-          c.value.playerState == PlayerState.buffering;
-      if (_wasPlayingBeforeBackground) {
-        _suppressForegroundPlaybackForBackground();
-        _autoStartBackgroundMirror(++_backgroundMirrorRequestId);
-      }
-      return;
-    }
-    _appIsInBackground = false;
-    _backgroundMirrorRequestId++;
-    if (state == AppLifecycleState.resumed && _wasPlayingBeforeBackground) {
-      _restoreForegroundPlayback();
-    }
+void _recoverPlaybackState() {
+  final player = _audio.player;
+ 
+  // Nothing to recover if the player is idle or finished.
+  if (player.processingState == ProcessingState.idle ||
+      player.processingState == ProcessingState.completed) {
+    return;
   }
-
-  void _suppressForegroundPlaybackForBackground() {
-    final controller = _ytController;
-    if (controller == null || _foregroundAudioSuppressedForBackground) return;
-    _backgroundSyncPosition = controller.value.position;
-    debugPrint(
-      '[Background] Saved YouTube position: ${_backgroundSyncPosition.inSeconds}s',
+ 
+  // just_audio stores the MediaItem we passed as the AudioSource tag.
+  final sequence = player.sequence;
+  final index = player.currentIndex ?? 0;
+  if (sequence == null || sequence.isEmpty) return;
+ 
+  final tag = sequence[index].tag;
+  if (tag is! MediaItem) return;
+ 
+  final videoId = tag.id;
+  if (videoId.isEmpty) return;
+ 
+  debugPrint('[LyricHome] Recovering playback state for "$videoId"');
+ 
+  setState(() {
+    _nowPlaying = PlaybackResult(
+      videoId: videoId,
+      startTimeSeconds: 0,
+      trackName: tag.title,
+      artistName: tag.artist ?? '',
+      matchedLineTimeSeconds: null,
+      matchedLyricLine: null,
     );
-    _foregroundAudioSuppressedForBackground = true;
-    try {
-      controller.mute();
-      controller.pause();
-    } catch (_) {}
-  }
-
-  void _restoreForegroundPlayback() {
-    _wasPlayingBeforeBackground = false;
-    _isRestoringForeground = true;
-    try {
-      _ytController?.mute();
-      _ytController?.pause();
-    } catch (_) {}
-    _restoreForegroundPlaybackAsync().whenComplete(() {
-      _isRestoringForeground = false;
-    });
-  }
-
-  Future<void> _restoreForegroundPlaybackAsync() async {
-    final mirroredPosition = BackgroundAudioPlayerService.instance.position;
-    debugPrint(
-      '[Resume] Background player position: ${mirroredPosition.inSeconds}s',
+  });
+}
+  // ── Bind a listener that reacts when the track finishes naturally ──────────
+  void _bindPlayerCompletionListener() {
+    _playerStateSubscription?.cancel();
+    _playerStateSubscription = _audio.player.playerStateStream.listen(
+      (state) {
+        if (!mounted) return;
+        // When the player reaches the end of the track (not looping),
+        // clear the loading/starting flags so the UI is responsive again.
+        if (state.processingState == ProcessingState.completed) {
+          setState(() {
+            _isStartingStreamPlayback = false;
+            // Keep _nowPlaying so the user can see what just finished and
+            // press play again to restart. Just ensure loading is cleared.
+            _isLoading = false;
+          });
+        }
+        // Also clear the stream-start spinner as soon as the player is ready
+        // or playing — this handles the case where _isStartingStreamPlayback
+        // was left true by a previous call.
+        if (state.processingState == ProcessingState.ready ||
+            state.playing) {
+          if (_isStartingStreamPlayback) {
+            setState(() => _isStartingStreamPlayback = false);
+          }
+        }
+      },
+      onError: (_) {
+        if (mounted) {
+          setState(() {
+            _isStartingStreamPlayback = false;
+            _isLoading = false;
+          });
+        }
+      },
+      cancelOnError: false,
     );
-    final stoppedPosition =
-        await BackgroundAudioPlayerService.instance.hardStopAndReset();
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    if (!mounted) {
-      _isRestoringForeground = false;
-      return;
-    }
-    final controller = _ytController;
-    if (controller == null) {
-      _foregroundAudioSuppressedForBackground = false;
-      _backgroundSyncPosition = Duration.zero;
-      _isRestoringForeground = false;
-      return;
-    }
-    await _waitForYoutubeControllerReady(controller);
-    if (!mounted || controller != _ytController) {
-      _isRestoringForeground = false;
-      return;
-    }
-    final resumePosition =
-        stoppedPosition > Duration.zero
-            ? stoppedPosition
-            : mirroredPosition > Duration.zero
-            ? mirroredPosition
-            : _backgroundSyncPosition;
-    debugPrint('[Resume] Seeking YouTube to: ${resumePosition.inSeconds}s');
-    if (resumePosition > Duration.zero) {
-      controller.seekTo(resumePosition);
-      await Future.delayed(const Duration(milliseconds: 150));
-    }
-    if (!mounted) {
-      _isRestoringForeground = false;
-      return;
-    }
-    try {
-      controller.unMute();
-      controller.play();
-    } catch (_) {}
-    _applyEmbeddedPlayerVolume();
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted) return;
-    if (!controller.value.isPlaying &&
-        controller.value.playerState != PlayerState.playing &&
-        controller.value.playerState != PlayerState.buffering) {
-      if (resumePosition > Duration.zero) {
-        controller.seekTo(resumePosition);
-      }
-      try {
-        controller.unMute();
-        controller.play();
-      } catch (_) {}
-      _applyEmbeddedPlayerVolume();
-    }
-    _foregroundAudioSuppressedForBackground = false;
-    _backgroundSyncPosition = Duration.zero;
-    if (_backgroundMirrorFailed) {
-      _backgroundMirrorFailed = false;
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Background audio needs valid SoundCloud credentials '
-            '(set SOUNDCLOUD_CLIENT_ID and SOUNDCLOUD_CLIENT_SECRET in .env).',
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _waitForYoutubeControllerReady(
-    YoutubePlayerController controller,
-  ) async {
-    if (controller.value.isReady) return;
-    final completer = Completer<void>();
-    late VoidCallback listener;
-    Timer? timeout;
-    listener = () {
-      if (controller.value.isReady && !completer.isCompleted) {
-        completer.complete();
-      }
-    };
-    controller.addListener(listener);
-    timeout = Timer(const Duration(seconds: 5), () {
-      if (!completer.isCompleted) {
-        debugPrint('[YouTube] Controller readiness wait timed out');
-        completer.complete();
-      }
-    });
-    try {
-      await completer.future;
-    } finally {
-      timeout.cancel();
-      controller.removeListener(listener);
-    }
-  }
-
-  void _autoStartBackgroundMirror(int requestId) {
-    _startBackgroundMirrorFromNowPlaying(auto: true, requestId: requestId);
-  }
-
-  Future<void> _startBackgroundMirrorFromNowPlaying({
-    required bool auto,
-    required int requestId,
-  }) async {
-    if (_isBackgroundAudioLoading) return;
-    if (BackgroundAudioPlayerService.instance.isPlaying) return;
-    final now = _nowPlaying;
-    if (now == null) return;
-    if (now.trackName.trim().isEmpty || now.artistName.trim().isEmpty) return;
-    setState(() => _isBackgroundAudioLoading = true);
-    if (auto) {
-      _backgroundMirrorFailed = false;
-    }
-    try {
-      await BackgroundAudioPlayerService.instance.setLoopEnabled(_isLooping);
-      final sc = await _soundcloud.findMirrorStream(
-        trackName: now.trackName,
-        artistName: now.artistName,
-      );
-      if (!mounted ||
-          !_appIsInBackground ||
-          requestId != _backgroundMirrorRequestId) {
-        return;
-      }
-      if (sc != null && sc.confidence >= 0.62) {
-        debugPrint(
-          '[Background] Starting SoundCloud stream at: ${_backgroundSyncPosition.inSeconds}s',
-        );
-        await BackgroundAudioPlayerService.instance.playSources(
-          sc.streamSources
-              .map((source) => (url: source.url, headers: source.headers))
-              .toList(),
-          _backgroundSyncPosition,
-        );
-        return;
-      }
-      if (!auto) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Could not find a usable SoundCloud background stream.',
-            ),
-          ),
-        );
-      }
-      if (auto) {
-        _backgroundMirrorFailed = true;
-      }
-    } catch (e) {
-      if (!mounted) return;
-      if (!auto) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Background audio failed: $e')));
-      }
-      if (auto) {
-        _backgroundMirrorFailed = true;
-      }
-    } finally {
-      if (mounted) setState(() => _isBackgroundAudioLoading = false);
-    }
   }
 
   Future<void> _initTts() async {
@@ -329,7 +183,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
             setState(() {
               _playerVolume = (systemVol / _volumeSystemCap).clamp(0.0, 1.0);
             });
-            _applyEmbeddedPlayerVolume();
+            _applyStreamPlayerVolume();
           },
           onError: (_) {},
           cancelOnError: false,
@@ -353,11 +207,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _volumeSubscription?.cancel();
     _volumeSubscription = null;
+    _playerStateSubscription?.cancel();
+    _playerStateSubscription = null;
     _lyricController.dispose();
-    _ytController?.dispose();
+    unawaited(_audio.stop());
     _tts.dispose();
     super.dispose();
   }
@@ -373,44 +228,72 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     return result.startTimeSeconds;
   }
 
-  void _playResult(PlaybackResult result) {
-    if (BackgroundAudioPlayerService.instance.isPlaying) {
-      unawaited(BackgroundAudioPlayerService.instance.stop());
+  Future<void> _playResult(PlaybackResult result, {String? searchQuery}) async {
+    // Stop any currently playing track first.
+    if (_audio.isPlaying) {
+      await _audio.stop();
     }
-    _backgroundSyncPosition = Duration.zero;
-    _foregroundAudioSuppressedForBackground = false;
-    final oldController = _ytController;
-    _ytController = null;
+
     setState(() {
       _nowPlaying = result;
+      _isStartingStreamPlayback = true;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      oldController?.dispose();
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final startSeconds = _resolvePlaybackStart(result);
-      final controller =
-          YouTubePlayerBackgroundHelper.createBackgroundAwareController(
-            videoId: result.videoId,
-            startSeconds: startSeconds,
-            autoPlay: true,
-            loop: false,
-          );
-      _attachLoopListener(controller);
-      setState(() => _ytController = controller);
-      _applyEmbeddedPlayerVolume();
-    });
-    _lightweightService.cachePlaybackResult(
-      result,
-      _lyricController.text.trim(),
-    );
-    _suggestions?.addRecentLine(_lyricController.text.trim());
+
+    // Re-bind the completion listener to the (possibly recycled) player.
+    _bindPlayerCompletionListener();
+
+    final startSeconds = _resolvePlaybackStart(result);
+    final startPosition = Duration(seconds: startSeconds);
+
+    try {
+      await _audio.setLoopEnabled(_isLooping);
+      final streamSources = await YouTubeAudioStreamService.instance
+          .getPlayableAudioSources(result.videoId);
+      await AppAudioSessionService.activatePlayback();
+      await _audio.playSources(
+        streamSources,
+        startPosition,
+        MediaItem(
+          id: result.videoId,
+          title: result.trackName,
+          artist: result.artistName,
+          artUri: Uri.parse(
+            'https://img.youtube.com/vi/${result.videoId}/0.jpg',
+          ),
+        ),
+      );
+      _applyStreamPlayerVolume();
+    } catch (e, st) {
+      debugPrint('[LyricPlay] Stream playback failed: $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not start playback. Check your connection and try again. '
+              '($e)',
+            ),
+          ),
+        );
+        setState(() => _nowPlaying = null);
+      }
+      return;
+    } finally {
+      // Always clear the stream-start spinner, even on success — the
+      // playerStateStream listener above will also clear it, but this
+      // guarantees it for the synchronous path.
+      if (mounted) setState(() => _isStartingStreamPlayback = false);
+    }
+
+    final resolvedSearchQuery =
+        (searchQuery ?? _lyricController.text).trim();
+
+    _lightweightService.cachePlaybackResult(result, resolvedSearchQuery);
+    _suggestions?.addRecentLine(resolvedSearchQuery);
     _suggestions?.addRecentTrack(
       RecentTrack(
         trackName: result.trackName,
         artistName: result.artistName,
-        lyricSnippet: _lyricController.text.trim(),
+        lyricSnippet: resolvedSearchQuery,
         videoId: result.videoId,
         startTimeSeconds: result.startTimeSeconds,
       ),
@@ -418,7 +301,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     _suggestions
         ?.addRecentSearch(
           RecentSearch(
-            query: _lyricController.text.trim(),
+            query: resolvedSearchQuery,
             success: true,
             searchedAtMs: DateTime.now().millisecondsSinceEpoch,
             trackName: result.trackName,
@@ -639,7 +522,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       }
       final selected = await _pickCandidateFromOptions(options);
       if (!mounted || selected == null) return;
-      _playResult(selected.result);
+      _lyricController.clear();
+      await _playResult(selected.result, searchQuery: query);
     } catch (e) {
       if (mounted) {
         if (e.toString().contains('403') ||
@@ -653,6 +537,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
         }
       }
     } finally {
+      // Always clear the search-loading flag when _onSearch finishes,
+      // regardless of whether playback succeeded or failed.
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -690,97 +576,90 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     _openGenerateSong();
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Primary play/pause toggle — this is what the big center button calls.
+  //
+  // Fixed logic:
+  //   • Never blocked by _isStartingStreamPlayback so the user can always
+  //     interrupt a stream that's taking too long to start.
+  //   • If loading (search in progress) → ignore (still show spinner).
+  //   • If nothing loaded yet → trigger search.
+  //   • If playing → pause.
+  //   • If paused / completed → play (restart from beginning if completed).
+  // ─────────────────────────────────────────────────────────────────────────
   void _togglePrimaryPlayback() {
-    if (_isLoading || _isRestoringForeground) return;
-    final controller = _ytController;
-    if (controller == null) {
+    // Only block during the search phase, not during stream startup.
+    if (_isLoading) return;
+
+    final p = _audio.player;
+
+    if (_nowPlaying == null) {
+      // Nothing loaded — run a search.
       _onSearch();
       return;
     }
-    if (controller.value.isPlaying) {
-      controller.pause();
+
+    if (_isStartingStreamPlayback) {
+      // Stream is still being initialised — let the user cancel by stopping.
+      unawaited(_audio.stop());
+      setState(() {
+        _isStartingStreamPlayback = false;
+        _nowPlaying = null;
+      });
+      return;
+    }
+
+    if (_audio.isPlaying) {
+      unawaited(p.pause());
     } else {
-      controller.play();
+      // If the track finished (completed state), seek back to the start.
+      if (p.processingState == ProcessingState.completed) {
+        final startSeconds = _resolvePlaybackStart(_nowPlaying!);
+        unawaited(p.seek(Duration(seconds: startSeconds)));
+      }
+      unawaited(p.play());
     }
   }
 
   void _toggleLooping() {
     final next = !_isLooping;
     setState(() => _isLooping = next);
-    if (BackgroundAudioPlayerService.instance.isPlaying) {
-      unawaited(BackgroundAudioPlayerService.instance.setLoopEnabled(next));
-    }
-  }
-
-  void _attachLoopListener(YoutubePlayerController controller) {
-    controller.addListener(() {
-      if (!_isLooping || _isHandlingLoopRestart || _isRestoringForeground) {
-        return;
-      }
-      final playerState = controller.value.playerState;
-      if (playerState == PlayerState.ended) {
-        _isHandlingLoopRestart = true;
-        Future.microtask(() async {
-          try {
-            if (_isRestoringForeground) return;
-            final videoId = controller.metadata.videoId;
-            if (videoId.isNotEmpty) {
-              controller.load(videoId, startAt: 0);
-            } else {
-              controller.seekTo(Duration.zero);
-            }
-            await Future.delayed(const Duration(milliseconds: 100));
-            if (!mounted || _isRestoringForeground) {
-              _isHandlingLoopRestart = false;
-              return;
-            }
-            controller.play();
-            await Future.delayed(const Duration(milliseconds: 50));
-            if (_isRestoringForeground) return;
-            _applyEmbeddedPlayerVolume();
-            await Future.delayed(const Duration(milliseconds: 100));
-          } catch (e) {
-            debugPrint('Loop restart error: $e');
-          } finally {
-            _isHandlingLoopRestart = false;
-          }
-        });
-      }
-    });
+    unawaited(_audio.setLoopEnabled(next));
   }
 
   void _seekRelative(int seconds) {
-    final controller = _ytController;
-    if (controller == null) return;
-    final currentMs = controller.value.position.inMilliseconds;
-    final durationMs = controller.metadata.duration.inMilliseconds;
-    final targetMs = currentMs + (seconds * 1000);
-    final clampedMs =
-        durationMs > 0 ? targetMs.clamp(0, durationMs) : math.max(0, targetMs);
-    controller.seekTo(Duration(milliseconds: clampedMs));
+    if (_nowPlaying == null) return;
+    final player = _audio.player;
+    final current = _audio.position;
+    final total = player.duration ?? Duration.zero;
+    final target = current + Duration(seconds: seconds);
+    final clamped =
+        total > Duration.zero
+            ? Duration(
+              milliseconds: target.inMilliseconds.clamp(
+                0,
+                total.inMilliseconds,
+              ),
+            )
+            : (target.isNegative ? Duration.zero : target);
+    unawaited(player.seek(clamped));
   }
 
-  void _applyEmbeddedPlayerVolume() {
-    final controller = _ytController;
-    if (controller == null) return;
-    if (!controller.value.isReady) return;
-    final volume = (_playerVolume * 100).round().clamp(0, 100);
-    controller.setVolume(volume);
-    if (_isRestoringForeground || volume == 0) {
-      controller.mute();
-    } else {
-      controller.unMute();
-    }
+  void _applyStreamPlayerVolume() {
+    try {
+      _audio.player.setVolume(_playerVolume.clamp(0.0, 1.0));
+    } catch (_) {}
   }
 
   void _seekToFraction(double fraction) {
-    final controller = _ytController;
-    if (controller == null) return;
-    final duration = controller.metadata.duration;
-    if (duration <= Duration.zero) return;
+    if (_nowPlaying == null) return;
+    final total = _audio.player.duration;
+    if (total == null || total <= Duration.zero) return;
     final clamped = fraction.clamp(0.0, 1.0);
-    controller.seekTo(
-      Duration(milliseconds: (duration.inMilliseconds * clamped).round()),
+    unawaited(
+      _audio.player.seek(
+        Duration(milliseconds: (total.inMilliseconds * clamped).round()),
+      ),
     );
   }
 
@@ -803,9 +682,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     return '${compact.substring(0, 117)}...';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // REDESIGNED song-picker bottom sheet
-  // ─────────────────────────────────────────────────────────────────────────
   Future<PlaybackOption?> _pickCandidateFromOptions(
     List<PlaybackOption> options,
   ) async {
@@ -857,30 +733,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
               final availW = constraints.maxWidth;
               return Stack(
                 children: [
-                  // 🎵  Hidden YouTube player (off-screen, 1% opacity)
-                  if (_ytController != null)
-                    Positioned(
-                      left: hPad,
-                      right: hPad,
-                      top: 0,
-                      child: IgnorePointer(
-                        child: Opacity(
-                          opacity: 0.01,
-                          child: AspectRatio(
-                            aspectRatio: 16 / 9,
-                            child: YoutubePlayer(
-                              key: ValueKey(
-                                _nowPlaying?.videoId ?? 'yt_player',
-                              ),
-                              controller: _ytController!,
-                              showVideoProgressIndicator: false,
-                              onReady: _applyEmbeddedPlayerVolume,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  // 🎵  Main non-scrollable column
                   Padding(
                     padding: EdgeInsets.fromLTRB(hPad, vGap, hPad, vGap),
                     child: Column(
@@ -920,10 +772,15 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                         SizedBox(height: vGap),
                         Expanded(
                           child: _TurntablePlayerCard(
-                            controller: _ytController,
+                            audio: _audio,
                             nowPlaying: _nowPlaying,
                             savedCount: _recentLines.length,
+                            // Pass the combined loading flag to the player card.
+                            // The play button shows a spinner only during the
+                            // search phase (_isLoading), NOT during stream
+                            // startup — that way the user can tap to cancel.
                             isLoading: _isLoading,
+                            isStreamStarting: _isStartingStreamPlayback,
                             isLooping: _isLooping,
                             onToggleLoop: _toggleLooping,
                             onSeekBackward: () => _seekRelative(-10),
@@ -946,7 +803,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SongPickerSheet — redesigned bottom sheet for multi-result song selection
+// _SongPickerSheet
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SongPickerSheet extends StatelessWidget {
@@ -977,7 +834,6 @@ class _SongPickerSheet extends StatelessWidget {
           ),
           child: Column(
             children: [
-              // ── drag handle ──
               Padding(
                 padding: const EdgeInsets.only(top: 12, bottom: 4),
                 child: Center(
@@ -991,8 +847,6 @@ class _SongPickerSheet extends StatelessWidget {
                   ),
                 ),
               ),
-
-              // ── header ──
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
                 child: Row(
@@ -1023,9 +877,7 @@ class _SongPickerSheet extends StatelessWidget {
                                 height: 1.45,
                               ),
                               children: [
-                                const TextSpan(
-                                  text: 'Exact lyric hits play ',
-                                ),
+                                const TextSpan(text: 'Exact lyric hits play '),
                                 TextSpan(
                                   text: '${preRollSeconds}s before',
                                   style: const TextStyle(
@@ -1041,7 +893,6 @@ class _SongPickerSheet extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    // result count badge
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
@@ -1064,10 +915,7 @@ class _SongPickerSheet extends StatelessWidget {
                   ],
                 ),
               ),
-
               const SizedBox(height: 16),
-
-              // ── list ──
               Expanded(
                 child: ListView.separated(
                   controller: scrollController,
@@ -1086,8 +934,6 @@ class _SongPickerSheet extends StatelessWidget {
                   },
                 ),
               ),
-
-              // ── cancel bar ──
               SafeArea(
                 top: false,
                 child: Padding(
@@ -1125,7 +971,7 @@ class _SongPickerSheet extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SongPickerCard — a single result row inside the sheet
+// _SongPickerCard
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SongPickerCard extends StatelessWidget {
@@ -1145,11 +991,10 @@ class _SongPickerCard extends StatelessWidget {
   final int preRollSeconds;
   final VoidCallback onTap;
 
-  // Confidence-based accent colour
   static Color _confidenceColor(double c) {
-    if (c >= 0.80) return const Color(0xFF11C979); // strong green
-    if (c >= 0.60) return const Color(0xFFFFB830); // amber
-    return const Color(0xFFCCCCCC); // muted
+    if (c >= 0.80) return const Color(0xFF11C979);
+    if (c >= 0.60) return const Color(0xFFFFB830);
+    return const Color(0xFFCCCCCC);
   }
 
   @override
@@ -1178,19 +1023,20 @@ class _SongPickerCard extends StatelessWidget {
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: isTopResult ? const Color(0xFFF0EDE7) : const Color(0xFFFAF8F5),
+            color:
+                isTopResult ? const Color(0xFFF0EDE7) : const Color(0xFFFAF8F5),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isTopResult
-                  ? const Color(0xFFD8D4CC)
-                  : const Color(0xFFEAE6E0),
+              color:
+                  isTopResult
+                      ? const Color(0xFFD8D4CC)
+                      : const Color(0xFFEAE6E0),
               width: isTopResult ? 1.5 : 1,
             ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── thumbnail + rank badge ──
               Stack(
                 clipBehavior: Clip.none,
                 children: [
@@ -1220,15 +1066,11 @@ class _SongPickerCard extends StatelessWidget {
                     ),
                 ],
               ),
-
               const SizedBox(width: 12),
-
-              // ── text content ──
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // title row
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1247,7 +1089,6 @@ class _SongPickerCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        // confidence pill
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
@@ -1263,18 +1104,16 @@ class _SongPickerCard extends StatelessWidget {
                               fontFamily: 'Inter',
                               fontSize: 11,
                               fontWeight: FontWeight.w800,
-                              color: accentColor == const Color(0xFFCCCCCC)
-                                  ? const Color(0xFF888888)
-                                  : accentColor,
+                              color:
+                                  accentColor == const Color(0xFFCCCCCC)
+                                      ? const Color(0xFF888888)
+                                      : accentColor,
                             ),
                           ),
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 3),
-
-                    // artist
                     Text(
                       result.artistName,
                       maxLines: 1,
@@ -1286,8 +1125,6 @@ class _SongPickerCard extends StatelessWidget {
                         color: Color(0xFF777777),
                       ),
                     ),
-
-                    // matched lyric snippet
                     if (snippet != null) ...[
                       const SizedBox(height: 10),
                       Container(
@@ -1331,27 +1168,22 @@ class _SongPickerCard extends StatelessWidget {
                         ),
                       ),
                     ],
-
                     const SizedBox(height: 10),
-
-                    // metadata chips row
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        // play-from timestamp (pre-rolled)
                         _MetaChip(
                           icon: Icons.play_circle_outline_rounded,
                           label: 'Plays from ${formatClock(playStart)}',
                           highlighted: true,
                         ),
-                        // line timestamp (if exact)
                         if (hasExactLine)
                           _MetaChip(
                             icon: Icons.lyrics_outlined,
-                            label: 'Line at ${formatClock(result.matchedLineTimeSeconds!)}',
+                            label:
+                                'Line at ${formatClock(result.matchedLineTimeSeconds!)}',
                           ),
-                        // source
                         _MetaChip(
                           icon: Icons.tune_rounded,
                           label: option.source,
@@ -1361,10 +1193,7 @@ class _SongPickerCard extends StatelessWidget {
                   ],
                 ),
               ),
-
               const SizedBox(width: 6),
-
-              // ── chevron ──
               const Padding(
                 padding: EdgeInsets.only(top: 2),
                 child: Icon(
@@ -1433,10 +1262,11 @@ class _MetaChip extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _TurntablePlayerCard extends StatelessWidget {
   const _TurntablePlayerCard({
-    required this.controller,
+    required this.audio,
     required this.nowPlaying,
     required this.savedCount,
     required this.isLoading,
+    required this.isStreamStarting,
     required this.isLooping,
     required this.onToggleLoop,
     required this.onSeekBackward,
@@ -1445,10 +1275,11 @@ class _TurntablePlayerCard extends StatelessWidget {
     required this.onSeekToFraction,
   });
 
-  final YoutubePlayerController? controller;
+  final LyricAudioPlayback audio;
   final PlaybackResult? nowPlaying;
   final int savedCount;
   final bool isLoading;
+  final bool isStreamStarting; // separate flag: stream URL being fetched/loaded
   final bool isLooping;
   final VoidCallback onToggleLoop;
   final VoidCallback onSeekBackward;
@@ -1457,65 +1288,33 @@ class _TurntablePlayerCard extends StatelessWidget {
   final ValueChanged<double> onSeekToFraction;
 
   static const List<double> _waveformHeights = [
-    10,
-    14,
-    18,
-    24,
-    16,
-    12,
-    20,
-    28,
-    18,
-    12,
-    26,
-    14,
-    22,
-    32,
-    16,
-    12,
-    18,
-    26,
-    30,
-    16,
-    12,
-    18,
-    22,
-    26,
-    18,
-    14,
-    16,
-    20,
-    14,
-    12,
+    10, 14, 18, 24, 16, 12, 20, 28, 18, 12, 26, 14, 22, 32, 16,
+    12, 18, 26, 30, 16, 12, 18, 22, 26, 18, 14, 16, 20, 14, 12,
   ];
 
   @override
   Widget build(BuildContext context) {
-    final musicController = controller;
-    final basePosition =
-        musicController?.value.position ??
-        const Duration(minutes: 1, seconds: 54);
-    final baseDuration =
-        musicController != null &&
-                musicController.metadata.duration > Duration.zero
-            ? musicController.metadata.duration
-            : const Duration(minutes: 3, seconds: 35);
-    final progress =
-        baseDuration.inMilliseconds <= 0
+    final player = audio.player;
+    final basePosition = const Duration(minutes: 1, seconds: 54);
+    final baseDuration = const Duration(minutes: 3, seconds: 35);
+    final resolvedDuration = player.duration;
+    final effectiveDuration =
+        resolvedDuration != null && resolvedDuration > Duration.zero
+            ? resolvedDuration
+            : baseDuration;
+    final baseProgress =
+        effectiveDuration.inMilliseconds <= 0
             ? 0.54
-            : (basePosition.inMilliseconds / baseDuration.inMilliseconds).clamp(
-              0.0,
-              1.0,
-            );
+            : (audio.position.inMilliseconds / effectiveDuration.inMilliseconds)
+                .clamp(0.0, 1.0);
     final title = nowPlaying?.trackName ?? 'The Suffering';
     final artist = nowPlaying?.artistName ?? 'LyricQSK';
-    final badgeText = nowPlaying == null ? 'Now Playing' : 'Now Playing';
     final trackCount = savedCount.toString().padLeft(3, '0');
 
     Widget buildCard(bool isPlaying, Duration position, Duration duration) {
       final playbackProgress =
           duration.inMilliseconds <= 0
-              ? progress
+              ? baseProgress
               : (position.inMilliseconds / duration.inMilliseconds).clamp(
                 0.0,
                 1.0,
@@ -1524,6 +1323,15 @@ class _TurntablePlayerCard extends StatelessWidget {
           duration.inMilliseconds == 0
               ? 0.0
               : (position.inMilliseconds / 12000) * math.pi * 2;
+
+      // Determine what the center button should show:
+      //   • isLoading (search phase)  → spinner, button disabled
+      //   • isStreamStarting          → spinner, but button IS tappable (cancel)
+      //   • playing                   → pause icon
+      //   • paused / completed / idle → play icon
+      final showSearchSpinner = isLoading && !isStreamStarting;
+      final buttonEnabled = !isLoading || isStreamStarting;
+
       return LayoutBuilder(
         builder: (context, constraints) {
           final cardW = constraints.maxWidth;
@@ -1559,32 +1367,16 @@ class _TurntablePlayerCard extends StatelessWidget {
                     ),
                     child: Stack(
                       children: [
-                        const Positioned(
-                          top: 10,
-                          left: 10,
-                          child: _DeckScrew(),
-                        ),
-                        const Positioned(
-                          top: 10,
-                          right: 10,
-                          child: _DeckScrew(),
-                        ),
-                        const Positioned(
-                          bottom: 10,
-                          left: 10,
-                          child: _DeckScrew(),
-                        ),
-                        const Positioned(
-                          bottom: 10,
-                          right: 10,
-                          child: _DeckScrew(),
-                        ),
+                        const Positioned(top: 10, left: 10, child: _DeckScrew()),
+                        const Positioned(top: 10, right: 10, child: _DeckScrew()),
+                        const Positioned(bottom: 10, left: 10, child: _DeckScrew()),
+                        const Positioned(bottom: 10, right: 10, child: _DeckScrew()),
                         Positioned(
                           top: 18,
                           left: 18,
                           child: _DeckLoopButton(
                             isLooping: isLooping,
-                            onPressed: controller == null ? null : onToggleLoop,
+                            onPressed: nowPlaying == null ? null : onToggleLoop,
                           ),
                         ),
                         Positioned(
@@ -1655,30 +1447,16 @@ class _TurntablePlayerCard extends StatelessWidget {
                                                           child: Text(
                                                             artist.length > 12
                                                                 ? artist
-                                                                    .substring(
-                                                                      0,
-                                                                      12,
-                                                                    )
+                                                                    .substring(0, 12)
                                                                     .toUpperCase()
-                                                                : artist
-                                                                    .toUpperCase(),
-                                                            textAlign:
-                                                                TextAlign
-                                                                    .center,
+                                                                : artist.toUpperCase(),
+                                                            textAlign: TextAlign.center,
                                                             style: TextStyle(
-                                                              fontFamily:
-                                                                  'Inter',
-                                                              fontSize:
-                                                                  labelFontSize,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                              color:
-                                                                  const Color(
-                                                                    0xFF6B6B6B,
-                                                                  ),
-                                                              letterSpacing:
-                                                                  0.6,
+                                                              fontFamily: 'Inter',
+                                                              fontSize: labelFontSize,
+                                                              fontWeight: FontWeight.w700,
+                                                              color: const Color(0xFF6B6B6B),
+                                                              letterSpacing: 0.6,
                                                             ),
                                                           ),
                                                         ),
@@ -1742,7 +1520,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                           child: _ToneArm(
                             isPlaying: isPlaying,
                             progress: playbackProgress,
-                            onTap: isLoading ? null : onPlayPause,
+                            onTap: buttonEnabled ? onPlayPause : null,
                           ),
                         ),
                       ],
@@ -1813,7 +1591,8 @@ class _TurntablePlayerCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        badgeText,
+                        // Show loading state in the badge when stream is starting
+                        isStreamStarting ? 'Loading…' : 'Now Playing',
                         style: const TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 11,
@@ -1856,7 +1635,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                       child: _ScrubbableWaveform(
                         heights: _waveformHeights,
                         progress: playbackProgress,
-                        onSeek: controller == null ? null : onSeekToFraction,
+                        onSeek: nowPlaying == null ? null : onSeekToFraction,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1878,7 +1657,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                   children: [
                     _SeekButton(
                       seconds: -10,
-                      onPressed: controller == null ? null : onSeekBackward,
+                      onPressed: nowPlaying == null ? null : onSeekBackward,
                     ),
                     Container(
                       width: playBtnSize,
@@ -1888,31 +1667,56 @@ class _TurntablePlayerCard extends StatelessWidget {
                         color: Colors.black,
                       ),
                       child: IconButton(
-                        onPressed: isLoading ? null : onPlayPause,
-                        icon:
-                            isLoading
-                                ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.4,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
-                                    ),
+                        // Button is always tappable unless we're in the pure
+                        // search phase (isLoading && !isStreamStarting).
+                        onPressed: buttonEnabled ? onPlayPause : null,
+                        icon: showSearchSpinner
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
                                   ),
-                                )
-                                : Icon(
-                                  isPlaying
-                                      ? Icons.pause_rounded
-                                      : Icons.play_arrow,
-                                  color: Colors.white,
-                                  size: playBtnSize * 0.47,
                                 ),
+                              )
+                            : isStreamStarting
+                                // Stream loading: show a smaller spinner but
+                                // with a stop-square overlay so user knows
+                                // they can tap to cancel.
+                                ? Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      SizedBox(
+                                        width: playBtnSize * 0.42,
+                                        height: playBtnSize * 0.42,
+                                        child: const CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(
+                                            Color(0x88FFFFFF),
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.stop_rounded,
+                                        color: Colors.white,
+                                        size: playBtnSize * 0.28,
+                                      ),
+                                    ],
+                                  )
+                                : Icon(
+                                    isPlaying
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow,
+                                    color: Colors.white,
+                                    size: playBtnSize * 0.47,
+                                  ),
                       ),
                     ),
                     _SeekButton(
                       seconds: 10,
-                      onPressed: controller == null ? null : onSeekForward,
+                      onPressed: nowPlaying == null ? null : onSeekForward,
                     ),
                   ],
                 ),
@@ -1923,18 +1727,25 @@ class _TurntablePlayerCard extends StatelessWidget {
       );
     }
 
-    if (musicController == null) {
+    if (nowPlaying == null) {
       return buildCard(false, basePosition, baseDuration);
     }
-    return AnimatedBuilder(
-      animation: musicController,
-      builder: (context, _) {
-        final position = musicController.value.position;
-        final duration =
-            musicController.metadata.duration > Duration.zero
-                ? musicController.metadata.duration
-                : baseDuration;
-        return buildCard(musicController.value.isPlaying, position, duration);
+    return StreamBuilder<Duration>(
+      stream: player.positionStream,
+      builder: (context, positionSnap) {
+        final position = positionSnap.data ?? audio.position;
+        return StreamBuilder<PlayerState>(
+          stream: player.playerStateStream,
+          builder: (context, stateSnap) {
+            final state = stateSnap.data;
+            final playing = state?.playing ?? audio.isPlaying;
+            final duration =
+                (player.duration != null && player.duration! > Duration.zero)
+                    ? player.duration!
+                    : baseDuration;
+            return buildCard(playing, position, duration);
+          },
+        );
       },
     );
   }
@@ -1948,8 +1759,9 @@ class _TurntablePlayerCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SearchConsoleCard
+// Everything below this line is unchanged from the original file.
 // ─────────────────────────────────────────────────────────────────────────────
+
 class _SearchConsoleCard extends StatefulWidget {
   const _SearchConsoleCard({
     required this.lyricController,
@@ -2444,12 +2256,11 @@ class _CircularThumbnail extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small deck widgets
+// Small deck widgets (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DeckScrew extends StatelessWidget {
   const _DeckScrew();
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2466,9 +2277,7 @@ class _DeckScrew extends StatelessWidget {
 
 class _DeckKnob extends StatelessWidget {
   const _DeckKnob({required this.size});
-
   final double size;
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2489,10 +2298,8 @@ class _DeckKnob extends StatelessWidget {
 
 class _DeckLoopButton extends StatelessWidget {
   const _DeckLoopButton({required this.isLooping, required this.onPressed});
-
   final bool isLooping;
   final VoidCallback? onPressed;
-
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -2522,8 +2329,7 @@ class _DeckLoopButton extends StatelessWidget {
           child: Icon(
             isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded,
             size: 18,
-            color:
-                isLooping ? const Color(0xFF111111) : const Color(0xFF4E4E4E),
+            color: isLooping ? const Color(0xFF111111) : const Color(0xFF4E4E4E),
           ),
         ),
       ),
@@ -2537,7 +2343,6 @@ class _ToneArm extends StatelessWidget {
     required this.progress,
     required this.onTap,
   });
-
   final bool isPlaying;
   final double progress;
   final VoidCallback? onTap;
@@ -2566,10 +2371,7 @@ class _ToneArm extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: [Color(0xFFF2F2F2), Color(0xFF9D9D9D)],
                   ),
-                  border: Border.all(
-                    color: const Color(0xFF6B6B6B),
-                    width: 1.4,
-                  ),
+                  border: Border.all(color: const Color(0xFF6B6B6B), width: 1.4),
                 ),
                 child: Center(
                   child: Container(
@@ -2578,10 +2380,7 @@ class _ToneArm extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: const Color(0xFFD8D8D8),
-                      border: Border.all(
-                        color: const Color(0xFF818181),
-                        width: 1.2,
-                      ),
+                      border: Border.all(color: const Color(0xFF818181), width: 1.2),
                     ),
                   ),
                 ),
@@ -2607,10 +2406,7 @@ class _ToneArm extends StatelessWidget {
                           colors: [Color(0xFFF3F3F3), Color(0xFF9F9F9F)],
                         ),
                         borderRadius: BorderRadius.circular(99),
-                        border: Border.all(
-                          color: const Color(0xFF707070),
-                          width: 1,
-                        ),
+                        border: Border.all(color: const Color(0xFF707070), width: 1),
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -2620,10 +2416,7 @@ class _ToneArm extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: const Color(0xFFF4F4F4),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: const Color(0xFF707070),
-                          width: 1,
-                        ),
+                        border: Border.all(color: const Color(0xFF707070), width: 1),
                       ),
                     ),
                   ],
@@ -2656,7 +2449,6 @@ class _ScrubbableWaveform extends StatelessWidget {
     required this.progress,
     required this.onSeek,
   });
-
   final List<double> heights;
   final double progress;
   final ValueChanged<double>? onSeek;
@@ -2673,11 +2465,9 @@ class _ScrubbableWaveform extends StatelessWidget {
         final width = constraints.maxWidth;
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTapDown: (details) => _handleSeek(details.localPosition, width),
-          onHorizontalDragStart:
-              (details) => _handleSeek(details.localPosition, width),
-          onHorizontalDragUpdate:
-              (details) => _handleSeek(details.localPosition, width),
+          onTapDown: (d) => _handleSeek(d.localPosition, width),
+          onHorizontalDragStart: (d) => _handleSeek(d.localPosition, width),
+          onHorizontalDragUpdate: (d) => _handleSeek(d.localPosition, width),
           child: SizedBox(
             height: 32,
             child: Row(
@@ -2692,10 +2482,9 @@ class _ScrubbableWaveform extends StatelessWidget {
                       width: 4,
                       height: heights[index],
                       decoration: BoxDecoration(
-                        color:
-                            isActive
-                                ? const Color(0xFF141414)
-                                : const Color(0xFFD6D6D6),
+                        color: isActive
+                            ? const Color(0xFF141414)
+                            : const Color(0xFFD6D6D6),
                         borderRadius: BorderRadius.circular(99),
                       ),
                     ),
@@ -2711,14 +2500,13 @@ class _ScrubbableWaveform extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _GenerateSongSliderCard  — FIXED: drag must start ON the handle
+// _GenerateSongSliderCard (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 class _GenerateSongSliderCard extends StatefulWidget {
   const _GenerateSongSliderCard({
     required this.compact,
     required this.onCompleted,
   });
-
   final bool compact;
   final Future<void> Function() onCompleted;
 
@@ -2736,12 +2524,9 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   double _progress = 0;
   bool _isSubmitting = false;
   bool _isDragging = false;
-
-  // ── NEW: handle-anchored drag state ──────────────────────────────────────
-  bool _isDragValid = false;   // true only when drag started on the handle
-  double _dragStartDx = 0;     // x position where the drag began
-  double _dragStartProgress = 0; // progress value at drag start
-  // ─────────────────────────────────────────────────────────────────────────
+  bool _isDragValid = false;
+  double _dragStartDx = 0;
+  double _dragStartProgress = 0;
 
   late AnimationController _shimmerController;
 
@@ -2761,21 +2546,14 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
   }
 
   double _maxTravel(BoxConstraints c) =>
-      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(
-        0.0,
-        double.infinity,
-      );
+      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(0.0, double.infinity);
 
-  // ── REPLACED: only move handle via delta from drag-start position ─────────
   void _onDragStart(DragStartDetails details, BoxConstraints c) {
     if (_isSubmitting) return;
-
     final maxTravel = _maxTravel(c);
     final handleLeft = _trackPadding + maxTravel * _progress;
     final handleRight = handleLeft + _handleSize;
     final tapX = details.localPosition.dx;
-
-    // Only activate if the finger landed on the handle
     if (tapX >= handleLeft && tapX <= handleRight) {
       _isDragValid = true;
       _dragStartDx = tapX;
@@ -2789,29 +2567,23 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
 
   void _onDragUpdate(DragUpdateDetails details, BoxConstraints c) {
     if (_isSubmitting || !_isDragValid) return;
-
     final maxTravel = _maxTravel(c);
     if (maxTravel <= 0) return;
-
     final delta = details.localPosition.dx - _dragStartDx;
     final t = (_dragStartProgress + delta / maxTravel).clamp(0.0, 1.0);
     if (t == _progress) return;
-
     setState(() {
       _progress = t;
       _isDragging = true;
     });
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _onDragEnd() async {
     setState(() {
       _isDragging = false;
-      _isDragValid = false; // reset validity on every lift
+      _isDragValid = false;
     });
-
     if (_isSubmitting) return;
-
     if (_progress >= _completeThreshold) {
       setState(() {
         _progress = 1;
@@ -2850,8 +2622,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
             animation: _shimmerController,
             builder: (_, __) {
               final bandW = c.maxWidth * 0.30;
-              final x =
-                  -bandW + (_shimmerController.value * (c.maxWidth + bandW));
+              final x = -bandW + (_shimmerController.value * (c.maxWidth + bandW));
               return CustomPaint(
                 painter: _ShimmerPainter(x: x, bandWidth: bandW),
               );
@@ -2876,24 +2647,21 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors:
-                _isDragging
-                    ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
-                    : [const Color(0xFF383838), const Color(0xFF262626)],
+            colors: _isDragging
+                ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
+                : [const Color(0xFF383838), const Color(0xFF262626)],
           ),
           borderRadius: BorderRadius.circular(17),
           border: Border.all(
-            color:
-                _isDragging
-                    ? Colors.white.withValues(alpha: 0.45)
-                    : const Color(0xFF565656),
+            color: _isDragging
+                ? Colors.white.withValues(alpha: 0.45)
+                : const Color(0xFF565656),
           ),
           boxShadow: [
             BoxShadow(
-              color:
-                  _isDragging
-                      ? const Color(0xFF11F08A).withValues(alpha: 0.35)
-                      : Colors.black.withValues(alpha: 0.4),
+              color: _isDragging
+                  ? const Color(0xFF11F08A).withValues(alpha: 0.35)
+                  : Colors.black.withValues(alpha: 0.4),
               blurRadius: _isDragging ? 16 : 8,
               offset: Offset(0, _isDragging ? 4 : 2),
             ),
@@ -2901,23 +2669,22 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          child:
-              _isSubmitting
-                  ? const SizedBox(
-                    key: ValueKey('loading'),
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      valueColor: AlwaysStoppedAnimation(Colors.white),
-                    ),
-                  )
-                  : Icon(
-                    Icons.auto_awesome_rounded,
-                    key: const ValueKey('icon'),
-                    size: 22,
-                    color: _isDragging ? Colors.black : Colors.white,
+          child: _isSubmitting
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
                   ),
+                )
+              : Icon(
+                  Icons.auto_awesome_rounded,
+                  key: const ValueKey('icon'),
+                  size: 22,
+                  color: _isDragging ? Colors.black : Colors.white,
+                ),
         ),
       ),
     );
@@ -2944,10 +2711,9 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                       Icon(
                         Icons.auto_awesome_rounded,
                         size: titleSize + 1,
-                        color:
-                            _isDragging
-                                ? const Color(0xFF11F08A)
-                                : const Color(0xFFCCCCCC),
+                        color: _isDragging
+                            ? const Color(0xFF11F08A)
+                            : const Color(0xFFCCCCCC),
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -2955,18 +2721,17 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                           _isSubmitting
                               ? 'Opening generator…'
                               : _isDragging
-                              ? 'Slide to create 🎵 '
-                              : 'Generate My Song',
+                                  ? 'Slide to create 🎵 '
+                                  : 'Generate My Song',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: titleSize,
                             fontWeight: FontWeight.w900,
-                            color:
-                                _isDragging
-                                    ? const Color(0xFF11F08A)
-                                    : Colors.white,
+                            color: _isDragging
+                                ? const Color(0xFF11F08A)
+                                : Colors.white,
                           ),
                         ),
                       ),
@@ -3032,7 +2797,6 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           );
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            // ── use the new handle-anchored handlers ──
             onHorizontalDragStart: (d) => _onDragStart(d, constraints),
             onHorizontalDragUpdate: (d) => _onDragUpdate(d, constraints),
             onHorizontalDragEnd: (_) => _onDragEnd(),
@@ -3073,7 +2837,6 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
 
 class _ShimmerPainter extends CustomPainter {
   const _ShimmerPainter({required this.x, required this.bandWidth});
-
   final double x;
   final double bandWidth;
 
@@ -3104,7 +2867,6 @@ class _ShimmerPainter extends CustomPainter {
 
 class _SeekButton extends StatelessWidget {
   const _SeekButton({required this.seconds, required this.onPressed});
-
   final int seconds;
   final VoidCallback? onPressed;
 
@@ -3143,7 +2905,6 @@ class _HeaderQuickMenu extends StatelessWidget {
     required this.onOpenJoinParty,
     required this.onOpenDownloads,
   });
-
   final bool compact;
   final VoidCallback onOpenHostParty;
   final VoidCallback onOpenJoinParty;
@@ -3169,30 +2930,29 @@ class _HeaderQuickMenu extends StatelessWidget {
       color: const Color(0xFFF4EFE7),
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      itemBuilder:
-          (context) => const [
-            PopupMenuItem<_HeaderMenuAction>(
-              value: _HeaderMenuAction.hostParty,
-              child: _HeaderMenuItem(
-                icon: Icons.celebration_rounded,
-                label: 'Host a party',
-              ),
-            ),
-            PopupMenuItem<_HeaderMenuAction>(
-              value: _HeaderMenuAction.joinParty,
-              child: _HeaderMenuItem(
-                icon: Icons.group_add_rounded,
-                label: 'Join a party',
-              ),
-            ),
-            PopupMenuItem<_HeaderMenuAction>(
-              value: _HeaderMenuAction.downloads,
-              child: _HeaderMenuItem(
-                icon: Icons.download_rounded,
-                label: 'Downloads',
-              ),
-            ),
-          ],
+      itemBuilder: (context) => const [
+        PopupMenuItem<_HeaderMenuAction>(
+          value: _HeaderMenuAction.hostParty,
+          child: _HeaderMenuItem(
+            icon: Icons.celebration_rounded,
+            label: 'Host a party',
+          ),
+        ),
+        PopupMenuItem<_HeaderMenuAction>(
+          value: _HeaderMenuAction.joinParty,
+          child: _HeaderMenuItem(
+            icon: Icons.group_add_rounded,
+            label: 'Join a party',
+          ),
+        ),
+        PopupMenuItem<_HeaderMenuAction>(
+          value: _HeaderMenuAction.downloads,
+          child: _HeaderMenuItem(
+            icon: Icons.download_rounded,
+            label: 'Downloads',
+          ),
+        ),
+      ],
       child: Container(
         height: compact ? 28 : 20,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -3220,7 +2980,6 @@ enum _HeaderMenuAction { hostParty, joinParty, downloads }
 
 class _HeaderMenuItem extends StatelessWidget {
   const _HeaderMenuItem({required this.icon, required this.label});
-
   final IconData icon;
   final String label;
 
@@ -3260,11 +3019,10 @@ class _VinylPainter extends CustomPainter {
           stops: [0.2, 0.72, 1],
         ).createShader(Rect.fromCircle(center: center, radius: radius)),
     );
-    final groovePaint =
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..color = const Color(0x14FFFFFF)
-          ..strokeWidth = 1;
+    final groovePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = const Color(0x14FFFFFF)
+      ..strokeWidth = 1;
     for (double groove = radius * 0.35; groove < radius * 0.96; groove += 9) {
       canvas.drawCircle(center, groove, groovePaint);
     }

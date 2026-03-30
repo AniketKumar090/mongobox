@@ -7,27 +7,32 @@ import 'package:just_audio/just_audio.dart';
 
 import 'lyric_audio_playback.dart';
 
-/// Plain [just_audio] fallback when [AudioService] is not initialized (e.g.
-/// desktop or failed init).
+/// [audio_service] + [just_audio] — required on Android for reliable background
+/// playback (foreground media service) and system media controls.
 ///
-/// Fix log (2025):
-///   - Activate the audio session BEFORE calling [AudioPlayer.play], not after.
-///     On iOS, calling play() before the session is active silently discards
-///     audio even if the source loaded successfully.
-///   - Broadened seek safety: guard against seeking past the resolved duration.
-///   - [hardStopAndReset] now deactivates the session before swapping players
-///     so there is no overlap window where two players compete for the session.
-class BackgroundAudioPlayerService implements LyricAudioPlayback {
-  BackgroundAudioPlayerService._() {
-    _bindPlayer(_player);
+/// Fix log (2025-Q2):
+///   - Activate AudioSession BEFORE calling play() — on iOS this is mandatory.
+///   - On iOS, Android-signed URLs are rewritten by [YouTubeAudioStreamService]
+///     before reaching here, so no additional URL surgery needed.
+///   - [playSources] now throws the last error only after ALL sources have been
+///     tried, giving the caller accurate failure info.
+///   - [stop] clears _hasLoadedSource immediately so subsequent isPlaying /
+///     position checks return sane values.
+///   - [hardStopAndReset] deactivates the audio session before swapping players
+///     so the new player can acquire it cleanly.
+///   - [_isPlayableUrl] rejects empty / non-http(s) strings early.
+class LyricBackgroundAudioHandler extends BaseAudioHandler
+    with SeekHandler
+    implements LyricAudioPlayback {
+  LyricBackgroundAudioHandler() {
+    _bindPlayerListeners();
+    _bindPositionTracking();
   }
-
-  static final BackgroundAudioPlayerService instance =
-      BackgroundAudioPlayerService._();
 
   AudioPlayer _player = AudioPlayer();
   bool _loopEnabled = false;
   StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<PlaybackState>? _playbackEventSubscription;
   Duration _trackedPosition = Duration.zero;
   bool _hasLoadedSource = false;
 
@@ -44,18 +49,55 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     return live > _trackedPosition ? live : _trackedPosition;
   }
 
-  void _bindPlayer(AudioPlayer player) {
+  void _bindPositionTracking() {
     _positionSubscription?.cancel();
-    _positionSubscription = player.positionStream.listen(
+    _positionSubscription = _player.positionStream.listen(
       (p) => _trackedPosition = p,
       onError: (_) {},
       cancelOnError: false,
     );
   }
 
-  Duration _capturePosition(AudioPlayer player) {
+  void _bindPlayerListeners() {
+    _playbackEventSubscription?.cancel();
+    _playbackEventSubscription = _player.playbackEventStream
+        .map(_transformEvent)
+        .listen(playbackState.add, onError: (_) {}, cancelOnError: false);
+  }
+
+  PlaybackState _transformEvent(PlaybackEvent event) {
+    return PlaybackState(
+      controls: [
+        MediaControl.rewind,
+        if (_player.playing) MediaControl.pause else MediaControl.play,
+        MediaControl.stop,
+        MediaControl.fastForward,
+      ],
+      systemActions: const {
+        MediaAction.seek,
+        MediaAction.seekForward,
+        MediaAction.seekBackward,
+      },
+      androidCompactActionIndices: const [0, 1, 3],
+      processingState:
+          const {
+            ProcessingState.idle: AudioProcessingState.idle,
+            ProcessingState.loading: AudioProcessingState.loading,
+            ProcessingState.buffering: AudioProcessingState.buffering,
+            ProcessingState.ready: AudioProcessingState.ready,
+            ProcessingState.completed: AudioProcessingState.completed,
+          }[_player.processingState]!,
+      playing: _player.playing,
+      updatePosition: _player.position,
+      bufferedPosition: _player.bufferedPosition,
+      speed: _player.speed,
+      queueIndex: event.currentIndex,
+    );
+  }
+
+  Duration _capturePosition(AudioPlayer p) {
     if (!_hasLoadedSource) return Duration.zero;
-    final live = player.position;
+    final live = p.position;
     final captured = live > _trackedPosition ? live : _trackedPosition;
     _trackedPosition = captured;
     return captured;
@@ -70,18 +112,16 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
         (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
-  /// Activate the AVAudioSession (iOS) / AudioFocus (Android) before we
-  /// attempt to play.  This must happen before [AudioPlayer.play], otherwise
-  /// iOS silently discards audio output.
+  /// Activate AVAudioSession (iOS) / AudioFocus (Android).
+  /// MUST be called before [AudioPlayer.play].
   Future<void> _activateSession() async {
     if (kIsWeb) return;
     try {
       final session = await AudioSession.instance;
-      // Configure for music playback (ducking, headphone unplug, etc.)
       await session.configure(const AudioSessionConfiguration.music());
       await session.setActive(true);
     } catch (e) {
-      debugPrint('[BackgroundAudio] Audio session activation failed: $e');
+      debugPrint('[BackgroundHandler] Audio session activation failed: $e');
     }
   }
 
@@ -95,13 +135,17 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     _hasLoadedSource = false;
     _trackedPosition = initialPosition ?? Duration.zero;
 
-    // ── Activate session FIRST ──────────────────────────────────────────────
+    if (mediaItem != null) {
+      this.mediaItem.add(mediaItem);
+    }
+
+    // Activate session before any play() call.
     await _activateSession();
 
     for (final source in sources) {
       final trimmed = source.url.trim();
       if (!_isPlayableUrl(trimmed)) {
-        debugPrint('[BackgroundAudio] Skipping invalid URL: ${source.url}');
+        debugPrint('[BackgroundHandler] Skipping invalid URL: ${source.url}');
         continue;
       }
 
@@ -128,44 +172,59 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
         final playFuture = _player.play();
         unawaited(
           playFuture.catchError((Object error, StackTrace stackTrace) {
-            debugPrint('[BackgroundAudio] Playback error after start: $error');
+            debugPrint(
+              '[BackgroundHandler] Playback error after start: $error',
+            );
             debugPrint('$stackTrace');
           }),
         );
-        debugPrint('[BackgroundAudio] Playback started: $trimmed');
-        return;
+        debugPrint('[BackgroundHandler] Playback started: $trimmed');
+        return; // ← success, early exit
       } catch (e) {
         lastError = e;
-        debugPrint('[BackgroundAudio] Failed source: $trimmed');
-        debugPrint('[BackgroundAudio] Error: $e');
+        _hasLoadedSource = false; // reset so next source starts clean
+        debugPrint(
+          '[BackgroundHandler] Failed source: ${trimmed.substring(0, trimmed.length.clamp(0, 80))}…',
+        );
+        debugPrint('[BackgroundHandler] Error: $e');
 
         final msg = e.toString();
         if (msg.contains('NSURLErrorDomain')) {
           if (msg.contains('-1013')) {
             debugPrint(
-              '[BackgroundAudio] Hint: redirect loop or non-final stream URL.',
+              '[BackgroundHandler] Hint: redirect loop or non-final stream URL.',
             );
           } else if (msg.contains('-1015')) {
             debugPrint(
-              '[BackgroundAudio] Hint: SSL/TLS decode error or expired URL.',
+              '[BackgroundHandler] Hint: SSL/TLS decode error or expired URL.',
+            );
+          } else if (msg.contains('-1')) {
+            debugPrint(
+              '[BackgroundHandler] Hint: iOS CDN auth mismatch — URL may have wrong client token.',
             );
           }
         }
-        // Try the next source in the list.
+        if (msg.contains('-11828')) {
+          debugPrint(
+            '[BackgroundHandler] Hint: (-11828) = unsupported codec on iOS (WebM/Opus). Skipping.',
+          );
+        }
+        // Continue to next source.
       }
     }
 
+    // All sources failed.
     if (lastError != null) throw lastError;
   }
 
   @override
   Future<void> stop() async {
+    _hasLoadedSource = false; // clear immediately so UI reflects stopped state
+    _trackedPosition = Duration.zero;
     try {
-      _capturePosition(_player);
       await _player.stop();
     } catch (_) {}
-    _hasLoadedSource = false;
-    _trackedPosition = Duration.zero;
+    await super.stop();
   }
 
   @override
@@ -173,7 +232,6 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     final oldPlayer = _player;
     final stopPosition = _capturePosition(oldPlayer);
 
-    // Silence + stop the old player synchronously before swapping.
     try {
       await oldPlayer.setVolume(0);
     } catch (_) {}
@@ -186,17 +244,15 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     } catch (_) {}
     final stoppedPosition = _capturePosition(oldPlayer);
 
-    // Deactivate the audio session so the new player can acquire it cleanly.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         final session = await AudioSession.instance;
         await session.setActive(false);
       } catch (e) {
-        debugPrint('[BackgroundAudio] Audio session deactivation failed: $e');
+        debugPrint('[BackgroundHandler] Session deactivation failed: $e');
       }
     }
 
-    // Swap to a fresh player.
     _player = AudioPlayer();
     final finalPosition = [
       stoppedPosition,
@@ -205,13 +261,12 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     ].reduce((a, b) => a > b ? a : b);
     _trackedPosition = Duration.zero;
     _hasLoadedSource = false;
-    _bindPlayer(_player);
-
+    _bindPlayerListeners();
+    _bindPositionTracking();
     try {
       await _player.setLoopMode(_loopEnabled ? LoopMode.one : LoopMode.off);
     } catch (_) {}
 
-    // Dispose the old player in the background — heavyweight async op.
     Future<void>(() async {
       try {
         await oldPlayer.seek(Duration.zero);
@@ -233,11 +288,12 @@ class BackgroundAudioPlayerService implements LyricAudioPlayback {
     } catch (_) {}
   }
 
-  Future<void> dispose() async {
-    await _positionSubscription?.cancel();
-    _positionSubscription = null;
-    try {
-      await _player.dispose();
-    } catch (_) {}
-  }
+  @override
+  Future<void> play() => _player.play();
+
+  @override
+  Future<void> pause() => _player.pause();
+
+  @override
+  Future<void> seek(Duration position) => _player.seek(position);
 }
