@@ -1438,7 +1438,7 @@ class _MetaChip extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // _TurntablePlayerCard
 // ─────────────────────────────────────────────────────────────────────────────
-class _TurntablePlayerCard extends StatelessWidget {
+class _TurntablePlayerCard extends StatefulWidget {
   const _TurntablePlayerCard({
     required this.audio,
     required this.nowPlaying,
@@ -1499,8 +1499,36 @@ class _TurntablePlayerCard extends StatelessWidget {
   ];
 
   @override
+  State<_TurntablePlayerCard> createState() => _TurntablePlayerCardState();
+}
+
+class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spinFrameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _spinFrameController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _spinFrameController.dispose();
+    super.dispose();
+  }
+
+  double _rotationAngleFor(Duration position, Duration duration) {
+    if (duration.inMilliseconds == 0) return 0.0;
+    return (position.inMilliseconds / 12000) * math.pi * 2;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final player = audio.player;
+    final player = widget.audio.player;
     final basePosition = const Duration(minutes: 1, seconds: 54);
     final baseDuration = const Duration(minutes: 3, seconds: 35);
     final resolvedDuration = player.duration;
@@ -1511,11 +1539,12 @@ class _TurntablePlayerCard extends StatelessWidget {
     final baseProgress =
         effectiveDuration.inMilliseconds <= 0
             ? 0.54
-            : (audio.position.inMilliseconds / effectiveDuration.inMilliseconds)
+            : (widget.audio.position.inMilliseconds /
+                    effectiveDuration.inMilliseconds)
                 .clamp(0.0, 1.0);
-    final title = nowPlaying?.trackName ?? 'The Suffering';
-    final artist = nowPlaying?.artistName ?? 'LyricQSK';
-    final trackCount = savedCount.toString().padLeft(3, '0');
+    final title = widget.nowPlaying?.trackName ?? 'The Suffering';
+    final artist = widget.nowPlaying?.artistName ?? 'LyricQSK';
+    final trackCount = widget.savedCount.toString().padLeft(3, '0');
 
     Widget buildCard(bool isPlaying, Duration position, Duration duration) {
       final playbackProgress =
@@ -1525,18 +1554,13 @@ class _TurntablePlayerCard extends StatelessWidget {
                 0.0,
                 1.0,
               );
-      final rotationAngle =
-          duration.inMilliseconds == 0
-              ? 0.0
-              : (position.inMilliseconds / 12000) * math.pi * 2;
-
       // Determine what the center button should show:
       //   • isLoading (search phase)  → spinner, button disabled
       //   • isStreamStarting          → spinner, but button IS tappable (cancel)
       //   • playing                   → pause icon
       //   • paused / completed / idle → play icon
-      final showSearchSpinner = isLoading && !isStreamStarting;
-      final buttonEnabled = !isLoading || isStreamStarting;
+      final showSearchSpinner = widget.isLoading && !widget.isStreamStarting;
+      final buttonEnabled = !widget.isLoading || widget.isStreamStarting;
 
       return LayoutBuilder(
         builder: (context, constraints) {
@@ -1597,8 +1621,11 @@ class _TurntablePlayerCard extends StatelessWidget {
                           top: 18,
                           left: 18,
                           child: _DeckLoopButton(
-                            isLooping: isLooping,
-                            onPressed: nowPlaying == null ? null : onToggleLoop,
+                            isLooping: widget.isLooping,
+                            onPressed:
+                                widget.nowPlaying == null
+                                    ? null
+                                    : widget.onToggleLoop,
                           ),
                         ),
                         Positioned(
@@ -1630,113 +1657,140 @@ class _TurntablePlayerCard extends StatelessWidget {
                                     child: Stack(
                                       alignment: Alignment.center,
                                       children: [
-                                        Transform.rotate(
-                                          angle: rotationAngle,
-                                          child: const CustomPaint(
-                                            painter: _VinylPainter(),
-                                            child: SizedBox.expand(),
-                                          ),
-                                        ),
-                                        Transform.rotate(
-                                          angle: rotationAngle,
-                                          child: Container(
-                                            width: labelSize,
-                                            height: labelSize,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              gradient: const LinearGradient(
-                                                begin: Alignment.topCenter,
-                                                end: Alignment.bottomCenter,
-                                                colors: [
-                                                  Color(0xFFF9F8F4),
-                                                  Color(0xFFDBD8D2),
-                                                ],
-                                              ),
-                                            ),
-                                            child: SizedBox(
-                                              width: labelSize,
-                                              height: labelSize,
-                                              child: ClipOval(
-                                                clipBehavior:
-                                                    Clip.antiAliasWithSaveLayer,
-                                                child:
-                                                    nowPlaying != null
-                                                        ? Image.network(
-                                                          'https://img.youtube.com/vi/${nowPlaying!.videoId}/0.jpg',
-                                                          width: labelSize,
-                                                          height: labelSize,
-                                                          fit: BoxFit.cover,
-                                                          filterQuality:
-                                                              FilterQuality
-                                                                  .high,
-                                                          scale: 0.85, // Zoom in effect for the turntable label as well
-                                                          errorBuilder:
-                                                              (
-                                                                _,
-                                                                __,
-                                                                ___,
-                                                              ) => Container(
-                                                                color:
-                                                                    const Color(
-                                                                      0xFFD8D4CC,
-                                                                    ),
-                                                                child: Center(
-                                                                  child: Text(
-                                                                    'LYRICQSK',
-                                                                    style: TextStyle(
-                                                                      fontFamily:
-                                                                          'Inter',
-                                                                      fontSize:
-                                                                          labelSize *
-                                                                          0.12,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w700,
-                                                                      color: const Color(
-                                                                        0xFF6B6B6B,
+                                        AnimatedBuilder(
+                                          animation: _spinFrameController,
+                                          builder: (context, child) {
+                                            final livePosition =
+                                                isPlaying
+                                                    ? widget.audio.position
+                                                    : position;
+                                            final liveRotationAngle =
+                                                _rotationAngleFor(
+                                                  livePosition,
+                                                  duration,
+                                                );
+                                            return Stack(
+                                              alignment: Alignment.center,
+                                              children: [
+                                                Transform.rotate(
+                                                  angle: liveRotationAngle,
+                                                  child: const CustomPaint(
+                                                    painter: _VinylPainter(),
+                                                    child: SizedBox.expand(),
+                                                  ),
+                                                ),
+                                                Transform.rotate(
+                                                  angle: liveRotationAngle,
+                                                  child: Container(
+                                                    width: labelSize,
+                                                    height: labelSize,
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      gradient:
+                                                          const LinearGradient(
+                                                            begin:
+                                                                Alignment
+                                                                    .topCenter,
+                                                            end:
+                                                                Alignment
+                                                                    .bottomCenter,
+                                                            colors: [
+                                                              Color(0xFFF9F8F4),
+                                                              Color(0xFFDBD8D2),
+                                                            ],
+                                                          ),
+                                                    ),
+                                                    child: SizedBox(
+                                                      width: labelSize,
+                                                      height: labelSize,
+                                                      child: ClipOval(
+                                                        clipBehavior:
+                                                            Clip
+                                                                .antiAliasWithSaveLayer,
+                                                        child:
+                                                            widget.nowPlaying !=
+                                                                    null
+                                                                ? Transform.scale(
+                                                                  scale: 1.3,
+                                                                  child: Image.network(
+                                                                    'https://img.youtube.com/vi/${widget.nowPlaying!.videoId}/0.jpg',
+                                                                    width:
+                                                                        labelSize,
+                                                                    height:
+                                                                        labelSize,
+                                                                    fit:
+                                                                        BoxFit
+                                                                            .cover,
+                                                                    filterQuality:
+                                                                        FilterQuality
+                                                                            .high,
+                                                                    errorBuilder:
+                                                                        (
+                                                                          _,
+                                                                          __,
+                                                                          ___,
+                                                                        ) => Container(
+                                                                          color:
+                                                                              const Color(
+                                                                                0xFFD8D4CC,
+                                                                              ),
+                                                                          child:
+                                                                              Center(
+                                                                                child: Text(
+                                                                                  'LYRICQSK',
+                                                                                  style: TextStyle(
+                                                                                    fontFamily: 'Inter',
+                                                                                    fontSize: labelSize * 0.12,
+                                                                                    fontWeight: FontWeight.w700,
+                                                                                    color: const Color(0xFF6B6B6B),
+                                                                                  ),
+                                                                                ),
+                                                                              ),
+                                                                        ),
+                                                                  ),
+                                                                )
+                                                                : Transform.rotate(
+                                                                  angle:
+                                                                      math.pi,
+                                                                  child: Center(
+                                                                    child: Text(
+                                                                      artist.length >
+                                                                              12
+                                                                          ? artist
+                                                                              .substring(
+                                                                                0,
+                                                                                12,
+                                                                              )
+                                                                              .toUpperCase()
+                                                                          : artist
+                                                                              .toUpperCase(),
+                                                                      textAlign:
+                                                                          TextAlign
+                                                                              .center,
+                                                                      style: TextStyle(
+                                                                        fontFamily:
+                                                                            'Inter',
+                                                                        fontSize:
+                                                                            labelFontSize,
+                                                                        fontWeight:
+                                                                            FontWeight.w700,
+                                                                        color:
+                                                                            const Color(
+                                                                              0xFF6B6B6B,
+                                                                            ),
+                                                                        letterSpacing:
+                                                                            0.6,
                                                                       ),
                                                                     ),
                                                                   ),
                                                                 ),
-                                                              ),
-                                                        )
-                                                        : Transform.rotate(
-                                                          angle: math.pi,
-                                                          child: Center(
-                                                            child: Text(
-                                                              artist.length > 12
-                                                                  ? artist
-                                                                      .substring(
-                                                                        0,
-                                                                        12,
-                                                                      )
-                                                                      .toUpperCase()
-                                                                  : artist
-                                                                      .toUpperCase(),
-                                                              textAlign:
-                                                                  TextAlign
-                                                                      .center,
-                                                              style: TextStyle(
-                                                                fontFamily:
-                                                                    'Inter',
-                                                                fontSize:
-                                                                    labelFontSize,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w700,
-                                                                color:
-                                                                    const Color(
-                                                                      0xFF6B6B6B,
-                                                                    ),
-                                                                letterSpacing:
-                                                                    0.6,
-                                                              ),
-                                                            ),
-                                                          ),
-                                                        ),
-                                              ),
-                                            ),
-                                          ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          },
                                         ),
                                       ],
                                     ),
@@ -1794,7 +1848,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                           child: _ToneArm(
                             isPlaying: isPlaying,
                             progress: playbackProgress,
-                            onTap: buttonEnabled ? onPlayPause : null,
+                            onTap: buttonEnabled ? widget.onPlayPause : null,
                           ),
                         ),
                       ],
@@ -1866,7 +1920,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                       ),
                       child: Text(
                         // Show loading state in the badge when stream is starting
-                        isStreamStarting ? 'Loading…' : 'Now Playing',
+                        widget.isStreamStarting ? 'Loading…' : 'Now Playing',
                         style: const TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 11,
@@ -1907,9 +1961,12 @@ class _TurntablePlayerCard extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: _ScrubbableWaveform(
-                        heights: _waveformHeights,
+                        heights: _TurntablePlayerCard._waveformHeights,
                         progress: playbackProgress,
-                        onSeek: nowPlaying == null ? null : onSeekToFraction,
+                        onSeek:
+                            widget.nowPlaying == null
+                                ? null
+                                : widget.onSeekToFraction,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1931,7 +1988,10 @@ class _TurntablePlayerCard extends StatelessWidget {
                   children: [
                     _SeekButton(
                       seconds: -10,
-                      onPressed: nowPlaying == null ? null : onSeekBackward,
+                      onPressed:
+                          widget.nowPlaying == null
+                              ? null
+                              : widget.onSeekBackward,
                     ),
                     Container(
                       width: playBtnSize,
@@ -1943,7 +2003,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                       child: IconButton(
                         // Button is always tappable unless we're in the pure
                         // search phase (isLoading && !isStreamStarting).
-                        onPressed: buttonEnabled ? onPlayPause : null,
+                        onPressed: buttonEnabled ? widget.onPlayPause : null,
                         icon:
                             showSearchSpinner
                                 ? const SizedBox(
@@ -1956,7 +2016,7 @@ class _TurntablePlayerCard extends StatelessWidget {
                                     ),
                                   ),
                                 )
-                                : isStreamStarting
+                                : widget.isStreamStarting
                                 // Stream loading: show a smaller spinner but
                                 // with a stop-square overlay so user knows
                                 // they can tap to cancel.
@@ -1992,7 +2052,10 @@ class _TurntablePlayerCard extends StatelessWidget {
                     ),
                     _SeekButton(
                       seconds: 10,
-                      onPressed: nowPlaying == null ? null : onSeekForward,
+                      onPressed:
+                          widget.nowPlaying == null
+                              ? null
+                              : widget.onSeekForward,
                     ),
                   ],
                 ),
@@ -2003,20 +2066,21 @@ class _TurntablePlayerCard extends StatelessWidget {
       );
     }
 
-    if (nowPlaying == null) {
+    if (widget.nowPlaying == null) {
       return buildCard(false, basePosition, baseDuration);
     }
     return StreamBuilder<Duration>(
       stream: player.positionStream,
       builder: (context, positionSnap) {
-        final position = positionSnap.data ?? audio.position;
+        final position = positionSnap.data ?? widget.audio.position;
         return StreamBuilder<PlayerState>(
           stream: player.playerStateStream,
           builder: (context, stateSnap) {
             final state = stateSnap.data;
             final isCompleted =
                 state?.processingState == ProcessingState.completed;
-            final playing = (state?.playing ?? audio.isPlaying) && !isCompleted;
+            final playing =
+                (state?.playing ?? widget.audio.isPlaying) && !isCompleted;
             final duration =
                 (player.duration != null && player.duration! > Duration.zero)
                     ? player.duration!
@@ -2476,61 +2540,6 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// _CircularThumbnail
-// ─────────────────────────────────────────────────────────────────────────────
-class _CircularThumbnail extends StatelessWidget {
-  const _CircularThumbnail({
-    required this.imageUrl,
-    required this.size,
-    required this.fallbackText,
-  });
-
-  final String imageUrl;
-  final double size;
-  final String fallbackText;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      clipBehavior: Clip.antiAlias,
-      decoration: const BoxDecoration(shape: BoxShape.circle),
-      child: Image.network(
-        imageUrl,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        filterQuality: FilterQuality.high,
-        errorBuilder: (_, __, ___) {
-          return Container(
-            width: size,
-            height: size,
-            decoration: const BoxDecoration(
-              color: Color(0xFFD8D4CC),
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                fallbackText.length > 6
-                    ? fallbackText.substring(0, 6)
-                    : fallbackText,
-                style: TextStyle(
-                  fontFamily: 'Inter',
-                  fontSize: size * 0.2,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF6B6B6B),
-                ),
-              ),
-            ),
-          );
-        },
       ),
     );
   }
