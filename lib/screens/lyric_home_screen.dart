@@ -18,7 +18,6 @@ import '../services/lyric_audio_registry.dart';
 import '../services/lyric_audio_playback.dart';
 import '../services/youtube_audio_stream_service.dart';
 import '../services/audio_session_service.dart';
-import '../services/voice_backend_bootstrap_service.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
@@ -51,11 +50,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   bool _isStartingStreamPlayback = false;
 
   bool _isListening = false;
+  bool _keepMicAlive = false;
   bool _isQuotaSavingMode = false;
   bool _isLooping = false;
   double _playerVolume = 1.0;
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
+  Timer? _speechRestartTimer;
 
   // ── Completion listener ───────────────────────────────────────────────────
   StreamSubscription<PlayerState>? _playerStateSubscription;
@@ -70,6 +71,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   final TtsService _tts = TtsService();
 
   LyricAudioPlayback get _audio => LyricAudioRegistry.instance;
+  bool get _isMicActive => _keepMicAlive || _isListening;
   @override
   void initState() {
     super.initState();
@@ -213,7 +215,9 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     _volumeSubscription = null;
     _playerStateSubscription?.cancel();
     _playerStateSubscription = null;
+    _speechRestartTimer?.cancel();
     _lyricController.dispose();
+    unawaited(_speech.cancel());
     unawaited(_audio.stop());
     _tts.dispose();
     super.dispose();
@@ -318,40 +322,147 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         });
   }
 
+  Future<bool> _ensureSpeechReady() async {
+    bool available = false;
+    try {
+      available = await _speech.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          if (status == 'listening') {
+            setState(() => _isListening = true);
+            return;
+          }
+          if (status == 'done' || status == 'notListening') {
+            setState(() => _isListening = false);
+            if (_keepMicAlive) _scheduleListeningRestart();
+          }
+        },
+        onError: (error) {
+          if (!mounted) return;
+          setState(() => _isListening = false);
+
+          final code = error.errorMsg;
+          if (code == 'error_listen_failed') {
+            _keepMicAlive = false;
+            _speechRestartTimer?.cancel();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Voice input not available here. Type your lyric instead.',
+                ),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: Color(0xFF333333),
+              ),
+            );
+            return;
+          }
+
+          const recoverableErrors = {
+            'error_speech_timeout',
+            'error_no_match',
+            'error_client',
+            'error_recognizer_busy',
+          };
+          if (recoverableErrors.contains(code)) {
+            if (_keepMicAlive) _scheduleListeningRestart();
+            return;
+          }
+
+          _keepMicAlive = false;
+          _speechRestartTimer?.cancel();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Mic error: $code'),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.red.shade800,
+            ),
+          );
+        },
+      );
+    } catch (_) {
+      available = false;
+    }
+    return available;
+  }
+
+  void _scheduleListeningRestart() {
+    if (!_keepMicAlive) return;
+    _speechRestartTimer?.cancel();
+    _speechRestartTimer = Timer(const Duration(milliseconds: 160), () {
+      _speechRestartTimer = null;
+      if (!_keepMicAlive || !mounted) return;
+      unawaited(_beginListeningSession());
+    });
+  }
+
+  Future<void> _beginListeningSession() async {
+    if (!_keepMicAlive || !_speech.isAvailable || _speech.isListening) return;
+    if (mounted && !_isListening) {
+      setState(() => _isListening = true);
+    }
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          setState(() {
+            _lyricController.text = result.recognizedWords;
+            _lyricController.selection = TextSelection.collapsed(
+              offset: _lyricController.text.length,
+            );
+          });
+        },
+        listenFor: const Duration(minutes: 5),
+        pauseFor: const Duration(seconds: 12),
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: false,
+          listenMode: ListenMode.dictation,
+        ),
+      );
+    } catch (_) {
+      if (mounted) setState(() => _isListening = false);
+      if (_keepMicAlive) _scheduleListeningRestart();
+    }
+  }
+
   Future<void> _startListening() async {
-    final available = await _speech.initialize(
-      onStatus: (status) {
-        if (mounted) setState(() => _isListening = status == 'listening');
-      },
-      onError: (_) {
-        if (mounted) setState(() => _isListening = false);
-      },
-    );
+    if (_tts.isSpeaking) await _tts.stop();
+
+    _keepMicAlive = true;
+    _speechRestartTimer?.cancel();
+    final available = await _ensureSpeechReady();
     if (!mounted) return;
     if (!available) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Speech not available')));
+      _keepMicAlive = false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Speech not available'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
-    await _speech.listen(
-      onResult: (result) {
-        if (mounted && result.finalResult) {
-          _lyricController.text = result.recognizedWords;
-          _lyricController.selection = TextSelection.collapsed(
-            offset: _lyricController.text.length,
-          );
-        }
-      },
-      listenFor: const Duration(seconds: 15),
-      pauseFor: const Duration(seconds: 3),
-      listenOptions: SpeechListenOptions(partialResults: true),
-    );
+    await _beginListeningSession();
   }
 
   Future<void> _stopListening() async {
-    await _speech.stop();
+    _keepMicAlive = false;
+    _speechRestartTimer?.cancel();
+    _speechRestartTimer = null;
+    if (_speech.isListening) {
+      await _speech.stop();
+    } else if (_speech.isAvailable) {
+      await _speech.cancel();
+    }
     if (mounted) setState(() => _isListening = false);
+  }
+
+  Future<void> _toggleMic() async {
+    if (_isMicActive) {
+      await _stopListening();
+    } else {
+      await _startListening();
+    }
   }
 
   Future<void> _toggleSpeakLine() async {
@@ -363,7 +474,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       );
       return;
     }
-    if (_isListening) {
+    if (_isMicActive) {
       await _stopListening();
     }
     try {
@@ -574,79 +685,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     ).push(MaterialPageRoute(builder: (_) => const SavedVoiceSongsScreen()));
   }
 
-  void _showScreenMessage(
-    String message, {
-    bool isError = false,
-    IconData? icon,
-  }) {
-    final messenger = ScaffoldMessenger.of(context);
-    final borderColor =
-        isError ? const Color(0xFFE47A7A) : const Color(0xFF7BE7BE);
-    final iconColor =
-        isError ? const Color(0xFFB54545) : const Color(0xFF11C979);
-
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          margin: const EdgeInsets.fromLTRB(24, 0, 24, 26),
-          duration: const Duration(seconds: 4),
-          content: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8F4EE),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: borderColor, width: 1.4),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x14000000),
-                  blurRadius: 18,
-                  offset: Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: borderColor.withValues(alpha: 0.16),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    icon ??
-                        (isError
-                            ? Icons.warning_amber_rounded
-                            : Icons.check_circle_rounded),
-                    size: 18,
-                    color: iconColor,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    message,
-                    style: const TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-  }
-
   Future<void> _openGenerateSongBySlide() async {
     await HapticFeedback.mediumImpact();
     if (!mounted) return;
@@ -657,19 +695,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     final isCompleted = player.processingState == ProcessingState.completed;
     if (_audio.isPlaying && !isCompleted) {
       await player.pause();
-    }
-
-    final backendStatus =
-        await VoiceBackendBootstrapService.ensureBackendReady();
-    if (mounted && backendStatus.message != null) {
-      _showScreenMessage(
-        backendStatus.message!,
-        isError: !backendStatus.didStart && !backendStatus.isHealthy,
-        icon:
-            backendStatus.didStart
-                ? Icons.settings_suggest_rounded
-                : Icons.warning_amber_rounded,
-      );
     }
 
     await _openGenerateSong();
@@ -809,10 +834,12 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     final mq = MediaQuery.of(context);
     final screenWidth = mq.size.width;
     final screenHeight = mq.size.height;
+    final keyboardHeight = mq.viewInsets.bottom;
     final isCompact = screenWidth < 600;
     final hPad = isCompact ? screenWidth * 0.05 : screenWidth * 0.08;
     final vGap = screenHeight < 700 ? 8.0 : 12.0;
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFFF5F3EF),
       bottomNavigationBar: SafeArea(
         minimum: EdgeInsets.fromLTRB(hPad, 8, hPad, 12),
@@ -842,7 +869,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                         _SearchConsoleCard(
                           lyricController: _lyricController,
                           isLoading: _isLoading,
-                          isListening: _isListening,
+                          isListening: _isMicActive,
                           isSpeaking: _tts.isSpeaking,
                           isQuotaSavingMode: _isQuotaSavingMode,
                           recentLines: _recentLines,
@@ -851,13 +878,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                           screenHeight: availH,
                           onSearch: _onSearch,
                           onToggleSpeak: _toggleSpeakLine,
-                          onToggleListen: () {
-                            if (_isListening) {
-                              _stopListening();
-                            } else {
-                              _startListening();
-                            }
-                          },
+                          onToggleListen: _toggleMic,
                           onToggleQuotaMode:
                               (value) =>
                                   setState(() => _isQuotaSavingMode = value),
@@ -893,9 +914,48 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                       ],
                     ),
                   ),
+                  // AnimatedPositioned(
+                  //   duration: const Duration(milliseconds: 220),
+                  //   curve: Curves.easeOutCubic,
+                  //   left: 0,
+                  //   right: 0,
+                  //   bottom: keyboardHeight > 0 ? keyboardHeight : -96,
+                  //   child: IgnorePointer(
+                  //     ignoring: true,
+                  //     child: _KeyboardOverlaySpacer(hPad: hPad),
+                  //   ),
+                  // ),
                 ],
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _KeyboardOverlaySpacer
+// ─────────────────────────────────────────────────────────────────────────────
+class _KeyboardOverlaySpacer extends StatelessWidget {
+  const _KeyboardOverlaySpacer({required this.hPad});
+
+  final double hPad;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+      child: Container(
+        height: 78,
+        padding: EdgeInsets.fromLTRB(hPad, 10, hPad, 14),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0x00F5F3EF), Color(0xB8F5F3EF), Color(0xF2F5F3EF)],
+            stops: [0.0, 0.4, 1.0],
           ),
         ),
       ),
@@ -2853,23 +2913,12 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          child:
-              _isSubmitting
-                  ? const SizedBox(
-                    key: ValueKey('loading'),
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      valueColor: AlwaysStoppedAnimation(Colors.white),
-                    ),
-                  )
-                  : Icon(
-                    Icons.auto_awesome_rounded,
-                    key: const ValueKey('icon'),
-                    size: 22,
-                    color: _isDragging ? Colors.black : Colors.white,
-                  ),
+          child: Icon(
+            Icons.auto_awesome_rounded,
+            key: const ValueKey('icon'),
+            size: 22,
+            color: _isDragging ? Colors.black : Colors.white,
+          ),
         ),
       ),
     );
@@ -2886,7 +2935,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           Expanded(
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 120),
-              opacity: _isSubmitting ? 0.6 : (1 - _progress * 0.45),
+              opacity: 1 - _progress * 0.45,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2904,9 +2953,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          _isSubmitting
-                              ? 'Opening generator…'
-                              : _isDragging
+                          _isDragging
                               ? 'Slide to create music '
                               : 'Generate My Song',
                           maxLines: 1,
@@ -2944,7 +2991,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
           ),
           AnimatedOpacity(
             duration: const Duration(milliseconds: 120),
-            opacity: _isSubmitting ? 0.2 : (_progress < 0.25 ? 0.8 : 0.15),
+            opacity: _progress < 0.25 ? 0.8 : 0.15,
             child: SizedBox(
               width: 48,
               height: 18,

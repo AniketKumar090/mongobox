@@ -39,6 +39,8 @@ class _P {
 
 enum _CloneStep { cloning, ready, error }
 
+enum _PendingCloneExitAction { saveWhenReady, stopProcess }
+
 class VoiceSongScreen extends StatefulWidget {
   const VoiceSongScreen({
     super.key,
@@ -85,6 +87,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   bool _isPlaying = false;
   bool _isSaving = false;
   bool _showLyrics = false;
+  bool _returnHomeWhenReady = false;
+  bool _isLeavingScreen = false;
+  String? _activeCloneRequestId;
   String? _errorMessage;
   StreamSubscription<PlayerState>? _voiceStateSub;
 
@@ -124,6 +129,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
 
   // ── Cloning ───────────────────────────────────────────────────────────────
   Future<void> _startCloning() async {
+    final requestId = DateTime.now().microsecondsSinceEpoch.toString();
+    _activeCloneRequestId = requestId;
     setState(() {
       _step = _CloneStep.cloning;
       _clonePath = null;
@@ -136,14 +143,21 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       final file = await _cloneService.cloneVoice(
         voiceSamplePath: widget.voiceSamplePath,
         lyrics: _cloneLyrics,
+        requestId: requestId,
         mood: widget.mood,
         genre: widget.genre,
         language: language,
         referenceSong: widget.referenceSong,
       );
+      if (_activeCloneRequestId == requestId) {
+        _activeCloneRequestId = null;
+      }
       if (!mounted) return;
       await _finalise(file);
     } catch (e) {
+      if (_activeCloneRequestId == requestId) {
+        _activeCloneRequestId = null;
+      }
       if (!mounted) return;
       setState(() {
         _step = _CloneStep.error;
@@ -182,6 +196,21 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       _mixIncluded = result.mixIncluded;
       _step = _CloneStep.ready;
     });
+
+    if (_returnHomeWhenReady) {
+      final didSave = await _saveCurrentSong(
+        sourcePath: result.file.path,
+        showSuccessSnack: false,
+        showOpenLibraryAction: false,
+      );
+      if (!mounted) return;
+      if (didSave) {
+        await _returnToLyricHome();
+      } else {
+        setState(() => _returnHomeWhenReady = false);
+        _showSnack('Could not save automatically. Please try again.');
+      }
+    }
   }
 
   // ── Playback ──────────────────────────────────────────────────────────────
@@ -264,8 +293,24 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   Future<void> _download() async {
     if (_clonePath == null || _isSaving) return;
     setState(() => _isSaving = true);
-    final docsDir = await getApplicationDocumentsDirectory();
     try {
+      await _saveCurrentSong(
+        sourcePath: _clonePath!,
+        showSuccessSnack: true,
+        showOpenLibraryAction: true,
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<bool> _saveCurrentSong({
+    required String sourcePath,
+    required bool showSuccessSnack,
+    required bool showOpenLibraryAction,
+  }) async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
       final libraryDir = Directory('${docsDir.path}/saved_voice_songs');
       if (!await libraryDir.exists()) await libraryDir.create(recursive: true);
       final safeName = widget.songTitle
@@ -277,7 +322,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       final fileName =
           '${safeName.isEmpty ? 'song' : safeName}_${lang}_$timestamp.wav';
       final dest = File('${libraryDir.path}/$fileName');
-      await File(_clonePath!).copy(dest.path);
+      await File(sourcePath).copy(dest.path);
       final savedSong = SavedVoiceSong(
         id: '$safeName-$timestamp',
         title: widget.songTitle,
@@ -293,26 +338,155 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         backgroundMusicLabel: _musicSourceLabel ?? '',
       );
       await _savedSongsService.saveSong(savedSong);
-      if (!mounted) return;
-      _showSnack(
-        'Saved! Tap to open library.',
-        action: _SnackAction(
-          label: 'Open',
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const SavedVoiceSongsScreen(),
-              ),
-            );
-          },
-        ),
-      );
+
+      if (showSuccessSnack && mounted) {
+        _showSnack(
+          'Saved! Tap to open library.',
+          action:
+              showOpenLibraryAction
+                  ? _SnackAction(
+                    label: 'Open',
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SavedVoiceSongsScreen(),
+                        ),
+                      );
+                    },
+                  )
+                  : null,
+        );
+      }
+      return true;
     } catch (e) {
-      if (!mounted) return;
-      _showSnack('Could not save: $e');
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) _showSnack('Could not save: $e');
+      return false;
     }
+  }
+
+  Future<void> _returnToLyricHome() async {
+    if (!mounted || _isLeavingScreen) return;
+    _isLeavingScreen = true;
+    await _voiceStateSub?.cancel();
+    await _voicePlayer.stop();
+    await _musicPlayer.stop();
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  Future<void> _handleBackNavigation() async {
+    if (_step == _CloneStep.cloning) {
+      if (_returnHomeWhenReady) {
+        _showSnack(
+          'This song will be saved and sent home once cloning finishes.',
+        );
+        return;
+      }
+
+      final action = await _showPendingCloneExitDialog();
+      if (!mounted || action == null) return;
+
+      if (action == _PendingCloneExitAction.saveWhenReady) {
+        setState(() => _returnHomeWhenReady = true);
+        _showSnack(
+          'We’ll save the song and return to Lyric Home when it is ready.',
+        );
+        return;
+      }
+
+      final requestId = _activeCloneRequestId;
+      _activeCloneRequestId = null;
+      if (requestId != null) {
+        try {
+          await _cloneService.cancelClone(requestId);
+        } catch (e) {
+          debugPrint('Voice clone cancellation warning: $e');
+        }
+      }
+
+      _cloneService.dispose();
+      await _returnToLyricHome();
+      return;
+    }
+
+    await _returnToLyricHome();
+  }
+
+  Future<_PendingCloneExitAction?> _showPendingCloneExitDialog() {
+    return showDialog<_PendingCloneExitAction>(
+      context: context,
+      barrierDismissible: true,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: const Color(0xFFF8F4EE),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            title: const Text(
+              'Cloning is still running',
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: _P.black,
+              ),
+            ),
+            content: const Text(
+              'Do you want us to save the song when cloning completes, or stop the process and go back now?',
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: _P.grey2,
+                height: 1.5,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w700,
+                    color: _P.grey2,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed:
+                    () => Navigator.of(
+                      dialogContext,
+                    ).pop(_PendingCloneExitAction.stopProcess),
+                child: const Text(
+                  'Stop process',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w800,
+                    color: _P.red,
+                  ),
+                ),
+              ),
+              FilledButton(
+                onPressed:
+                    () => Navigator.of(
+                      dialogContext,
+                    ).pop(_PendingCloneExitAction.saveWhenReady),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _P.black,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text(
+                  'Save when ready',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+    );
   }
 
   // ── Snackbar (matches _HP style) ──────────────────────────────────────────
@@ -381,139 +555,147 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     final sw = mq.size.width;
     final hPad = sw < 600 ? sw * 0.05 : sw * 0.08;
 
-    return Scaffold(
-      backgroundColor: _P.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Top bar ──────────────────────────────────────────────────
-            Padding(
-              padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 12),
-              child: _TopBar(
-                songTitle: widget.songTitle,
-                referenceSong: widget.referenceSong,
-                onLibrary:
-                    () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const SavedVoiceSongsScreen(),
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        await _handleBackNavigation();
+      },
+      child: Scaffold(
+        backgroundColor: _P.background,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // ── Top bar ──────────────────────────────────────────────────
+              Padding(
+                padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 12),
+                child: _TopBar(
+                  songTitle: widget.songTitle,
+                  referenceSong: widget.referenceSong,
+                  onBack: _handleBackNavigation,
+                  onLibrary:
+                      () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SavedVoiceSongsScreen(),
+                        ),
                       ),
-                    ),
-              ),
-            ),
-
-            // ── Scrollable body ──────────────────────────────────────────
-            Expanded(
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Song info pill
-                    _SongInfoPill(
-                      songTitle: widget.songTitle,
-                      mood: widget.mood,
-                      genre: widget.genre,
-                      language: widget.dominantLanguage,
-                      referenceSong: widget.referenceSong,
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Step status
-                    _StatusCard(
-                      step: _step,
-                      language: widget.dominantLanguage,
-                      errorMessage: _errorMessage,
-                      onRetry: _startCloning,
-                    ),
-
-                    // Ready state content
-                    if (_step == _CloneStep.ready) ...[
-                      const SizedBox(height: 16),
-
-                      // ── Big play button ──────────────────────────────
-                      _PlayButton(
-                        isPlaying: _isPlaying,
-                        hasBgMusic: _mixIncluded || _musicSourceUrl != null,
-                        onPressed: _play,
-                      ),
-                      const SizedBox(height: 10),
-
-                      // ── Music badge ──────────────────────────────────
-                      _MusicBadge(
-                        label: _musicSourceLabel,
-                        hasMusic: _mixIncluded || _musicSourceUrl != null,
-                      ),
-                      const SizedBox(height: 12),
-
-                      // ── Mix controls ─────────────────────────────────
-                      _MixCard(
-                        voiceSpeed: _voiceSpeed,
-                        voiceVolume: _voiceVolume,
-                        musicVolume: _musicVolume,
-                        maxVoiceCap: _maxVoiceCap,
-                        onSpeedChanged: (v) async {
-                          setState(() => _voiceSpeed = v);
-                          await _voicePlayer.setSpeed(v);
-                          await _musicPlayer.setSpeed(v);
-                        },
-                        onVoiceVolumeChanged: (v) async {
-                          final c = v.clamp(0.4, _maxVoiceCap);
-                          setState(() => _voiceVolume = c);
-                          await _voicePlayer.setVolume(c);
-                        },
-                        onMusicVolumeChanged: (v) async {
-                          setState(() {
-                            _musicVolume = v;
-                            _reconcileVoiceCap();
-                          });
-                          await _musicPlayer.setVolume(v);
-                          await _voicePlayer.setVolume(_voiceVolume);
-                        },
-                      ),
-                      const SizedBox(height: 12),
-
-                      // ── Share / Save ─────────────────────────────────
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _OutlineButton(
-                              icon: Icons.share_rounded,
-                              label: 'Share',
-                              onPressed: _share,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _OutlineButton(
-                              icon:
-                                  _isSaving
-                                      ? Icons.hourglass_top_rounded
-                                      : Icons.bookmark_add_rounded,
-                              label: _isSaving ? 'Saving…' : 'Save',
-                              onPressed: _download,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      // ── Lyrics collapsible ────────────────────────────
-                      _LyricsCard(
-                        lyrics: _cloneLyrics,
-                        language: widget.dominantLanguage,
-                        showFull: _showLyrics,
-                        onToggle:
-                            () => setState(() => _showLyrics = !_showLyrics),
-                        scrollController: _scrollController,
-                      ),
-                    ],
-                    const SizedBox(height: 32),
-                  ],
                 ),
               ),
-            ),
-          ],
+
+              // ── Scrollable body ──────────────────────────────────────────
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Song info pill
+                      _SongInfoPill(
+                        songTitle: widget.songTitle,
+                        mood: widget.mood,
+                        genre: widget.genre,
+                        language: widget.dominantLanguage,
+                        referenceSong: widget.referenceSong,
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Step status
+                      _StatusCard(
+                        step: _step,
+                        language: widget.dominantLanguage,
+                        errorMessage: _errorMessage,
+                        onRetry: _startCloning,
+                      ),
+
+                      // Ready state content
+                      if (_step == _CloneStep.ready) ...[
+                        const SizedBox(height: 16),
+
+                        // ── Big play button ──────────────────────────────
+                        _PlayButton(
+                          isPlaying: _isPlaying,
+                          hasBgMusic: _mixIncluded || _musicSourceUrl != null,
+                          onPressed: _play,
+                        ),
+                        const SizedBox(height: 10),
+
+                        // ── Music badge ──────────────────────────────────
+                        _MusicBadge(
+                          label: _musicSourceLabel,
+                          hasMusic: _mixIncluded || _musicSourceUrl != null,
+                        ),
+                        const SizedBox(height: 12),
+
+                        // ── Mix controls ─────────────────────────────────
+                        _MixCard(
+                          voiceSpeed: _voiceSpeed,
+                          voiceVolume: _voiceVolume,
+                          musicVolume: _musicVolume,
+                          maxVoiceCap: _maxVoiceCap,
+                          onSpeedChanged: (v) async {
+                            setState(() => _voiceSpeed = v);
+                            await _voicePlayer.setSpeed(v);
+                            await _musicPlayer.setSpeed(v);
+                          },
+                          onVoiceVolumeChanged: (v) async {
+                            final c = v.clamp(0.4, _maxVoiceCap);
+                            setState(() => _voiceVolume = c);
+                            await _voicePlayer.setVolume(c);
+                          },
+                          onMusicVolumeChanged: (v) async {
+                            setState(() {
+                              _musicVolume = v;
+                              _reconcileVoiceCap();
+                            });
+                            await _musicPlayer.setVolume(v);
+                            await _voicePlayer.setVolume(_voiceVolume);
+                          },
+                        ),
+                        const SizedBox(height: 12),
+
+                        // ── Share / Save ─────────────────────────────────
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _OutlineButton(
+                                icon: Icons.share_rounded,
+                                label: 'Share',
+                                onPressed: _share,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: _OutlineButton(
+                                icon:
+                                    _isSaving
+                                        ? Icons.hourglass_top_rounded
+                                        : Icons.bookmark_add_rounded,
+                                label: _isSaving ? 'Saving…' : 'Save',
+                                onPressed: _download,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+
+                        // ── Lyrics collapsible ────────────────────────────
+                        _LyricsCard(
+                          lyrics: _cloneLyrics,
+                          language: widget.dominantLanguage,
+                          showFull: _showLyrics,
+                          onToggle:
+                              () => setState(() => _showLyrics = !_showLyrics),
+                          scrollController: _scrollController,
+                        ),
+                      ],
+                      const SizedBox(height: 32),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -533,10 +715,13 @@ class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.songTitle,
     required this.referenceSong,
+    required this.onBack,
     required this.onLibrary,
   });
+
   final String songTitle;
   final SongReference? referenceSong;
+  final Future<void> Function() onBack;
   final VoidCallback onLibrary;
 
   @override
@@ -555,7 +740,7 @@ class _TopBar extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             GestureDetector(
-              onTap: () => Navigator.of(context).maybePop(),
+              onTap: onBack,
               child: Container(
                 width: 38,
                 height: 38,
@@ -596,84 +781,85 @@ class _TopBar extends StatelessWidget {
                       color: _P.grey2,
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _P.chip,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: _P.border),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.music_note_rounded,
-                                size: 12,
-                                color: _P.grey2,
-                              ),
-                              const SizedBox(width: 5),
-                              Flexible(
-                                child: Text(
-                                  displayTitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: _P.grey1,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: onLibrary,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _P.chip,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: _P.border),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.library_music_rounded,
-                                size: 12,
-                                color: _P.grey2,
-                              ),
-                              SizedBox(width: 5),
-                              Text(
-                                'Saved',
-                                style: TextStyle(
-                                  fontFamily: 'Inter',
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: _P.grey1,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
                 ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        // Song pill row - full width, aligned with left edge
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: _P.chip,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _P.border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.music_note_rounded,
+                      size: 12,
+                      color: _P.grey2,
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        displayTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _P.grey1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onLibrary,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: _P.chip,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _P.border),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.library_music_rounded,
+                      size: 12,
+                      color: _P.grey2,
+                    ),
+                    SizedBox(width: 5),
+                    Text(
+                      'Saved',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: _P.grey1,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -726,6 +912,7 @@ class _SongInfoPill extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const SizedBox(height: 6),
                 Text(
                   '"$songTitle"',
                   maxLines: 1,

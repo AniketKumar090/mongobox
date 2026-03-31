@@ -17,11 +17,9 @@ class _HP {
   static const card = Color(0xFFF0EDE7);
   static const border = Color(0xFFD8D4CC);
   static const black = Color(0xFF111111);
-  static const blackSoft = Color(0xFF1E1E1E);
   static const grey1 = Color(0xFF444444);
   static const grey2 = Color(0xFF666666);
   static const grey3 = Color(0xFF888888);
-  static const grey4 = Color(0xFFAAAAAA);
   static const chip = Color(0xFFE8E3DC);
   static const chipDark = Color(0xFFD8D4CC);
   static const green = Color(0xFF11F08A);
@@ -266,12 +264,13 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
       return;
     }
     try {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _isRecording = true;
           _recordedPath = null;
           _paceFeedback = null;
         });
+      }
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_sample.m4a';
       await _recorder.start(
@@ -747,8 +746,8 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                       ],
                     ),
                     const SizedBox(height: 10),
-                    // Slide to clone
-                    _SlideToCloneButton(onCompleted: _startVoiceCloneFlow),
+                    // Press-and-hold haptic flow to clone
+                    _HapticFlowCloneButton(onCompleted: _startVoiceCloneFlow),
                     const SizedBox(height: 10),
                   ],
 
@@ -1653,29 +1652,29 @@ class _PaceBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLIDE TO CLONE BUTTON  (matches _GenerateSongSliderCard aesthetic)
+// HAPTIC FLOW CLONE BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
-class _SlideToCloneButton extends StatefulWidget {
-  const _SlideToCloneButton({required this.onCompleted});
+class _HapticFlowCloneButton extends StatefulWidget {
+  const _HapticFlowCloneButton({required this.onCompleted});
   final Future<void> Function() onCompleted;
+
   @override
-  State<_SlideToCloneButton> createState() => _SlideToCloneButtonState();
+  State<_HapticFlowCloneButton> createState() => _HapticFlowCloneButtonState();
 }
 
-class _SlideToCloneButtonState extends State<_SlideToCloneButton>
-    with SingleTickerProviderStateMixin {
-  static const double _handleSize = 50;
-  static const double _trackPadding = 6;
-  static const double _threshold = 0.90;
+class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
+    with TickerProviderStateMixin {
+  static const _holdDuration = Duration(milliseconds: 1050);
+  static const _hapticMilestones = [0.18, 0.38, 0.58, 0.78, 0.94];
 
-  double _progress = 0;
+  late final AnimationController _shimmer;
+  late final AnimationController _hold;
+
+  bool _isPressing = false;
   bool _isSubmitting = false;
-  bool _isDragging = false;
-  bool _isDragValid = false;
-  double _dragStartDx = 0;
-  double _dragStartProg = 0;
+  int _lastHapticIndex = -1;
 
-  late AnimationController _shimmer;
+  double get _progress => _hold.value.clamp(0.0, 1.0);
 
   @override
   void initState() {
@@ -1684,313 +1683,234 @@ class _SlideToCloneButtonState extends State<_SlideToCloneButton>
       vsync: this,
       duration: const Duration(milliseconds: 3000),
     )..repeat();
+    _hold =
+        AnimationController(vsync: this, duration: _holdDuration)
+          ..addListener(_handleHoldTick)
+          ..addStatusListener(_handleHoldStatus);
   }
 
   @override
   void dispose() {
     _shimmer.dispose();
+    _hold
+      ..removeListener(_handleHoldTick)
+      ..removeStatusListener(_handleHoldStatus)
+      ..dispose();
     super.dispose();
   }
 
-  double _maxTravel(BoxConstraints c) =>
-      (c.maxWidth - _handleSize - _trackPadding * 2).clamp(
-        0.0,
-        double.infinity,
-      );
-
-  void _onStart(DragStartDetails d, BoxConstraints c) {
-    if (_isSubmitting) return;
-    final maxTravel = _maxTravel(c);
-    final handleLeft = _trackPadding + maxTravel * _progress;
-    final tapX = d.localPosition.dx;
-    if (tapX >= handleLeft && tapX <= handleLeft + _handleSize) {
-      _isDragValid = true;
-      _dragStartDx = tapX;
-      _dragStartProg = _progress;
-      HapticFeedback.lightImpact();
-      setState(() => _isDragging = true);
-    } else {
-      _isDragValid = false;
+  void _handleHoldTick() {
+    if (!mounted) return;
+    for (var i = _lastHapticIndex + 1; i < _hapticMilestones.length; i++) {
+      if (_progress < _hapticMilestones[i]) break;
+      _lastHapticIndex = i;
+      HapticFeedback.selectionClick();
     }
+    setState(() {});
   }
 
-  void _onUpdate(DragUpdateDetails d, BoxConstraints c) {
-    if (_isSubmitting || !_isDragValid) return;
-    final maxTravel = _maxTravel(c);
-    if (maxTravel <= 0) return;
-    final t = (_dragStartProg + (d.localPosition.dx - _dragStartDx) / maxTravel)
-        .clamp(0.0, 1.0);
-    if (t == _progress) return;
+  Future<void> _handleHoldStatus(AnimationStatus status) async {
+    if (status != AnimationStatus.completed || _isSubmitting) return;
+    _lastHapticIndex = _hapticMilestones.length;
     setState(() {
-      _progress = t;
-      _isDragging = true;
-    });
-  }
-
-  Future<void> _onEnd() async {
-    setState(() {
-      _isDragging = false;
-      _isDragValid = false;
-    });
-    if (_isSubmitting) return;
-    if (_progress < _threshold) {
-      setState(() => _progress = 0);
-      return;
-    }
-    setState(() {
-      _progress = 1;
+      _isPressing = false;
       _isSubmitting = true;
     });
+    await HapticFeedback.mediumImpact();
     try {
       await widget.onCompleted();
     } finally {
-      if (mounted)
+      if (mounted) {
+        _hold.value = 0;
         setState(() {
           _isSubmitting = false;
-          _progress = 0;
+          _isPressing = false;
+          _lastHapticIndex = -1;
         });
+      }
     }
+  }
+
+  void _startHold() {
+    if (_isSubmitting || _isPressing) return;
+    _lastHapticIndex = -1;
+    _isPressing = true;
+    HapticFeedback.lightImpact();
+    _hold.forward(from: 0);
+    setState(() {});
+  }
+
+  void _cancelHold() {
+    if (_isSubmitting) return;
+    if (!_isPressing && _progress == 0) return;
+    _isPressing = false;
+    _lastHapticIndex = -1;
+    _hold.animateBack(
+      0,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
+    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 62,
+      height: 72,
       width: double.infinity,
       child: LayoutBuilder(
         builder: (context, c) {
-          final maxTravel = _maxTravel(c);
-          final knobOffset = maxTravel * _progress;
-          final revealW = (_handleSize + _trackPadding * 2 + knobOffset).clamp(
-            _handleSize + _trackPadding * 2,
-            c.maxWidth,
-          );
           final titleSize = (c.maxWidth * 0.037).clamp(13.0, 15.5);
           final subSize = (c.maxWidth * 0.026).clamp(10.0, 11.5);
+          final fillWidth = (c.maxWidth * _progress).clamp(0.0, c.maxWidth);
+          final fillLeft = (c.maxWidth - fillWidth) / 2;
+          final isActive = _isPressing || _isSubmitting;
 
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: (d) => _onStart(d, c),
-            onHorizontalDragUpdate: (d) => _onUpdate(d, c),
-            onHorizontalDragEnd: (_) => _onEnd(),
-            onHorizontalDragCancel: () {
-              if (!_isSubmitting)
-                setState(() {
-                  _progress = 0;
-                  _isDragging = false;
-                  _isDragValid = false;
-                });
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              decoration: BoxDecoration(
-                color: _HP.black,
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(
-                  color:
-                      _isDragging
-                          ? _HP.green.withValues(alpha: 0.6)
-                          : Colors.transparent,
-                  width: 1.5,
+          return Semantics(
+            button: true,
+            label: 'Hold to clone my voice',
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (_) => _startHold(),
+              onTapUp: (_) => _cancelHold(),
+              onTapCancel: _cancelHold,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                decoration: BoxDecoration(
+                  color: _HP.black,
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(
+                    color:
+                        isActive
+                            ? _HP.green.withValues(alpha: 0.55)
+                            : Colors.black.withValues(alpha: 0.92),
+                    width: 1.4,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color:
+                          isActive
+                              ? _HP.green.withValues(alpha: 0.18)
+                              : Colors.black.withValues(alpha: 0.18),
+                      blurRadius: isActive ? 20 : 10,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
                 ),
-              ),
-              child: Stack(
-                children: [
-                  // Fill reveal
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 120),
-                    width: revealW,
-                    decoration: BoxDecoration(
-                      color: _HP.blackSoft,
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                  ),
-                  // Shimmer
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
-                        child: AnimatedBuilder(
-                          animation: _shimmer,
-                          builder: (_, __) {
-                            final bw = c.maxWidth * 0.28;
-                            final x =
-                                -bw + (_shimmer.value * (c.maxWidth + bw));
-                            return CustomPaint(
-                              painter: _ShimmerPainter(x: x, bw: bw),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Content
-                  Positioned.fill(
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        _handleSize + _trackPadding + 14,
-                        0,
-                        14,
-                        0,
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: AnimatedOpacity(
-                              duration: const Duration(milliseconds: 120),
-                              opacity:
-                                  _isSubmitting ? 0.6 : (1 - _progress * 0.45),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.record_voice_over_rounded,
-                                        size: titleSize + 1,
-                                        color:
-                                            _isDragging
-                                                ? _HP.green
-                                                : const Color(0xFFCCCCCC),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          _isSubmitting
-                                              ? 'Starting voice clone…'
-                                              : _isDragging
-                                              ? 'Keep sliding…'
-                                              : 'Slide to Clone My Voice',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontFamily: 'Inter',
-                                            fontSize: titleSize,
-                                            fontWeight: FontWeight.w900,
-                                            color:
-                                                _isDragging
-                                                    ? _HP.green
-                                                    : Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _isDragging
-                                        ? 'Release to start cloning'
-                                        : 'AI writes in your voice',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: 'Inter',
-                                      fontSize: subSize,
-                                      fontWeight: FontWeight.w500,
-                                      color: _HP.grey3,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(26),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors:
+                                  isActive
+                                      ? [
+                                        const Color(0xFF181818),
+                                        const Color(0xFF101010),
+                                      ]
+                                      : [_HP.black, _HP.black],
                             ),
                           ),
-                          AnimatedOpacity(
+                        ),
+                      ),
+                      AnimatedPositioned(
+                        duration: const Duration(milliseconds: 90),
+                        curve: Curves.easeOutCubic,
+                        left: fillLeft,
+                        top: 0,
+                        bottom: 0,
+                        width: fillWidth,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: [
+                                _HP.green.withValues(alpha: 0.08),
+                                _HP.green.withValues(alpha: 0.28),
+                                _HP.green.withValues(alpha: 0.08),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 150),
+                            opacity: isActive ? 0.9 : 1,
+                            child: AnimatedBuilder(
+                              animation: _shimmer,
+                              builder: (_, __) {
+                                final bw = c.maxWidth * 0.28;
+                                return CustomPaint(
+                                  painter: _ShimmerPainter(
+                                    progress: _shimmer.value,
+                                    bw: bw,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Center(
+                          child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 120),
-                            opacity:
-                                _isSubmitting
-                                    ? 0.2
-                                    : (_progress < 0.25 ? 0.8 : 0.15),
-                            child: SizedBox(
-                              width: 48,
-                              height: 18,
-                              child: Stack(
-                                children: List.generate(4, (i) {
-                                  const alphas = [1.0, 0.65, 0.38, 0.18];
-                                  return Positioned(
-                                    left: i * 11.0,
-                                    child: Icon(
-                                      Icons.chevron_right_rounded,
-                                      size: 18,
-                                      color: Colors.white.withValues(
-                                        alpha: alphas[i],
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ),
+                            opacity: _isSubmitting ? 0.7 : 1,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _isSubmitting
+                                      ? 'Starting voice clone…'
+                                      : isActive
+                                      ? 'Keep holding to clone'
+                                      : 'Hold to Clone My Voice',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: titleSize,
+                                    fontWeight: FontWeight.w900,
+                                    color: isActive ? _HP.green : Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _isSubmitting
+                                      ? 'Opening voice clone flow'
+                                      : isActive
+                                      ? 'Release to cancel'
+                                      : 'AI writes in your voice',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: subSize,
+                                    fontWeight: FontWeight.w500,
+                                    color: const Color(0xFF9E9E9E),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Handle knob
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 110),
-                    curve: Curves.easeOut,
-                    left: _trackPadding + knobOffset,
-                    top: _trackPadding,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      width: _handleSize,
-                      height: _handleSize,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors:
-                              _isDragging
-                                  ? [_HP.green, const Color(0xFF0CC878)]
-                                  : [
-                                    const Color(0xFF383838),
-                                    const Color(0xFF262626),
-                                  ],
                         ),
-                        borderRadius: BorderRadius.circular(17),
-                        border: Border.all(
-                          color:
-                              _isDragging
-                                  ? Colors.white.withValues(alpha: 0.45)
-                                  : const Color(0xFF565656),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color:
-                                _isDragging
-                                    ? _HP.green.withValues(alpha: 0.35)
-                                    : Colors.black.withValues(alpha: 0.4),
-                            blurRadius: _isDragging ? 16 : 8,
-                            offset: Offset(0, _isDragging ? 4 : 2),
-                          ),
-                        ],
                       ),
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child:
-                            _isSubmitting
-                                ? const SizedBox(
-                                  key: ValueKey('spin'),
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    valueColor: AlwaysStoppedAnimation(
-                                      Colors.white,
-                                    ),
-                                  ),
-                                )
-                                : Icon(
-                                  Icons.record_voice_over_rounded,
-                                  key: const ValueKey('icon'),
-                                  size: 22,
-                                  color:
-                                      _isDragging ? Colors.black : Colors.white,
-                                ),
-                      ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           );
@@ -2001,30 +1921,69 @@ class _SlideToCloneButtonState extends State<_SlideToCloneButton>
 }
 
 class _ShimmerPainter extends CustomPainter {
-  const _ShimmerPainter({required this.x, required this.bw});
-  final double x, bw;
+  const _ShimmerPainter({required this.progress, required this.bw});
+  final double progress;
+  final double bw;
+
   @override
   void paint(Canvas canvas, Size size) {
-    final grad = LinearGradient(
+    final gradColors = [
+      Colors.white.withValues(alpha: 0),
+      Colors.white.withValues(alpha: 0.03),
+      Colors.white.withValues(alpha: 0.11),
+      Colors.white.withValues(alpha: 0.03),
+      Colors.white.withValues(alpha: 0),
+    ];
+    final centerX = size.width / 2;
+    final travel = (size.width / 2) + bw;
+    final leftX = centerX - (bw / 2) - (progress * travel);
+    final rightX = centerX - (bw / 2) + (progress * travel);
+
+    final leftGrad = LinearGradient(
+      begin: Alignment.centerRight,
+      end: Alignment.centerLeft,
+      colors: gradColors,
+    ).createShader(Rect.fromLTWH(leftX, 0, bw, size.height));
+
+    final rightGrad = LinearGradient(
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+      colors: gradColors,
+    ).createShader(Rect.fromLTWH(rightX, 0, bw, size.height));
+
+    final paintLeft =
+        Paint()
+          ..shader = leftGrad
+          ..blendMode = BlendMode.screen;
+    final paintRight =
+        Paint()
+          ..shader = rightGrad
+          ..blendMode = BlendMode.screen;
+
+    canvas.drawRect(Rect.fromLTWH(leftX, 0, bw, size.height), paintLeft);
+    canvas.drawRect(Rect.fromLTWH(rightX, 0, bw, size.height), paintRight);
+
+    final centerGlow = LinearGradient(
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
       colors: [
-        Colors.white.withValues(alpha: 0),
+        Colors.white.withValues(alpha: 0.0),
         Colors.white.withValues(alpha: 0.025),
-        Colors.white.withValues(alpha: 0.09),
+        Colors.white.withValues(alpha: 0.05),
         Colors.white.withValues(alpha: 0.025),
         Colors.white.withValues(alpha: 0),
       ],
-    ).createShader(Rect.fromLTWH(x, 0, bw, size.height));
-    canvas.save();
-    canvas.transform(Matrix4.rotationZ(-0.12).storage);
+    ).createShader(Rect.fromLTWH(centerX - 36, 0, 72, size.height));
     canvas.drawRect(
-      Rect.fromLTWH(x - 10, -20, bw, size.height + 40),
-      Paint()..shader = grad,
+      Rect.fromLTWH(centerX - 36, 0, 72, size.height),
+      Paint()
+        ..shader = centerGlow
+        ..blendMode = BlendMode.screen,
     );
-    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_ShimmerPainter o) => o.x != x;
+  bool shouldRepaint(_ShimmerPainter o) => o.progress != progress || o.bw != bw;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

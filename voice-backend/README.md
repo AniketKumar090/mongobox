@@ -51,6 +51,12 @@ python start.py
 
 Returns: `audio/wav` (voice-only if no `reference_video_id`, or voice+instrumental mixed when provided)
 
+### `POST /clone/cancel`
+
+`multipart/form-data`:
+
+- `request_id` (text, required): the active clone request id to cancel
+
 Language behavior:
 
 - XTTS-v2 is still the primary engine and now honors Flutter's explicit `tts_language_code`.

@@ -54,13 +54,15 @@ class VoiceBackendBootstrapService {
       );
     }
 
-    final startScript = _findBackendStartScript();
-    if (startScript == null) {
-      return VoiceBackendBootstrapResult(
-        isHealthy: false,
-        message:
-            'Voice backend is offline and the local start script could not be found.',
-      );
+    if (!Platform.isIOS) {
+      final startScript = _findBackendStartScript();
+      if (startScript == null) {
+        return VoiceBackendBootstrapResult(
+          isHealthy: false,
+          message:
+              'Voice backend is offline and the local start script could not be found.',
+        );
+      }
     }
 
     final didStart = await _startBackend(uri!);
@@ -77,6 +79,44 @@ class VoiceBackendBootstrapService {
       isHealthy: false,
       didStart: true,
       message: 'Starting voice backend in the background…',
+    );
+  }
+
+  static Future<VoiceBackendBootstrapResult> ensureBackendReadyAndWait({
+    Duration startupTimeout = const Duration(seconds: 10),
+    Duration pollInterval = const Duration(milliseconds: 500),
+  }) async {
+    final initial = await ensureBackendReady();
+    if (initial.isHealthy) return initial;
+
+    final backendUrl = EnvConfig.voiceBackendUrl;
+    final uri = Uri.tryParse(backendUrl);
+    if (!_canAutoStart(uri) || startupTimeout <= Duration.zero) {
+      return initial;
+    }
+
+    final deadline = DateTime.now().add(startupTimeout);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(pollInterval);
+      if (await _isBackendHealthy(backendUrl)) {
+        return VoiceBackendBootstrapResult(
+          isHealthy: true,
+          didStart: initial.didStart,
+          message:
+              initial.didStart
+                  ? 'Voice backend is ready.'
+                  : initial.message,
+        );
+      }
+    }
+
+    return VoiceBackendBootstrapResult(
+      isHealthy: false,
+      didStart: initial.didStart,
+      message:
+          initial.didStart
+              ? 'Voice backend is still starting in the background…'
+              : initial.message,
     );
   }
 
