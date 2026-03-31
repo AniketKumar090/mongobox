@@ -258,7 +258,7 @@ class _HostPartyScreenState extends State<HostPartyScreen>
     if (mounted) {
       ScaffoldMessenger.of(
         context,
-      );//.showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
+      ); //.showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
     }
   }
 
@@ -1869,8 +1869,8 @@ class _ShareBottomSheet extends StatelessWidget {
                                     ? box.localToGlobal(Offset.zero) & box.size
                                     : const Rect.fromLTWH(0, 0, 1, 1);
                             await Share.share(
-                              'Join my MongoBox party\n\n$partyLink',
-                              subject: 'MongoBox Party',
+                              'Join my LyricQsk party\n\n$partyLink',
+                              subject: 'LyricQsk Party',
                               sharePositionOrigin: shareOrigin,
                             );
                             if (context.mounted) {

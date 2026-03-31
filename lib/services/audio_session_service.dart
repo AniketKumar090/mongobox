@@ -28,7 +28,7 @@ class AppAudioSessionService {
         builder: () => LyricBackgroundAudioHandler(),
         config: const AudioServiceConfig(
           androidNotificationChannelId: 'com.kurenai7968.mongobox.audio',
-          androidNotificationChannelName: 'LyricQSK Playback',
+          androidNotificationChannelName: 'LyricQsk Playback',
           androidNotificationOngoing: true,
           androidStopForegroundOnPause: true,
         ),

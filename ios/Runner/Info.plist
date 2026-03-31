@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mongobox</string>
+	<string>LyricQsk</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>mongobox</string>
+	<string>LyricQsk</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,9 +27,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>MongoBox uses the camera to scan the host's QR code to join a party.</string>
+	<string>LyricQsk uses the camera to scan the host's QR code to join a party.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>MongoBox uses the microphone to listen for lyrics you speak and to record a short voice sample for AI song generation.</string>
+	<string>LyricQsk uses the microphone to listen for lyrics you speak and to record a short voice sample for AI song generation.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Lyric Play uses speech recognition to turn your spoken lyrics into text.</string>
 	<key>UIApplicationSceneManifest</key>

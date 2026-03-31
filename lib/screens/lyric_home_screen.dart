@@ -834,7 +834,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     final mq = MediaQuery.of(context);
     final screenWidth = mq.size.width;
     final screenHeight = mq.size.height;
-    final keyboardHeight = mq.viewInsets.bottom;
     final isCompact = screenWidth < 600;
     final hPad = isCompact ? screenWidth * 0.05 : screenWidth * 0.08;
     final vGap = screenHeight < 700 ? 8.0 : 12.0;
@@ -914,17 +913,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
                       ],
                     ),
                   ),
-                  // AnimatedPositioned(
-                  //   duration: const Duration(milliseconds: 220),
-                  //   curve: Curves.easeOutCubic,
-                  //   left: 0,
-                  //   right: 0,
-                  //   bottom: keyboardHeight > 0 ? keyboardHeight : -96,
-                  //   child: IgnorePointer(
-                  //     ignoring: true,
-                  //     child: _KeyboardOverlaySpacer(hPad: hPad),
-                  //   ),
-                  // ),
                 ],
               );
             },
@@ -935,35 +923,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _KeyboardOverlaySpacer
-// ─────────────────────────────────────────────────────────────────────────────
-class _KeyboardOverlaySpacer extends StatelessWidget {
-  const _KeyboardOverlaySpacer({required this.hPad});
-
-  final double hPad;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-      child: Container(
-        height: 78,
-        padding: EdgeInsets.fromLTRB(hPad, 10, hPad, 14),
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0x00F5F3EF), Color(0xB8F5F3EF), Color(0xF2F5F3EF)],
-            stops: [0.0, 0.4, 1.0],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // _SongPickerSheet
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1201,7 +1160,7 @@ class _SongPickerCard extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  _CircularThumbnail(
+                  _ZoomedCircularThumbnail(
                     imageUrl:
                         'https://img.youtube.com/vi/${result.videoId}/0.jpg',
                     size: 58,
@@ -1370,6 +1329,64 @@ class _SongPickerCard extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _ZoomedCircularThumbnail
+// ─────────────────────────────────────────────────────────────────────────────
+class _ZoomedCircularThumbnail extends StatelessWidget {
+  const _ZoomedCircularThumbnail({
+    required this.imageUrl,
+    required this.size,
+    required this.fallbackText,
+  });
+
+  final String imageUrl;
+  final double size;
+  final String fallbackText;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      clipBehavior: Clip.antiAliasWithSaveLayer,
+      child: Image.network(
+        imageUrl,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.high,
+        // This effectively zooms in on the image by scaling it up slightly
+        // and centering it within the oval. 
+        // A scale of 1.3 provides a nice zoomed-in effect that fills the circle
+        // without losing important visual details for most YouTube thumbnails.
+        scale: 0.85, 
+        errorBuilder: (_, __, ___) {
+          return Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(
+              color: Color(0xFFD8D4CC),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                fallbackText.length > 6
+                    ? fallbackText.substring(0, 6)
+                    : fallbackText,
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: size * 0.2,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF6B6B6B),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // _MetaChip
@@ -1636,50 +1653,88 @@ class _TurntablePlayerCard extends StatelessWidget {
                                                 ],
                                               ),
                                             ),
-                                            child: ClipOval(
-                                              child:
-                                                  nowPlaying != null
-                                                      ? _CircularThumbnail(
-                                                        imageUrl:
-                                                            'https://img.youtube.com/vi/${nowPlaying!.videoId}/0.jpg',
-                                                        size: labelSize,
-                                                        fallbackText:
-                                                            'LYRICQSK',
-                                                      )
-                                                      : Transform.rotate(
-                                                        angle: math.pi,
-                                                        child: Center(
-                                                          child: Text(
-                                                            artist.length > 12
-                                                                ? artist
-                                                                    .substring(
-                                                                      0,
-                                                                      12,
-                                                                    )
-                                                                    .toUpperCase()
-                                                                : artist
-                                                                    .toUpperCase(),
-                                                            textAlign:
-                                                                TextAlign
-                                                                    .center,
-                                                            style: TextStyle(
-                                                              fontFamily:
-                                                                  'Inter',
-                                                              fontSize:
-                                                                  labelFontSize,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                              color:
-                                                                  const Color(
-                                                                    0xFF6B6B6B,
+                                            child: SizedBox(
+                                              width: labelSize,
+                                              height: labelSize,
+                                              child: ClipOval(
+                                                clipBehavior:
+                                                    Clip.antiAliasWithSaveLayer,
+                                                child:
+                                                    nowPlaying != null
+                                                        ? Image.network(
+                                                          'https://img.youtube.com/vi/${nowPlaying!.videoId}/0.jpg',
+                                                          width: labelSize,
+                                                          height: labelSize,
+                                                          fit: BoxFit.cover,
+                                                          filterQuality:
+                                                              FilterQuality
+                                                                  .high,
+                                                          scale: 0.85, // Zoom in effect for the turntable label as well
+                                                          errorBuilder:
+                                                              (
+                                                                _,
+                                                                __,
+                                                                ___,
+                                                              ) => Container(
+                                                                color:
+                                                                    const Color(
+                                                                      0xFFD8D4CC,
+                                                                    ),
+                                                                child: Center(
+                                                                  child: Text(
+                                                                    'LYRICQSK',
+                                                                    style: TextStyle(
+                                                                      fontFamily:
+                                                                          'Inter',
+                                                                      fontSize:
+                                                                          labelSize *
+                                                                          0.12,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w700,
+                                                                      color: const Color(
+                                                                        0xFF6B6B6B,
+                                                                      ),
+                                                                    ),
                                                                   ),
-                                                              letterSpacing:
-                                                                  0.6,
+                                                                ),
+                                                              ),
+                                                        )
+                                                        : Transform.rotate(
+                                                          angle: math.pi,
+                                                          child: Center(
+                                                            child: Text(
+                                                              artist.length > 12
+                                                                  ? artist
+                                                                      .substring(
+                                                                        0,
+                                                                        12,
+                                                                      )
+                                                                      .toUpperCase()
+                                                                  : artist
+                                                                      .toUpperCase(),
+                                                              textAlign:
+                                                                  TextAlign
+                                                                      .center,
+                                                              style: TextStyle(
+                                                                fontFamily:
+                                                                    'Inter',
+                                                                fontSize:
+                                                                    labelFontSize,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color:
+                                                                    const Color(
+                                                                      0xFF6B6B6B,
+                                                                    ),
+                                                                letterSpacing:
+                                                                    0.6,
+                                                              ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -2442,37 +2497,40 @@ class _CircularThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipOval(
-      child: SizedBox(
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      decoration: const BoxDecoration(shape: BoxShape.circle),
+      child: Image.network(
+        imageUrl,
         width: size,
         height: size,
-        child: Image.network(
-          imageUrl,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) {
-            return Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: const Color(0xFFD8D4CC),
-                borderRadius: BorderRadius.circular(size / 2),
-              ),
-              child: Center(
-                child: Text(
-                  fallbackText.length > 6
-                      ? fallbackText.substring(0, 6)
-                      : fallbackText,
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: size * 0.2,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF6B6B6B),
-                  ),
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) {
+          return Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(
+              color: Color(0xFFD8D4CC),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                fallbackText.length > 6
+                    ? fallbackText.substring(0, 6)
+                    : fallbackText,
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: size * 0.2,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF6B6B6B),
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }

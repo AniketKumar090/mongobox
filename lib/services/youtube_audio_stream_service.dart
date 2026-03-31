@@ -23,6 +23,16 @@ import 'lyric_audio_playback.dart';
 ///     localhost. AVPlayer talks to 127.0.0.1 and never sees the signed URL;
 ///     the proxy satisfies the CDN by presenting the correct client headers.
 ///
+///   2026-04 startup tuning:
+///     - On Apple, try the plain android client before watch-page variants.
+///       The watch-page paths are the ones most often rate-limited and can add
+///       seconds of dead time before we ever get a usable manifest.
+///     - Prefer muxed MP4 candidates first on Apple. In practice AVPlayer has
+///       been more reliable with those than the smaller audio-only MP4 variants
+///       that often fail with `(-1) unknown error` through the localhost proxy.
+///     - Trim the Apple fallback list so playback does not spend multiple
+///       seconds burning through low-value candidates before one finally starts.
+///
 ///   On Android the proxy is skipped entirely — ExoPlayer handles signed URLs
 ///   natively.
 class YouTubeAudioStreamService {
@@ -41,6 +51,7 @@ class YouTubeAudioStreamService {
   > _cache = {};
 
   static const Duration _cacheTtl = Duration(minutes: 18);
+  static const int _appleMaxStartupCandidates = 3;
 
   bool get _isApple =>
       !kIsWeb &&
@@ -129,16 +140,16 @@ class YouTubeAudioStreamService {
   List<({YoutubeApiClient client, String label, bool watchPage})>
   _clientStrategy() {
     if (_isApple) {
-      // On iOS we use the android client because it reliably bypasses bot
-      // checks. The local proxy handles the client-token mismatch.
+      // On Apple platforms, go to the plain android client first. The watch
+      // page flows tend to be the slow path under rate limiting.
       return [
+        (client: YoutubeApiClient.android, label: 'android', watchPage: false),
         (client: YoutubeApiClient.android, label: 'android+wp', watchPage: true),
         (client: YoutubeApiClient.androidVr, label: 'androidVr+wp', watchPage: true),
-        // Fallbacks in case android starts failing.
+        // Fallbacks in case the android client family starts failing.
+        (client: YoutubeApiClient.ios, label: 'ios', watchPage: false),
         (client: YoutubeApiClient.ios, label: 'ios+wp', watchPage: true),
         (client: YoutubeApiClient.tv, label: 'tv+wp', watchPage: true),
-        (client: YoutubeApiClient.android, label: 'android', watchPage: false),
-        (client: YoutubeApiClient.ios, label: 'ios', watchPage: false),
       ];
     } else {
       return [
@@ -221,8 +232,8 @@ class YouTubeAudioStreamService {
 
   /// Rank streams.
   ///
-  /// iOS (all proxied): mp4 audio-only first (smaller, faster to buffer),
-  /// then HLS audio, then mp4 muxed fallback.
+  /// Apple (all proxied): mp4 muxed first, then HLS audio/muxed, then mp4
+  /// audio-only fallback.
   /// WebM excluded — AVPlayer cannot decode Opus even via proxy.
   ///
   /// Android: audio-only first (any codec), then HLS, then muxed.
@@ -242,20 +253,36 @@ class YouTubeAudioStreamService {
       ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
 
     if (_isApple) {
-      for (final s in audioOnly.where((s) => s.container == StreamContainer.mp4)) {
-        add(s);
-      }
-      for (final s in hlsAudio) add(s);
       for (final s in muxed.where((s) => s.container == StreamContainer.mp4)) {
         add(s);
       }
-      for (final s in hlsMuxed) add(s);
+      for (final s in hlsAudio) {
+        add(s);
+      }
+      for (final s in hlsMuxed) {
+        add(s);
+      }
+      for (final s in audioOnly.where((s) => s.container == StreamContainer.mp4)) {
+        add(s);
+      }
       // WebM/Opus intentionally excluded.
     } else {
-      for (final s in audioOnly) add(s);
-      for (final s in hlsAudio) add(s);
-      for (final s in muxed) add(s);
-      for (final s in hlsMuxed) add(s);
+      for (final s in audioOnly) {
+        add(s);
+      }
+      for (final s in hlsAudio) {
+        add(s);
+      }
+      for (final s in muxed) {
+        add(s);
+      }
+      for (final s in hlsMuxed) {
+        add(s);
+      }
+    }
+
+    if (_isApple && ranked.length > _appleMaxStartupCandidates) {
+      return ranked.take(_appleMaxStartupCandidates).toList();
     }
 
     return ranked;

@@ -24,27 +24,29 @@ class _HomeScreenState extends State<HomeScreen> {
   late String _partyId;
 
   // Use the SAME link as mobile
-  static const String _appLink = 'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
+  static const String _appLink =
+      'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
 
   @override
   void initState() {
     super.initState();
-    
+
     // Extract partyId from URL (if this page was opened via QR code)
     final queryParams = html.window.location.search ?? '';
     final regex = RegExp(r'partyId=([^&]*)');
     final match = regex.firstMatch(queryParams);
-    
+
     if (match != null && match.group(1)!.isNotEmpty) {
       // Guest joining via QR code
       _partyId = match.group(1) ?? 'default_party';
       print('👥 Web guest joining party: $_partyId');
     } else {
       // Host creating new party
-      _partyId = 'party_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
+      _partyId =
+          'party_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
       print('🎪 Web host creating party: $_partyId');
     }
-    
+
     _registerIframeElement();
 
     // Listen to shared queue with party ID
@@ -56,42 +58,47 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _registerIframeElement() {
-    ui_web.platformViewRegistry.registerViewFactory(
-      _iframeElement,
-      (int viewId) {
-        final iframe = html.IFrameElement()
-          ..width = '100%'
-          ..height = '100%'
-          ..src = 'about:blank'
-          ..style.border = 'none'
-          ..allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
-          ..allowFullscreen = true
-          ..id = 'youtube-player-$viewId';
-        _currentIframe = iframe;
-        return iframe;
-      },
-    );
+    ui_web.platformViewRegistry.registerViewFactory(_iframeElement, (
+      int viewId,
+    ) {
+      final iframe =
+          html.IFrameElement()
+            ..width = '100%'
+            ..height = '100%'
+            ..src = 'about:blank'
+            ..style.border = 'none'
+            ..allow =
+                'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
+            ..allowFullscreen = true
+            ..id = 'youtube-player-$viewId';
+      _currentIframe = iframe;
+      return iframe;
+    });
   }
 
   Future<void> searchSongs(String query) async {
     try {
-      final url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${Uri.encodeQueryComponent(query)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
+      final url =
+          'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${Uri.encodeQueryComponent(query)}&type=video&key=AIzaSyBJzIb7YbZPPL2XuOGlncntEPwkc0JQpmY';
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
-          searchResults = (data['items'] as List).map((item) {
-            return {
-              'id': item['id']['videoId'],
-              'title': item['snippet']['title'],
-              'thumbnail': item['snippet']['thumbnails']['default']['url'],
-              'artist': item['snippet']['channelTitle'],
-            };
-          }).toList();
+          searchResults =
+              (data['items'] as List).map((item) {
+                return {
+                  'id': item['id']['videoId'],
+                  'title': item['snippet']['title'],
+                  'thumbnail': item['snippet']['thumbnails']['default']['url'],
+                  'artist': item['snippet']['channelTitle'],
+                };
+              }).toList();
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Search error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Search error: $e')));
     }
   }
 
@@ -111,7 +118,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _updateIframeSource(String videoId) {
     try {
-      final src = 'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
+      final src =
+          'https://www.youtube.com/embed/$videoId?autoplay=1&rel=0&enablejsapi=1&origin=${html.window.location.origin}';
       _currentIframe?.src = src;
     } catch (e) {
       print('Update iframe error: $e');
@@ -120,13 +128,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> addToQueue(Map<String, dynamic> song) async {
     if (queue.any((s) => s.id == song['id'])) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already in queue')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Already in queue')));
       return;
     }
     await SharedQueueService(partyId: _partyId).addSong(
-      Song(key: '', id: song['id'], title: song['title'], artist: song['artist'], thumbnail: song['thumbnail']),
+      Song(
+        key: '',
+        id: song['id'],
+        title: song['title'],
+        artist: song['artist'],
+        thumbnail: song['thumbnail'],
+      ),
     );
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Added "${song['title']}"')));
   }
 
   Future<void> removeFromQueue(String key) async {
@@ -140,28 +158,45 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showQRCodeDialog(BuildContext context, String qrData) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Share MongoBox"),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Party ID: $_partyId', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: 250,
-                height: 250,
-                child: Center(child: QrImageView(data: qrData, version: QrVersions.auto, size: 200)),
+      builder:
+          (context) => AlertDialog(
+            title: const Text("Share LyricQsk"),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Party ID: $_partyId',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: 250,
+                    height: 250,
+                    child: Center(
+                      child: QrImageView(
+                        data: qrData,
+                        version: QrVersions.auto,
+                        size: 200,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Link: $qrData',
+                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              Text('Link: $qrData', style: const TextStyle(fontSize: 10, color: Colors.grey), textAlign: TextAlign.center),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text("Close"),
+              ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text("Close")),
-        ],
-      ),
     );
   }
 
@@ -183,12 +218,19 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: const Text('MongoBox Jukebox', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'LyricQsk Jukebox',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.red[600],
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
-          IconButton(icon: const Icon(Icons.qr_code), onPressed: _generateQRCode, tooltip: "Share app link"),
+          IconButton(
+            icon: const Icon(Icons.qr_code),
+            onPressed: _generateQRCode,
+            tooltip: "Share app link",
+          ),
         ],
       ),
       body: Padding(
@@ -206,22 +248,43 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.black,
                       borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: const Offset(0, 4))],
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
-                      child: currentVideoId != null
-                          ? HtmlElementView(viewType: _iframeElement, key: ValueKey('player-$currentVideoId'))
-                          : const Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.music_video, size: 64, color: Colors.white54),
-                                  SizedBox(height: 16),
-                                  Text('Search and select a song to play', style: TextStyle(color: Colors.white70, fontSize: 16), textAlign: TextAlign.center),
-                                ],
+                      child:
+                          currentVideoId != null
+                              ? HtmlElementView(
+                                viewType: _iframeElement,
+                                key: ValueKey('player-$currentVideoId'),
+                              )
+                              : const Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.music_video,
+                                      size: 64,
+                                      color: Colors.white54,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'Search and select a song to play',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 16,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -230,22 +293,37 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, 2))],
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         ElevatedButton.icon(
-                          onPressed: queue.isEmpty ? null : () => removeFromQueue(queue.first.key),
+                          onPressed:
+                              queue.isEmpty
+                                  ? null
+                                  : () => removeFromQueue(queue.first.key),
                           icon: const Icon(Icons.skip_next),
                           label: const Text('Next'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red[600], foregroundColor: Colors.white),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red[600],
+                            foregroundColor: Colors.white,
+                          ),
                         ),
                         ElevatedButton.icon(
                           onPressed: queue.isEmpty ? null : clearQueue,
                           icon: const Icon(Icons.clear_all),
                           label: const Text('Clear Queue'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[600], foregroundColor: Colors.white),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey[600],
+                            foregroundColor: Colors.white,
+                          ),
                         ),
                       ],
                     ),
@@ -256,7 +334,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, 2))],
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
                       child: Column(
                         children: [
@@ -264,63 +348,120 @@ class _HomeScreenState extends State<HomeScreen> {
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
                               color: Colors.red[50],
-                              borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(12),
+                                topRight: Radius.circular(12),
+                              ),
                             ),
                             child: const Row(
                               children: [
                                 Icon(Icons.queue_music, color: Colors.red),
                                 SizedBox(width: 8),
-                                Text('Queue', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
+                                Text(
+                                  'Queue',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.red,
+                                  ),
+                                ),
                                 Spacer(),
                                 Icon(Icons.drag_handle, color: Colors.red),
                                 SizedBox(width: 4),
-                                Text('Drag to reorder', style: TextStyle(fontSize: 12, color: Colors.red, fontStyle: FontStyle.italic)),
+                                Text(
+                                  'Drag to reorder',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.red,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
                           Expanded(
-                            child: queue.isEmpty
-                                ? const Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(Icons.queue_music, size: 48, color: Colors.grey),
-                                        SizedBox(height: 8),
-                                        Text('No songs in queue', style: TextStyle(color: Colors.grey, fontSize: 14)),
-                                      ],
+                            child:
+                                queue.isEmpty
+                                    ? const Center(
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.queue_music,
+                                            size: 48,
+                                            color: Colors.grey,
+                                          ),
+                                          SizedBox(height: 8),
+                                          Text(
+                                            'No songs in queue',
+                                            style: TextStyle(
+                                              color: Colors.grey,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                    : ListView.builder(
+                                      padding: const EdgeInsets.all(8),
+                                      itemCount: queue.length,
+                                      itemBuilder: (context, index) {
+                                        final song = queue[index];
+                                        return ListTile(
+                                          key: ValueKey(song.key),
+                                          leading: ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                            child: Image.network(
+                                              song.thumbnail,
+                                              width: 40,
+                                              height: 40,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (_, __, ___) => const Icon(
+                                                    Icons.music_note,
+                                                  ),
+                                            ),
+                                          ),
+                                          title: Text(
+                                            song.title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          subtitle: Text(
+                                            song.artist,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          trailing: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.play_arrow,
+                                                ),
+                                                onPressed:
+                                                    () => playSong(song.id),
+                                                tooltip: 'Play Now',
+                                              ),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.close,
+                                                  color: Colors.red,
+                                                ),
+                                                onPressed:
+                                                    () => removeFromQueue(
+                                                      song.key,
+                                                    ),
+                                                tooltip: 'Remove',
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
                                     ),
-                                  )
-                                : ListView.builder(
-                                    padding: const EdgeInsets.all(8),
-                                    itemCount: queue.length,
-                                    itemBuilder: (context, index) {
-                                      final song = queue[index];
-                                      return ListTile(
-                                        key: ValueKey(song.key),
-                                        leading: ClipRRect(
-                                          borderRadius: BorderRadius.circular(4),
-                                          child: Image.network(song.thumbnail, width: 40, height: 40, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.music_note)),
-                                        ),
-                                        title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                        subtitle: Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                        trailing: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              icon: const Icon(Icons.play_arrow),
-                                              onPressed: () => playSong(song.id),
-                                              tooltip: 'Play Now',
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(Icons.close, color: Colors.red),
-                                              onPressed: () => removeFromQueue(song.key),
-                                              tooltip: 'Remove',
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    },
-                                  ),
                           ),
                         ],
                       ),
@@ -338,7 +479,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, 2))],
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: TextField(
                       controller: _searchController,
@@ -353,7 +500,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             }
                           },
                         ),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
                         filled: true,
                         fillColor: Colors.white,
                       ),
@@ -366,42 +516,82 @@ class _HomeScreenState extends State<HomeScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, 2))],
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      child: searchResults.isEmpty
-                          ? const Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.search, size: 64, color: Colors.grey),
-                                  SizedBox(height: 16),
-                                  Text('Search for songs to see results', style: TextStyle(fontSize: 16, color: Colors.grey)),
-                                ],
+                      child:
+                          searchResults.isEmpty
+                              ? const Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.search,
+                                      size: 64,
+                                      color: Colors.grey,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'Search for songs to see results',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                              : ListView.builder(
+                                padding: const EdgeInsets.all(8),
+                                itemCount: searchResults.length,
+                                itemBuilder: (context, index) {
+                                  final s = searchResults[index];
+                                  final isInQueue = queue.any(
+                                    (song) => song.id == s['id'],
+                                  );
+                                  return Card(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    child: ListTile(
+                                      leading: ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.network(
+                                          s['thumbnail'],
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (_, __, ___) =>
+                                                  const Icon(Icons.music_note),
+                                        ),
+                                      ),
+                                      title: Text(
+                                        s['title'],
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      subtitle: Text(
+                                        s['artist'],
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      trailing: FilledButton(
+                                        onPressed:
+                                            isInQueue
+                                                ? null
+                                                : () => addToQueue(s),
+                                        child: Text(
+                                          isInQueue ? 'Added' : 'Add',
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(8),
-                              itemCount: searchResults.length,
-                              itemBuilder: (context, index) {
-                                final s = searchResults[index];
-                                final isInQueue = queue.any((song) => song.id == s['id']);
-                                return Card(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  child: ListTile(
-                                    leading: ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Image.network(s['thumbnail'], width: 56, height: 56, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.music_note)),
-                                    ),
-                                    title: Text(s['title'], maxLines: 2, overflow: TextOverflow.ellipsis),
-                                    subtitle: Text(s['artist'], maxLines: 1, overflow: TextOverflow.ellipsis),
-                                    trailing: FilledButton(
-                                      onPressed: isInQueue ? null : () => addToQueue(s),
-                                      child: Text(isInQueue ? 'Added' : 'Add'),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
                     ),
                   ),
                 ],
