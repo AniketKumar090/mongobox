@@ -18,11 +18,18 @@ import Darwin
         binaryMessenger: controller.binaryMessenger
       )
       channel.setMethodCallHandler { [weak self] call, result in
-        guard call.method == "startVoiceBackend" else {
+        switch call.method {
+        case "startVoiceBackend":
+          self?.handleVoiceBackendStart(call: call, result: result)
+        case "isSimulator":
+#if targetEnvironment(simulator)
+          result(true)
+#else
+          result(false)
+#endif
+        default:
           result(FlutterMethodNotImplemented)
-          return
         }
-        self?.handleVoiceBackendStart(call: call, result: result)
       }
     }
 

@@ -253,7 +253,7 @@ class VoiceCloneService {
       referenceSong: referenceSong,
     );
 
-    final backendUrl = EnvConfig.voiceBackendUrl;
+    final backendUrl = await EnvConfig.resolveVoiceBackendUrl();
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$backendUrl/clone'),
@@ -299,9 +299,13 @@ class VoiceCloneService {
           .send(request)
           .timeout(const Duration(minutes: 10));
     } on SocketException {
+      final physicalIosLoopback =
+          await EnvConfig.isPhysicalIosDeviceUsingLocalBackend();
       throw Exception(
-        'Could not reach the voice backend at $backendUrl. '
-        'Start it with: cd voice-backend && python start.py',
+        physicalIosLoopback
+            ? EnvConfig.voiceBackendPhysicalDeviceHelp()
+            : 'Could not reach the voice backend at $backendUrl. '
+                'Start it with: cd voice-backend && python start.py',
       );
     }
 
@@ -337,7 +341,7 @@ class VoiceCloneService {
     final trimmed = requestId.trim();
     if (trimmed.isEmpty) return;
 
-    final backendUrl = EnvConfig.voiceBackendUrl;
+    final backendUrl = await EnvConfig.resolveVoiceBackendUrl();
     try {
       final response = await _client
           .post(
@@ -357,7 +361,13 @@ class VoiceCloneService {
         'Cancellation timed out while waiting for the voice backend.',
       );
     } on SocketException {
-      throw Exception('Could not reach the voice backend to stop cloning.');
+      final physicalIosLoopback =
+          await EnvConfig.isPhysicalIosDeviceUsingLocalBackend();
+      throw Exception(
+        physicalIosLoopback
+            ? EnvConfig.voiceBackendPhysicalDeviceHelp()
+            : 'Could not reach the voice backend to stop cloning.',
+      );
     }
   }
 

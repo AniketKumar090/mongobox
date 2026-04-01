@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'dart:ui';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../constants/colors.dart';
 import 'join_party_screen.dart';
 import 'lyric_home_screen.dart';
 
@@ -64,9 +65,9 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
     if (uri == null) {
       _hasProcessedScan = false;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid link')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Invalid link')));
       }
       _isResolvingLink = false;
       return;
@@ -82,10 +83,8 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => JoinPartyScreen(
-              onBack: widget.onBack,
-              partyId: partyId,
-            ),
+            builder:
+                (_) => JoinPartyScreen(onBack: widget.onBack, partyId: partyId),
           ),
         );
       }
@@ -104,9 +103,9 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
       _hasProcessedScan = false;
       debugPrint('❌ Error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (!didNavigate) {
@@ -197,26 +196,26 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
         _cameraError
             ? _buildCameraUnavailable()
             : MobileScanner(
-                controller: _scannerController!,
-                onDetect: (capture) {
-                  if (_hasProcessedScan || _isResolvingLink) return;
-                  final barcodes = capture.barcodes;
-                  if (barcodes.isEmpty) return;
-                  final code = barcodes.first.rawValue;
-                  if (code == null || code.isEmpty) return;
-                  _hasProcessedScan = true;
-                  _openLink(code);
-                },
-                errorBuilder: (context, error) {
-                  if (!_cameraError) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) setState(() => _cameraError = true);
-                    });
-                  }
-                  return _buildCameraUnavailable();
-                },
-                fit: BoxFit.cover,
-              ),
+              controller: _scannerController!,
+              onDetect: (capture) {
+                if (_hasProcessedScan || _isResolvingLink) return;
+                final barcodes = capture.barcodes;
+                if (barcodes.isEmpty) return;
+                final code = barcodes.first.rawValue;
+                if (code == null || code.isEmpty) return;
+                _hasProcessedScan = true;
+                _openLink(code);
+              },
+              errorBuilder: (context, error) {
+                if (!_cameraError) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() => _cameraError = true);
+                  });
+                }
+                return _buildCameraUnavailable();
+              },
+              fit: BoxFit.cover,
+            ),
 
         // QR Scanner corner brackets (positioned in upper middle)
         const Positioned(
@@ -237,9 +236,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
             child: GestureDetector(
               onTap: () {
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                    builder: (_) => const LyricHomeScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const LyricHomeScreen()),
                 );
               },
               child: Container(
@@ -259,12 +256,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
         ),
 
         // Glassmorphic panel at bottom
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: _buildGlassJoinPanel(),
-        ),
+        Positioned(left: 0, right: 0, bottom: 0, child: _buildGlassJoinPanel()),
       ],
     );
   }
@@ -276,11 +268,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.camera_alt_outlined,
-              size: 64,
-              color: Colors.white38,
-            ),
+            Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white38),
             SizedBox(height: 16),
             Text(
               'Camera unavailable',
@@ -395,7 +383,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
             color: const Color(0xFFF8F4EE),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
-              color: hasFocus ? const Color(0xFF11F08A) : const Color(0xFFD8D4CC),
+              color: hasFocus ? AppColors.accent : const Color(0xFFD8D4CC),
               width: 1.5,
             ),
           ),
@@ -413,7 +401,7 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
                   data: Theme.of(context).copyWith(
                     textSelectionTheme: const TextSelectionThemeData(
                       cursorColor: Colors.black,
-                      selectionColor: Color(0x4411F08A),
+                      selectionColor: Color(0x447C5CFF),
                       selectionHandleColor: Colors.black,
                     ),
                   ),
@@ -455,27 +443,28 @@ class _JoinViaLinkScreenState extends State<JoinViaLinkScreen> {
                     vertical: 12,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF11C979),
+                    color: AppColors.accent,
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: _opening
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                  child:
+                      _opening
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                          : const Text(
+                            'Join',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
                           ),
-                        )
-                      : const Text(
-                          'Join',
-                          style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -507,12 +496,13 @@ class _ScannerCornerOverlay extends StatelessWidget {
 class _CornerBracketPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    const color = Color(0xFF11C979);
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 4.0
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+    const color = AppColors.accent;
+    final paint =
+        Paint()
+          ..color = color
+          ..strokeWidth = 4.0
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
 
     const squareSize = 240.0;
     final cx = size.width / 2;

@@ -9,6 +9,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
+import '../constants/colors.dart';
 import '../services/playback_service_mobile.dart';
 import '../services/local_suggestions_service.dart';
 import '../services/youtube_quota_monitor.dart';
@@ -1168,7 +1169,7 @@ class _SongPickerCard extends StatelessWidget {
   final VoidCallback onTap;
 
   static Color _confidenceColor(double c) {
-    if (c >= 0.80) return const Color(0xFF11C979);
+    if (c >= 0.80) return AppColors.accent;
     if (c >= 0.60) return const Color(0xFFFFB830);
     return const Color(0xFFCCCCCC);
   }
@@ -1425,10 +1426,6 @@ class _ZoomedCircularThumbnail extends StatelessWidget {
         height: size,
         fit: BoxFit.cover,
         filterQuality: FilterQuality.high,
-        // This effectively zooms in on the image by scaling it up slightly
-        // and centering it within the oval.
-        // A scale of 1.3 provides a nice zoomed-in effect that fills the circle
-        // without losing important visual details for most YouTube thumbnails.
         scale: 0.85,
         errorBuilder: (_, __, ___) {
           return Container(
@@ -1633,6 +1630,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
     final trackCount = widget.savedCount.toString().padLeft(3, '0');
 
     Widget buildCard(bool isPlaying, Duration position, Duration duration) {
+      final palette = LyricScreenPalette.of(context);
       final playbackProgress =
           duration.inMilliseconds <= 0
               ? baseProgress
@@ -1640,6 +1638,36 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                 0.0,
                 1.0,
               );
+      final cardColor =
+          palette.isDark ? palette.surface : const Color(0xFFF5F3EF);
+      final cardBorderColor =
+          palette.isDark ? palette.outline : Colors.transparent;
+      final deckGradient =
+          palette.isDark
+              ? const [Color(0xFF383F47), Color(0xFF2B3138), Color(0xFF1D232A)]
+              : const [Color(0xFFD7D7D7), Color(0xFFB7B7B7), Color(0xFF9C9C9C)];
+      final deckBorderColor =
+          palette.isDark ? const Color(0xFF525C67) : const Color(0xFF858585);
+      final labelGradient =
+          palette.isDark
+              ? const [Color(0xFF3B424A), Color(0xFF242A31)]
+              : const [Color(0xFFF9F8F4), Color(0xFFDBD8D2)];
+      final labelFallbackColor =
+          palette.isDark ? const Color(0xFF2B3138) : const Color(0xFFD8D4CC);
+      final labelTextColor =
+          palette.isDark ? const Color(0xFFC3CBD4) : const Color(0xFF6B6B6B);
+      final titleColor = palette.ink;
+      final metaChipColor =
+          palette.isDark ? palette.mutedSurface : const Color(0xFFEDEAE4);
+      final badgeColor =
+          palette.isDark ? palette.mutedSurface : const Color(0xFF171717);
+      final badgeTextColor = palette.isDark ? palette.ink : Colors.white;
+      final artistColor =
+          palette.isDark ? palette.mutedText : const Color(0xFF575757);
+      final clockColor = palette.isDark ? palette.ink : const Color(0xFF1C1C1C);
+      final mainButtonColor = palette.isDark ? palette.accent : Colors.black;
+      final mainButtonIconColor =
+          palette.isDark ? AppColors.onAccent : Colors.white;
       // Determine what the center button should show:
       //   • isLoading (search phase)  → spinner, button disabled
       //   • isStreamStarting          → spinner, but button IS tappable (cancel)
@@ -1657,8 +1685,9 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
           return Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFFF5F3EF),
+              color: cardColor,
               borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: cardBorderColor),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1666,20 +1695,13 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                 Expanded(
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
+                      gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [
-                          Color(0xFFD7D7D7),
-                          Color(0xFFB7B7B7),
-                          Color(0xFF9C9C9C),
-                        ],
+                        colors: deckGradient,
                       ),
                       borderRadius: BorderRadius.circular(26),
-                      border: Border.all(
-                        color: const Color(0xFF858585),
-                        width: 1.3,
-                      ),
+                      border: Border.all(color: deckBorderColor, width: 1.3),
                     ),
                     child: Stack(
                       children: [
@@ -1772,19 +1794,14 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                     height: labelSize,
                                                     decoration: BoxDecoration(
                                                       shape: BoxShape.circle,
-                                                      gradient:
-                                                          const LinearGradient(
-                                                            begin:
-                                                                Alignment
-                                                                    .topCenter,
-                                                            end:
-                                                                Alignment
-                                                                    .bottomCenter,
-                                                            colors: [
-                                                              Color(0xFFF9F8F4),
-                                                              Color(0xFFDBD8D2),
-                                                            ],
-                                                          ),
+                                                      gradient: LinearGradient(
+                                                        begin:
+                                                            Alignment.topCenter,
+                                                        end:
+                                                            Alignment
+                                                                .bottomCenter,
+                                                        colors: labelGradient,
+                                                      ),
                                                     ),
                                                     child: SizedBox(
                                                       width: labelSize,
@@ -1815,9 +1832,8 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                                           __,
                                                                           ___,
                                                                         ) => Container(
-                                                                          color: const Color(
-                                                                            0xFFD8D4CC,
-                                                                          ),
+                                                                          color:
+                                                                              labelFallbackColor,
                                                                           child: Center(
                                                                             child: Text(
                                                                               'LYRICQSK',
@@ -1829,9 +1845,8 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                                                     0.12,
                                                                                 fontWeight:
                                                                                     FontWeight.w700,
-                                                                                color: const Color(
-                                                                                  0xFF6B6B6B,
-                                                                                ),
+                                                                                color:
+                                                                                    labelTextColor,
                                                                               ),
                                                                             ),
                                                                           ),
@@ -1863,9 +1878,8 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                                             labelFontSize,
                                                                         fontWeight:
                                                                             FontWeight.w700,
-                                                                        color: const Color(
-                                                                          0xFF6B6B6B,
-                                                                        ),
+                                                                        color:
+                                                                            labelTextColor,
                                                                         letterSpacing:
                                                                             0.6,
                                                                       ),
@@ -1956,7 +1970,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                           fontFamily: 'Inter',
                           fontSize: titleFontSize,
                           fontWeight: FontWeight.w900,
-                          color: Colors.black,
+                          color: titleColor,
                           height: 1.05,
                         ),
                       ),
@@ -1968,25 +1982,25 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         vertical: 7,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFEDEAE4),
+                        color: metaChipColor,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.add_box_rounded,
                             size: 16,
-                            color: Colors.black,
+                            color: titleColor,
                           ),
                           const SizedBox(width: 5),
                           Text(
                             trackCount,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: 'Inter',
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
-                              color: Colors.black,
+                              color: titleColor,
                             ),
                           ),
                         ],
@@ -2003,17 +2017,16 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF171717),
+                        color: badgeColor,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        // Show loading state in the badge when stream is starting
                         widget.isStreamStarting ? 'Loading…' : 'Now Playing',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                          color: badgeTextColor,
                         ),
                       ),
                     ),
@@ -2023,11 +2036,11 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         artist,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF575757),
+                          color: artistColor,
                         ),
                       ),
                     ),
@@ -2042,7 +2055,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         fontFamily: 'Inter',
                         fontSize: clockFontSize,
                         fontWeight: FontWeight.w700,
-                        color: const Color(0xFF1C1C1C),
+                        color: clockColor,
                         letterSpacing: 0.2,
                       ),
                     ),
@@ -2064,7 +2077,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         fontFamily: 'Inter',
                         fontSize: clockFontSize,
                         fontWeight: FontWeight.w700,
-                        color: const Color(0xFF1C1C1C),
+                        color: clockColor,
                         letterSpacing: 0.2,
                       ),
                     ),
@@ -2084,47 +2097,44 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                     Container(
                       width: playBtnSize,
                       height: playBtnSize,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.black,
+                        color: mainButtonColor,
                       ),
                       child: IconButton(
-                        // Button is always tappable unless we're in the pure
-                        // search phase (isLoading && !isStreamStarting).
                         onPressed: buttonEnabled ? widget.onPlayPause : null,
                         icon:
                             showSearchSpinner
-                                ? const SizedBox(
+                                ? SizedBox(
                                   width: 22,
                                   height: 22,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2.4,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                                      mainButtonIconColor,
                                     ),
                                   ),
                                 )
                                 : widget.isStreamStarting
-                                // Stream loading: show a smaller spinner but
-                                // with a stop-square overlay so user knows
-                                // they can tap to cancel.
                                 ? Stack(
                                   alignment: Alignment.center,
                                   children: [
                                     SizedBox(
                                       width: playBtnSize * 0.42,
                                       height: playBtnSize * 0.42,
-                                      child: const CircularProgressIndicator(
+                                      child: CircularProgressIndicator(
                                         strokeWidth: 2,
                                         valueColor:
                                             AlwaysStoppedAnimation<Color>(
-                                              Color(0x88FFFFFF),
+                                              mainButtonIconColor.withValues(
+                                                alpha: 0.55,
+                                              ),
                                             ),
                                       ),
                                     ),
                                     Icon(
                                       Icons.stop_rounded,
-                                      color: Colors.white,
+                                      color: mainButtonIconColor,
                                       size: playBtnSize * 0.28,
                                     ),
                                   ],
@@ -2133,7 +2143,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                   isPlaying
                                       ? Icons.pause_rounded
                                       : Icons.play_arrow,
-                                  color: Colors.white,
+                                  color: mainButtonIconColor,
                                   size: playBtnSize * 0.47,
                                 ),
                       ),
@@ -2533,7 +2543,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                             : Icons.mic_none_rounded,
                         color:
                             widget.isListening
-                                ? const Color(0xFF0D1511)
+                                ? AppColors.onAccent
                                 : palette.mutedText,
                         size: 18,
                       ),
@@ -2547,28 +2557,27 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
           Row(
             children: [
               Expanded(
-                child: SizedBox(
-                  height: btnHeight,
-                  child: FilledButton.icon(
-                    onPressed: widget.isLoading ? null : widget.onSearch,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: palette.ink,
-                      foregroundColor: palette.surface,
-                      disabledBackgroundColor:
-                          palette.isDark
-                              ? const Color(0xFF2A2F35)
-                              : const Color(0xFF333333),
-                      disabledForegroundColor:
-                          palette.isDark
-                              ? palette.mutedText
-                              : const Color(0xFF888888),
-                      elevation: 0,
-                      shadowColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(btnHeight / 2),
-                      ),
+                child: GestureDetector(
+                  onTap: widget.isLoading ? null : widget.onSearch,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    height: btnHeight,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    decoration: BoxDecoration(
+                      // ── FIX: use accent green in dark mode, ink in light mode ──
+                      color:
+                          widget.isLoading
+                              ? (palette.isDark
+                                  ? const Color(0xFF2A2F35)
+                                  : const Color(0xFF333333))
+                              : (palette.isDark
+                                  ? palette.accent   // ← was 0xFFE7E1D8 (beige)
+                                  : palette.ink),
+                      borderRadius: BorderRadius.circular(btnHeight / 2),
                     ),
-                    icon:
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
                         widget.isLoading
                             ? SizedBox(
                               width: 16,
@@ -2580,14 +2589,32 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                                 ),
                               ),
                             )
-                            : const Icon(Icons.play_arrow_rounded),
-                    label: Text(
-                      widget.isLoading ? 'Finding…' : 'Find & play',
-                      style: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14,
-                      ),
+                            : Icon(
+                              Icons.play_arrow_rounded,
+                              color:
+                                  palette.isDark
+                                      ? AppColors.onAccent  // ← black on green
+                                      : palette.surface,
+                              size: 20,
+                            ),
+                        const SizedBox(width: 8),
+                        Text(
+                          widget.isLoading ? 'Finding…' : 'Find & play',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                            color:
+                                widget.isLoading
+                                    ? (palette.isDark
+                                        ? palette.mutedText
+                                        : const Color(0xFF888888))
+                                    : (palette.isDark
+                                        ? AppColors.onAccent  // ← black on green
+                                        : palette.surface),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -2651,13 +2678,21 @@ class _DeckScrew extends StatelessWidget {
   const _DeckScrew();
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return Container(
       width: 10,
       height: 10,
       decoration: BoxDecoration(
-        color: const Color(0xFF666666),
+        color:
+            palette.isDark ? const Color(0xFF4C5560) : const Color(0xFF666666),
         shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFFAFAFAF), width: 1.2),
+        border: Border.all(
+          color:
+              palette.isDark
+                  ? const Color(0xFF7D8793)
+                  : const Color(0xFFAFAFAF),
+          width: 1.2,
+        ),
       ),
     );
   }
@@ -2668,17 +2703,28 @@ class _DeckKnob extends StatelessWidget {
   final double size;
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+    final knobGradient =
+        palette.isDark
+            ? const [Color(0xFF414951), Color(0xFF232A31)]
+            : const [Color(0xFFE9E9E9), Color(0xFF8B8B8B)];
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFE9E9E9), Color(0xFF8B8B8B)],
+          colors: knobGradient,
         ),
-        border: Border.all(color: const Color(0xFF565656), width: 1.4),
+        border: Border.all(
+          color:
+              palette.isDark
+                  ? const Color(0xFF606A74)
+                  : const Color(0xFF565656),
+          width: 1.4,
+        ),
       ),
     );
   }
@@ -2690,6 +2736,11 @@ class _DeckLoopButton extends StatelessWidget {
   final VoidCallback? onPressed;
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+    final loopGradient =
+        palette.isDark
+            ? const [Color(0xFF343B43), Color(0xFF262D34)]
+            : const [Color(0xFFE2E2E2), Color(0xFFC4C4C4)];
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -2699,16 +2750,25 @@ class _DeckLoopButton extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [Color(0xFFE2E2E2), Color(0xFFC4C4C4)],
+              colors: loopGradient,
             ),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF9A9A9A), width: 1.2),
-            boxShadow: const [
+            border: Border.all(
+              color:
+                  palette.isDark
+                      ? const Color(0xFF525C67)
+                      : const Color(0xFF9A9A9A),
+              width: 1.2,
+            ),
+            boxShadow: [
               BoxShadow(
-                color: Color(0x22000000),
+                color:
+                    palette.isDark
+                        ? const Color(0x33000000)
+                        : const Color(0x22000000),
                 blurRadius: 6,
                 offset: Offset(0, 2),
               ),
@@ -2718,7 +2778,13 @@ class _DeckLoopButton extends StatelessWidget {
             isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded,
             size: 18,
             color:
-                isLooping ? const Color(0xFF111111) : const Color(0xFF4E4E4E),
+                isLooping
+                    ? (palette.isDark
+                        ? palette.accent
+                        : const Color(0xFF111111))
+                    : (palette.isDark
+                        ? const Color(0xFF9AA4AF)
+                        : const Color(0xFF4E4E4E)),
           ),
         ),
       ),
@@ -2738,6 +2804,15 @@ class _ToneArm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+    final tonePivotGradient =
+        palette.isDark
+            ? const [Color(0xFF434B54), Color(0xFF232A31)]
+            : const [Color(0xFFF2F2F2), Color(0xFF9D9D9D)];
+    final toneArmGradient =
+        palette.isDark
+            ? const [Color(0xFF4A535D), Color(0xFF2D343C)]
+            : const [Color(0xFFF3F3F3), Color(0xFF9F9F9F)];
     final angle = isPlaying ? (0.35 + (progress * 0.22)) : -0.05;
     return SizedBox(
       width: 110,
@@ -2755,13 +2830,16 @@ class _ToneArm extends StatelessWidget {
                 height: 48,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xFFF2F2F2), Color(0xFF9D9D9D)],
+                    colors: tonePivotGradient,
                   ),
                   border: Border.all(
-                    color: const Color(0xFF6B6B6B),
+                    color:
+                        palette.isDark
+                            ? const Color(0xFF626C77)
+                            : const Color(0xFF6B6B6B),
                     width: 1.4,
                   ),
                 ),
@@ -2771,9 +2849,15 @@ class _ToneArm extends StatelessWidget {
                     height: 20,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFFD8D8D8),
+                      color:
+                          palette.isDark
+                              ? const Color(0xFF313840)
+                              : const Color(0xFFD8D8D8),
                       border: Border.all(
-                        color: const Color(0xFF818181),
+                        color:
+                            palette.isDark
+                                ? const Color(0xFF66707A)
+                                : const Color(0xFF818181),
                         width: 1.2,
                       ),
                     ),
@@ -2795,14 +2879,17 @@ class _ToneArm extends StatelessWidget {
                       width: 8,
                       height: 112,
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
+                        gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
-                          colors: [Color(0xFFF3F3F3), Color(0xFF9F9F9F)],
+                          colors: toneArmGradient,
                         ),
                         borderRadius: BorderRadius.circular(99),
                         border: Border.all(
-                          color: const Color(0xFF707070),
+                          color:
+                              palette.isDark
+                                  ? const Color(0xFF5E6872)
+                                  : const Color(0xFF707070),
                           width: 1,
                         ),
                       ),
@@ -2812,10 +2899,16 @@ class _ToneArm extends StatelessWidget {
                       width: 22,
                       height: 34,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF4F4F4),
+                        color:
+                            palette.isDark
+                                ? const Color(0xFFCCD3DA)
+                                : const Color(0xFFF4F4F4),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: const Color(0xFF707070),
+                          color:
+                              palette.isDark
+                                  ? const Color(0xFF5E6872)
+                                  : const Color(0xFF707070),
                           width: 1,
                         ),
                       ),
@@ -2831,9 +2924,18 @@ class _ToneArm extends StatelessWidget {
                 width: 16,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFB3B3B3),
+                  color:
+                      palette.isDark
+                          ? const Color(0xFF47515A)
+                          : const Color(0xFFB3B3B3),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF707070), width: 1),
+                  border: Border.all(
+                    color:
+                        palette.isDark
+                            ? const Color(0xFF5E6872)
+                            : const Color(0xFF707070),
+                    width: 1,
+                  ),
                 ),
               ),
             ),
@@ -2861,6 +2963,7 @@ class _ScrubbableWaveform extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
@@ -2885,8 +2988,12 @@ class _ScrubbableWaveform extends StatelessWidget {
                       decoration: BoxDecoration(
                         color:
                             isActive
-                                ? const Color(0xFF141414)
-                                : const Color(0xFFD6D6D6),
+                                ? (palette.isDark
+                                    ? palette.accent
+                                    : const Color(0xFF141414))
+                                : (palette.isDark
+                                    ? palette.outline
+                                    : const Color(0xFFD6D6D6)),
                         borderRadius: BorderRadius.circular(99),
                       ),
                     ),
@@ -3013,7 +3120,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
     color: const Color(0xFF1E1E1E),
     borderRadius: BorderRadius.circular(22),
     border: Border.all(
-      color: _isDragging ? const Color(0xFF11F08A) : const Color(0xFF3A3A3A),
+      color: _isDragging ? AppColors.accent : const Color(0xFF3A3A3A),
       width: _isDragging ? 1.5 : 1,
     ),
   );
@@ -3055,7 +3162,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
             end: Alignment.bottomRight,
             colors:
                 _isDragging
-                    ? [const Color(0xFF11F08A), const Color(0xFF0CC878)]
+                    ? [AppColors.accent, AppColors.accentStrong]
                     : [const Color(0xFF383838), const Color(0xFF262626)],
           ),
           borderRadius: BorderRadius.circular(17),
@@ -3069,7 +3176,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
             BoxShadow(
               color:
                   _isDragging
-                      ? const Color(0xFF11F08A).withValues(alpha: 0.35)
+                      ? AppColors.accent.withValues(alpha: 0.35)
                       : Colors.black.withValues(alpha: 0.4),
               blurRadius: _isDragging ? 16 : 8,
               offset: Offset(0, _isDragging ? 4 : 2),
@@ -3112,7 +3219,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                         size: titleSize + 1,
                         color:
                             _isDragging
-                                ? const Color(0xFF11F08A)
+                                ? AppColors.accent
                                 : const Color(0xFFCCCCCC),
                       ),
                       const SizedBox(width: 6),
@@ -3128,9 +3235,7 @@ class _GenerateSongSliderCardState extends State<_GenerateSongSliderCard>
                             fontSize: titleSize,
                             fontWeight: FontWeight.w900,
                             color:
-                                _isDragging
-                                    ? const Color(0xFF11F08A)
-                                    : Colors.white,
+                                _isDragging ? AppColors.accent : Colors.white,
                           ),
                         ),
                       ),
@@ -3271,6 +3376,7 @@ class _SeekButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     final enabled = onPressed != null;
     final isForward = seconds > 0;
     return Opacity(
@@ -3286,7 +3392,7 @@ class _SeekButton extends StatelessWidget {
             children: [
               Icon(
                 isForward ? Icons.forward_10_rounded : Icons.replay_10_rounded,
-                color: const Color(0xFF111111),
+                color: palette.isDark ? palette.ink : const Color(0xFF111111),
                 size: 28,
               ),
             ],

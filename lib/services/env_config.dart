@@ -1,7 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/services.dart';
 
 class EnvConfig {
   static bool _initialized = false;
+  static const MethodChannel _voiceBackendLauncherChannel = MethodChannel(
+    'com.example.mongobox/voice_backend_launcher',
+  );
 
   static String _clean(String? value) {
     var v = (value ?? '').trim();
@@ -201,6 +206,102 @@ class EnvConfig {
       'http://127.0.0.1:8000 for local simulator testing.',
     );
     return 'http://127.0.0.1:8000';
+  }
+
+  static String get voiceBackendDeviceUrl {
+    try {
+      final envFileValue = _clean(dotenv.env['VOICE_BACKEND_DEVICE_URL']);
+      if (envFileValue.isNotEmpty) {
+        return envFileValue.replaceFirst(RegExp(r'/+$'), '');
+      }
+    } catch (e) {
+      print('⚠️  Error reading VOICE_BACKEND_DEVICE_URL from .env: $e');
+    }
+
+    final envVarValue = _clean(
+      const String.fromEnvironment('VOICE_BACKEND_DEVICE_URL'),
+    );
+    if (envVarValue.isNotEmpty) {
+      return envVarValue.replaceFirst(RegExp(r'/+$'), '');
+    }
+
+    try {
+      final legacyEnvFileValue = _clean(dotenv.env['VOICE_BACKEND_LAN_URL']);
+      if (legacyEnvFileValue.isNotEmpty) {
+        return legacyEnvFileValue.replaceFirst(RegExp(r'/+$'), '');
+      }
+    } catch (_) {
+      // Ignore legacy env read failures.
+    }
+
+    final legacyEnvVarValue = _clean(
+      const String.fromEnvironment('VOICE_BACKEND_LAN_URL'),
+    );
+    if (legacyEnvVarValue.isNotEmpty) {
+      return legacyEnvVarValue.replaceFirst(RegExp(r'/+$'), '');
+    }
+
+    return '';
+  }
+
+  static Future<String> resolveVoiceBackendUrl() async {
+    final configured = voiceBackendUrl;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return configured;
+    }
+
+    final uri = Uri.tryParse(configured);
+    const localHosts = {'127.0.0.1', 'localhost', '::1'};
+    if (uri == null || !localHosts.contains(uri.host)) {
+      return configured;
+    }
+
+    if (await _isIosSimulator()) {
+      return configured;
+    }
+
+    final deviceUrl = voiceBackendDeviceUrl;
+    if (deviceUrl.isNotEmpty) {
+      return deviceUrl;
+    }
+
+    return configured;
+  }
+
+  static Future<bool> isPhysicalIosDeviceUsingLocalBackend() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return false;
+    }
+
+    final uri = Uri.tryParse(voiceBackendUrl);
+    const localHosts = {'127.0.0.1', 'localhost', '::1'};
+    if (uri == null || !localHosts.contains(uri.host)) {
+      return false;
+    }
+
+    return !(await _isIosSimulator());
+  }
+
+  static String voiceBackendPhysicalDeviceHelp() {
+    return 'Physical iPhone cannot reach 127.0.0.1. '
+        'Set VOICE_BACKEND_DEVICE_URL to your Mac LAN IP '
+        '(for example http://192.168.1.42:8000) and start the backend with: '
+        'cd voice-backend && python start.py --host 0.0.0.0';
+  }
+
+  static Future<bool> _isIosSimulator() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return false;
+    }
+
+    try {
+      final value = await _voiceBackendLauncherChannel.invokeMethod<bool>(
+        'isSimulator',
+      );
+      return value ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static String get invidiousBaseUrl {

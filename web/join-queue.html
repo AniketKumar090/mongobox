@@ -19,8 +19,9 @@
       --text-primary: #111111;
       --text-secondary: #575757;
       --text-muted: #AAAAAA;
-      --accent-green: #11F08A;
-      --accent-green-dim: rgba(17,240,138,0.15);
+      --accent: #7C5CFF;
+      --accent-dim: rgba(124,92,255,0.15);
+      --accent-border: #B5A7FF;
       --black: #171717;
     }
 
@@ -91,7 +92,7 @@
     .party-banner-label {
       font-size: 11px;
       font-weight: 700;
-      color: var(--accent-green);
+      color: var(--accent);
       letter-spacing: 0.04em;
       text-transform: uppercase;
       margin-bottom: 4px;
@@ -115,7 +116,7 @@
       transition: border-color 0.2s;
     }
     .search-container:focus-within {
-      border-color: var(--accent-green);
+      border-color: var(--accent);
     }
     .search-icon {
       width: 20px;
@@ -261,7 +262,7 @@
     .btn-add:hover { background: #333; }
     .btn-add:active { transform: scale(0.96); }
     .btn-add.added {
-      background: #11C979;
+      background: var(--accent);
       color: #fff;
       pointer-events: none;
     }
@@ -349,7 +350,7 @@
     .trending-rank {
       font-size: 10px;
       font-weight: 900;
-      color: var(--accent-green);
+      color: var(--accent);
       margin-right: -2px;
       flex-shrink: 0;
     }
@@ -394,17 +395,17 @@
       width: 100%;
     }
     .toast.show { opacity: 1; transform: translateY(0); }
-    .toast.success { border-color: #7BE7BE; }
+    .toast.success { border-color: var(--accent-border); }
     .toast.error { border-color: #E47A7A; }
     .toast-dot {
       width: 34px; height: 34px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
-    .toast.success .toast-dot { background: rgba(123,231,190,0.16); }
+    .toast.success .toast-dot { background: var(--accent-dim); }
     .toast.error .toast-dot { background: rgba(228,122,122,0.16); }
     .toast-dot svg { width: 18px; height: 18px; }
-    .toast.success .toast-dot svg { color: #11C979; }
+    .toast.success .toast-dot svg { color: var(--accent); }
     .toast.error .toast-dot svg { color: #B54545; }
     .toast-msg {
       font-size: 14px;
@@ -544,7 +545,7 @@
       addedAt: new Date().toISOString()
     }).then(() => {
       showToast(`"${title}" added to queue!`);
-      chipEl.style.border = '1.5px solid #11C979';
+      chipEl.style.border = '1.5px solid #7C5CFF';
       chipEl.style.opacity = '0.6';
     }).catch(() => {
       showToast('Could not add song. Try again.', 'error');

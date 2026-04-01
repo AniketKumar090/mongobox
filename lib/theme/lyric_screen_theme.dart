@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../constants/colors.dart';
+
 @immutable
 class LyricScreenPalette {
   const LyricScreenPalette._({
@@ -39,9 +41,9 @@ class LyricScreenPalette {
     primaryContainer: surface,
     onPrimaryContainer: ink,
     secondary: accent,
-    onSecondary: isDark ? const Color(0xFF0D1511) : ink,
+    onSecondary: isDark ? AppColors.onAccent : ink,
     secondaryContainer: accentSoft,
-    onSecondaryContainer: isDark ? const Color(0xFFBDF8DE) : ink,
+    onSecondaryContainer: isDark ? AppColors.accentTextDark : ink,
     tertiary: mutedSurface,
     onTertiary: ink,
     tertiaryContainer: surface,
@@ -65,8 +67,8 @@ class LyricScreenPalette {
     surface: Color(0xFFF8F4EE),
     mutedSurface: Color(0xFFEDE8E0),
     ink: Color(0xFF111111),
-    accent: Color(0xFF11F08A),
-    accentSoft: Color(0xFFDDFBEF),
+    accent: AppColors.accent,
+    accentSoft: AppColors.accentSoft,
     outline: Color(0xFFD7D0C6),
     mutedText: Color(0xFF666666),
     error: Color(0xFFB05A49),
@@ -80,8 +82,8 @@ class LyricScreenPalette {
     surface: Color(0xFF171B20),
     mutedSurface: Color(0xFF242A31),
     ink: Color(0xFFF4EFE7),
-    accent: Color(0xFF11F08A),
-    accentSoft: Color(0xFF143626),
+    accent: AppColors.accent,
+    accentSoft: AppColors.accentSoftDark,
     outline: Color(0xFF39424B),
     mutedText: Color(0xFFA3ACB7),
     error: Color(0xFFFF8A7A),

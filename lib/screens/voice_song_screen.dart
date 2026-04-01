@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/saved_voice_song.dart';
 import '../models/song_reference.dart';
+import '../constants/colors.dart';
 import '../services/saved_voice_song_service.dart';
 import '../services/audio_session_service.dart';
 import '../services/background_music_service.dart';
@@ -96,9 +97,9 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   String? _errorMessage;
   StreamSubscription<PlayerState>? _voiceStateSub;
 
-  double _voiceSpeed = 1.2;
-  double _voiceVolume = 0.6;
-  double _musicVolume = 1.0;
+  double _voiceSpeed = 1.0;
+  double _voiceVolume = 0.5;
+  double _musicVolume = 1.5;
 
   double get _maxVoiceCap => _musicVolume > 1.0 ? 1.0 : _musicVolume;
   bool get _isHindiDominant =>
@@ -331,6 +332,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         id: '$safeName-$timestamp',
         title: widget.songTitle,
         filePath: dest.path,
+        fileName: fileName,
         language: widget.dominantLanguage,
         mood: widget.mood,
         genre: widget.genre,
@@ -1050,7 +1052,7 @@ class _StatusRow extends StatelessWidget {
             : _P.border;
     final iconBg =
         isSuccess
-            ? const Color(0xFF0A9B5A)
+            ? AppColors.accentStrong
             : isError
             ? _P.red
             : _P.grey3;
@@ -1097,7 +1099,7 @@ class _StatusRow extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                     color:
                         isSuccess
-                            ? const Color(0xFF0A9B5A)
+                            ? AppColors.accentStrong
                             : isError
                             ? _P.red
                             : _P.black,
@@ -1203,6 +1205,15 @@ class _PlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final idleBackground = _P.black;
+    final idleForeground = _P.onBlack;
+    final activeBackground = _P.green;
+    final activeForeground =
+        isDark ? AppColors.onAccent : const Color(0xFF111111);
+    final activeBorder =
+        isDark ? _P.greenBorder.withValues(alpha: 0.95) : _P.green;
+
     return GestureDetector(
       onTap: () {
         HapticFeedback.mediumImpact();
@@ -1212,12 +1223,22 @@ class _PlayButton extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         height: 62,
         decoration: BoxDecoration(
-          color: isPlaying ? _P.blackSoft : _P.black,
+          color: isPlaying ? activeBackground : idleBackground,
           borderRadius: BorderRadius.circular(22),
           border: Border.all(
-            color: isPlaying ? _P.green : Colors.transparent,
+            color: isPlaying ? activeBorder : Colors.transparent,
             width: 1.5,
           ),
+          boxShadow:
+              isPlaying
+                  ? [
+                    BoxShadow(
+                      color: _P.green.withValues(alpha: isDark ? 0.20 : 0.12),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                  : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1225,12 +1246,12 @@ class _PlayButton extends StatelessWidget {
             Icon(
               isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
               size: 26,
-              color: isPlaying ? _P.green : _P.onBlack,
+              color: isPlaying ? activeForeground : idleForeground,
             ),
             const SizedBox(width: 9),
             Text(
               isPlaying
-                  ? 'Pause'
+                  ? 'Pause Preview'
                   : hasBgMusic
                   ? 'Play with Music'
                   : 'Play My Song',
@@ -1238,7 +1259,7 @@ class _PlayButton extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
-                color: isPlaying ? _P.green : _P.onBlack,
+                color: isPlaying ? activeForeground : idleForeground,
               ),
             ),
           ],
@@ -1260,7 +1281,7 @@ class _MusicBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final bg = hasMusic ? _P.greenSoft : _P.redSoft;
     final border = hasMusic ? _P.greenBorder : _P.redBorder;
-    final color = hasMusic ? const Color(0xFF0A9B5A) : _P.red;
+    final color = hasMusic ? AppColors.accentStrong : _P.red;
     final icon = hasMusic ? Icons.music_note_rounded : Icons.music_off_rounded;
     final text =
         hasMusic

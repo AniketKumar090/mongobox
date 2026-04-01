@@ -8,6 +8,7 @@ import 'screens/web/home_screen_web.dart'
 import 'screens/mobile_lyric_app.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'constants/colors.dart';
 import 'services/env_config.dart';
 import 'services/audio_session_service.dart';
 import 'services/lyric_audio_registry.dart';
@@ -56,12 +57,12 @@ ThemeData _buildAppTheme(Brightness brightness) {
         isDark ? const Color(0xFF20242A) : const Color(0xFFF8F4EE),
     onPrimaryContainer:
         isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
-    secondary: const Color(0xFF11F08A),
-    onSecondary: const Color(0xFF0D1511),
+    secondary: AppColors.accent,
+    onSecondary: AppColors.onAccent,
     secondaryContainer:
-        isDark ? const Color(0xFF123427) : const Color(0xFFDDFBEF),
+        isDark ? AppColors.accentSoftDark : AppColors.accentSoft,
     onSecondaryContainer:
-        isDark ? const Color(0xFFBDF8DE) : const Color(0xFF111111),
+        isDark ? AppColors.accentTextDark : const Color(0xFF111111),
     tertiary: isDark ? const Color(0xFF262C33) : const Color(0xFFEDE8E0),
     onTertiary: isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
     tertiaryContainer:

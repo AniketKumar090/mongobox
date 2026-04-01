@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import '../models/song_reference.dart';
+import '../constants/colors.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
 import '../theme/song_creation_palette.dart';
@@ -26,6 +27,8 @@ class _HP {
   static Color get chip => _p.chip;
   static Color get chipDark => _p.chipDark;
   static Color get green => _p.green;
+  static Color get greenSoft => _p.greenSoft;
+  static Color get greenBorder => _p.greenBorder;
   static Color get red => _p.red;
   static Color get redSoft => _p.redSoft;
   static Color get redBorder => _p.redBorder;
@@ -83,7 +86,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   int? _referenceMsPerWord;
   double _activeLineProgress = 0;
   String? _paceFeedback;
-  bool _showFullLyrics = true;
+  bool _showFullLyrics = false;
 
   late final String _cloneLanguage;
   late final bool _isHindiDominant;
@@ -577,9 +580,97 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
 
     final hasRecording = _recordedPath != null;
     final isShort = _recordingSeconds < 5 && hasRecording;
+    final bottomActionBar = SafeArea(
+      minimum: EdgeInsets.fromLTRB(hPad, 8, hPad, 12),
+      child: Container(
+        color: _HP.background,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasRecording &&
+                !_isRecording &&
+                _karaokeFlowLines.isNotEmpty) ...[
+              _RecordedLinesCard(lines: _karaokeFlowLines),
+              const SizedBox(height: 10),
+            ],
+            if ((_paceFeedback ?? '').isNotEmpty && !_isRecording) ...[
+              _PaceBanner(text: _paceFeedback!),
+              const SizedBox(height: 10),
+            ],
+            if (hasRecording && !_isRecording) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: _OutlineButton(
+                      icon:
+                          _isPlaying
+                              ? Icons.stop_rounded
+                              : Icons.play_arrow_rounded,
+                      label: _isPlaying ? 'Stop' : 'Play Recording',
+                      onPressed: _playback,
+                    ),
+                  ),
+                  if (isShort) ...[
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _HP.redSoft,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: _HP.redBorder),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 14,
+                            color: _HP.red,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Too short',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _HP.red,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              _HapticFlowCloneButton(onCompleted: _startVoiceCloneFlow),
+              const SizedBox(height: 10),
+            ],
+            if (_isRecording)
+              _RedButton(
+                label: 'Stop (${_recordingSeconds}s)',
+                icon: Icons.stop_rounded,
+                onPressed: _stopRecording,
+              )
+            else
+              _PrimaryButton(
+                label: hasRecording ? 'Re-record' : 'Start Recording',
+                icon: Icons.mic_rounded,
+                filled: !hasRecording,
+                onPressed: _startRecording,
+              ),
+          ],
+        ),
+      ),
+    );
 
     return Scaffold(
       backgroundColor: _HP.background,
+      bottomNavigationBar: bottomActionBar,
       body: SafeArea(
         child: Column(
           children: [
@@ -596,7 +687,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             // ── Scrollable body ───────────────────────────────────────────
             Expanded(
               child: SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
+                padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -672,104 +763,6 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     ],
                   ],
                 ),
-              ),
-            ),
-
-            // ── Bottom action bar ─────────────────────────────────────────
-            Container(
-              padding: EdgeInsets.fromLTRB(hPad, 14, hPad, 22),
-              decoration: BoxDecoration(
-                color: _HP.background,
-                border: Border(top: BorderSide(color: _HP.border)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Recorded flow lines summary
-                  if (hasRecording &&
-                      !_isRecording &&
-                      _karaokeFlowLines.isNotEmpty) ...[
-                    _RecordedLinesCard(lines: _karaokeFlowLines),
-                    const SizedBox(height: 10),
-                  ],
-
-                  // Pace feedback
-                  if ((_paceFeedback ?? '').isNotEmpty && !_isRecording) ...[
-                    _PaceBanner(text: _paceFeedback!),
-                    const SizedBox(height: 10),
-                  ],
-
-                  // Playback row (after recording)
-                  if (hasRecording && !_isRecording) ...[
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _OutlineButton(
-                            icon:
-                                _isPlaying
-                                    ? Icons.stop_rounded
-                                    : Icons.play_arrow_rounded,
-                            label: _isPlaying ? 'Stop' : 'Play Recording',
-                            onPressed: _playback,
-                          ),
-                        ),
-                        if (isShort) ...[
-                          const SizedBox(width: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _HP.redSoft,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: _HP.redBorder),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.warning_amber_rounded,
-                                  size: 14,
-                                  color: _HP.red,
-                                ),
-                                SizedBox(width: 5),
-                                Text(
-                                  'Too short',
-                                  style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: _HP.red,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    // Press-and-hold haptic flow to clone
-                    _HapticFlowCloneButton(onCompleted: _startVoiceCloneFlow),
-                    const SizedBox(height: 10),
-                  ],
-
-                  // Stop / Record / Re-record button
-                  if (_isRecording)
-                    _RedButton(
-                      label: 'Stop (${_recordingSeconds}s)',
-                      icon: Icons.stop_rounded,
-                      onPressed: _stopRecording,
-                    )
-                  else
-                    _PrimaryButton(
-                      label: hasRecording ? 'Re-record' : 'Start Recording',
-                      icon: Icons.mic_rounded,
-                      filled: !hasRecording,
-                      onPressed: _startRecording,
-                    ),
-                ],
               ),
             ),
           ],
@@ -907,7 +900,7 @@ class _SpeakingLinesCard extends StatefulWidget {
 }
 
 class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
-  bool _expanded = false;
+  bool _expanded = true;
   late final List<String> _lines;
   final _sc = ScrollController();
 
@@ -1583,18 +1576,16 @@ class _PaceBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
-        color: isGood ? const Color(0xFFEAFAF2) : _HP.redSoft,
+        color: isGood ? _HP.greenSoft : _HP.redSoft,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isGood ? const Color(0xFFB3EDD3) : _HP.redBorder,
-        ),
+        border: Border.all(color: isGood ? _HP.greenBorder : _HP.redBorder),
       ),
       child: Row(
         children: [
           Icon(
             Icons.speed_rounded,
             size: 16,
-            color: isGood ? const Color(0xFF0A9B5A) : _HP.red,
+            color: isGood ? AppColors.accentStrong : _HP.red,
           ),
           const SizedBox(width: 9),
           Expanded(
@@ -1604,7 +1595,7 @@ class _PaceBanner extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: isGood ? const Color(0xFF0A9B5A) : _HP.red,
+                color: isGood ? AppColors.accentStrong : _HP.red,
               ),
             ),
           ),

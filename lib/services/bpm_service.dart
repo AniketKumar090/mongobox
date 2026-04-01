@@ -14,10 +14,10 @@ class BpmService {
   /// Returns BPM (50–220) or null if unavailable.
   Future<double?> fetchBpm(String videoId) async {
     if (videoId.isEmpty) return null;
-    final base = EnvConfig.voiceBackendUrl;
-    final uri = Uri.parse('$base/analyze-bpm').replace(
-      queryParameters: {'video_id': videoId},
-    );
+    final base = await EnvConfig.resolveVoiceBackendUrl();
+    final uri = Uri.parse(
+      '$base/analyze-bpm',
+    ).replace(queryParameters: {'video_id': videoId});
     try {
       final response = await _client
           .get(uri)

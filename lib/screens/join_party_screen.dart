@@ -2,23 +2,55 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../constants/colors.dart';
 import 'join_via_link_screen.dart';
 import '../services/youtube_mobile_service.dart';
 import '../services/shared_queue_service.dart';
+import '../theme/app_theme_controller.dart';
 import '../widgets/lyric_page_scaffold.dart';
 
-const _partyBg = Color(0xFFEDEAE3);
-const _partyCard = Color(0xFFF5F2EA);
-const _partyCardInner = Color(0xFFF0EDE6);
-const _partyBorder = Color(0x1A000000);
-const _partyBorderStrong = Color(0x2E000000);
-const _partyDark = Color(0xFF1A1A1A);
-const _partyAccent = Color(0xFF11C979);
-const _partyAccentBg = Color(0x1F11C979);
-const _partyAccentBorder = Color(0x4711C979);
-const _partyAccentText = Color(0xFF0A9B5E);
-const _partyText = Color(0xFF111111);
-const _partyMuted = Color(0xFF7A7570);
+bool get _partyIsDark => AppThemeController.instance.isDarkMode;
+Color get _partyBg =>
+    _partyIsDark ? const Color(0xFF101316) : const Color(0xFFEDEAE3);
+Color get _partyCard =>
+    _partyIsDark ? const Color(0xFF171B20) : const Color(0xFFF5F2EA);
+Color get _partyCardInner =>
+    _partyIsDark ? const Color(0xFF20252C) : const Color(0xFFF0EDE6);
+Color get _partyBorder =>
+    _partyIsDark ? const Color(0x6639424B) : const Color(0x1A000000);
+Color get _partyBorderStrong =>
+    _partyIsDark ? const Color(0xFF39424B) : const Color(0x2E000000);
+Color get _partyPrimary =>
+    _partyIsDark ? const Color(0xFFF4EFE7) : const Color(0xFF1A1A1A);
+Color get _partyOnPrimary =>
+    _partyIsDark ? const Color(0xFF101316) : Colors.white;
+Color get _partyStatusBg =>
+    _partyIsDark ? const Color(0xFF1B2128) : const Color(0xFF1A1A1A);
+Color get _partyAccent => AppColors.accent;
+Color get _partyAccentBg =>
+    _partyIsDark ? AppColors.accentSoftDark : const Color(0x1F7C5CFF);
+Color get _partyAccentBorder =>
+    _partyIsDark ? AppColors.accentBorderDark : const Color(0x477C5CFF);
+Color get _partyAccentText =>
+    _partyIsDark ? AppColors.accentTextDark : AppColors.accentStrong;
+Color get _partyText =>
+    _partyIsDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111);
+Color get _partyMuted =>
+    _partyIsDark ? const Color(0xFFA3ACB7) : const Color(0xFF7A7570);
+Color get _partyDangerBg =>
+    _partyIsDark ? const Color(0xFF402724) : const Color(0xFFFFEFEF);
+Color get _partyDangerBorder =>
+    _partyIsDark ? const Color(0xFF734641) : const Color(0xFFFFD1D1);
+Color get _partyDangerText =>
+    _partyIsDark ? const Color(0xFFFFA096) : const Color(0xFFB14545);
+Color get _partyEndedPillBg =>
+    _partyIsDark ? const Color(0x4DFF6B6B) : const Color(0x33FF6B6B);
+Color get _partyEndedPillBorder =>
+    _partyIsDark ? const Color(0x88FF8B8B) : const Color(0x66FF6B6B);
+Color get _partyEndedPillText =>
+    _partyIsDark ? const Color(0xFFFFB2B2) : const Color(0xFFFF9A9A);
+Color get _partyEndedSurface =>
+    _partyIsDark ? const Color(0xFF3F2527) : const Color(0xFF3A2B2B);
 
 class JoinPartyScreen extends StatefulWidget {
   final VoidCallback? onBack;
@@ -152,21 +184,21 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
         SnackBar(
           content: Text(
             message,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 14,
               fontWeight: FontWeight.w800,
-              color: Colors.black,
+              color: _partyText,
               height: 1.35,
             ),
           ),
-          backgroundColor: const Color(0xFFF8F4EE),
+          backgroundColor: _partyCard,
           behavior: SnackBarBehavior.floating,
           elevation: 0,
           margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFD8D4CC), width: 1.2),
+            side: BorderSide(color: _partyBorderStrong, width: 1.2),
           ),
         ),
       );
@@ -311,7 +343,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             'Join a party',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -323,7 +355,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Search anything you want to hear, then send it straight to the host queue.',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -348,21 +380,21 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 13),
                 decoration: BoxDecoration(
-                  color: _partyDark,
+                  color: _partyPrimary,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.add_rounded, size: 16, color: Colors.white),
-                    SizedBox(width: 6),
+                    Icon(Icons.add_rounded, size: 16, color: _partyOnPrimary),
+                    const SizedBox(width: 6),
                     Text(
                       'Join a new party',
                       style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: _partyOnPrimary,
                       ),
                     ),
                   ],
@@ -384,7 +416,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: isLive ? _partyDark : const Color(0xFF3A2B2B),
+        color: isLive ? _partyStatusBg : _partyEndedSurface,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -407,7 +439,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'PARTY ID',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -420,11 +452,11 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                 const SizedBox(height: 1),
                 Text(
                   _effectivePartyId,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: Colors.white,
+                    color: _partyOnPrimary,
                     letterSpacing: -0.1,
                   ),
                 ),
@@ -434,10 +466,10 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
             decoration: BoxDecoration(
-              color: isLive ? _partyAccentBg : const Color(0x33FF6B6B),
+              color: isLive ? _partyAccentBg : _partyEndedPillBg,
               borderRadius: BorderRadius.circular(999),
               border: Border.all(
-                color: isLive ? _partyAccentBorder : const Color(0x66FF6B6B),
+                color: isLive ? _partyAccentBorder : _partyEndedPillBorder,
               ),
             ),
             child: Row(
@@ -458,7 +490,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                     fontFamily: 'Inter',
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: isLive ? _partyAccent : const Color(0xFFFF9A9A),
+                    color: isLive ? _partyAccent : _partyEndedPillText,
                   ),
                 ),
               ],
@@ -482,7 +514,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Search songs',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -493,7 +525,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Any language. Tap add — your pick goes straight to the host.',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -509,17 +541,17 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFEFEF),
+                color: _partyDangerBg,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFFFD1D1)),
+                border: Border.all(color: _partyDangerBorder),
               ),
-              child: const Text(
+              child: Text(
                 'This party has ended. You can still view the room, but new suggestions are disabled.',
                 style: TextStyle(
                   fontFamily: 'Inter',
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFFB14545),
+                  color: _partyDangerText,
                   height: 1.4,
                 ),
               ),
@@ -557,9 +589,9 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               Expanded(
                 child: Theme(
                   data: Theme.of(context).copyWith(
-                    textSelectionTheme: const TextSelectionThemeData(
+                    textSelectionTheme: TextSelectionThemeData(
                       cursorColor: _partyText,
-                      selectionColor: Color(0x3311C979),
+                      selectionColor: Color(0x337C5CFF),
                       selectionHandleColor: _partyText,
                     ),
                   ),
@@ -569,13 +601,13 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                     maxLines: 1,
                     enabled: _isPartyLive,
                     cursorColor: _partyText,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: _partyText,
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'Search songs (any language)…',
                       hintStyle: TextStyle(
                         fontFamily: 'Inter',
@@ -637,7 +669,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
         borderRadius: BorderRadius.circular(21),
         child:
             _searching
-                ? const Center(
+                ? Center(
                   child: CircularProgressIndicator(
                     color: _partyAccent,
                     strokeWidth: 2.5,
@@ -669,14 +701,10 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _partyBorderStrong),
             ),
-            child: const Icon(
-              Icons.search_rounded,
-              size: 20,
-              color: _partyMuted,
-            ),
+            child: Icon(Icons.search_rounded, size: 20, color: _partyMuted),
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Search for songs to add',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -687,7 +715,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Works in any language.',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -712,18 +740,18 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: const Color(0xFFFFEFEF),
+              color: _partyDangerBg,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFFFD1D1)),
+              border: Border.all(color: _partyDangerBorder),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.portable_wifi_off_rounded,
               size: 22,
-              color: Color(0xFFB14545),
+              color: _partyDangerText,
             ),
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Party ended',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -734,7 +762,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 30),
             child: Text(
               'The host is no longer live, so new song suggestions have been turned off.',
@@ -762,7 +790,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
+            children: [
               Text(
                 'Results',
                 style: TextStyle(
@@ -826,11 +854,11 @@ class _BackButton extends StatelessWidget {
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _partyCard,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: _partyBorderStrong),
         ),
-        child: const Icon(
+        child: Icon(
           Icons.arrow_back_ios_new_rounded,
           size: 15,
           color: _partyText,
@@ -858,13 +886,13 @@ class _GuestBadge extends StatelessWidget {
           Container(
             width: 6,
             height: 6,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: _partyAccent,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 5),
-          const Text(
+          Text(
             'Guest mode',
             style: TextStyle(
               fontFamily: 'Inter',
@@ -894,17 +922,17 @@ class _SearchButton extends StatelessWidget {
         duration: const Duration(milliseconds: 120),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: disabled ? const Color(0xFFCCCAC4) : _partyDark,
+          color: disabled ? _partyBorderStrong : _partyPrimary,
           borderRadius: BorderRadius.circular(10),
         ),
         child:
             loading
-                ? const SizedBox(
+                ? SizedBox(
                   width: 16,
                   height: 16,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: Colors.white,
+                    color: _partyOnPrimary,
                   ),
                 )
                 : Text(
@@ -913,7 +941,7 @@ class _SearchButton extends StatelessWidget {
                     fontFamily: 'Inter',
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: disabled ? _partyMuted : Colors.white,
+                    color: disabled ? _partyMuted : _partyOnPrimary,
                   ),
                 ),
       ),
@@ -940,7 +968,7 @@ class _JoinResultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: added ? const Color(0xFFEBF9F3) : _partyCardInner,
+        color: added ? _partyAccentBg : _partyCardInner,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: added ? _partyAccentBorder : _partyBorder),
       ),
@@ -951,7 +979,7 @@ class _JoinResultTile extends StatelessWidget {
           title,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 13,
             fontWeight: FontWeight.w800,
@@ -964,7 +992,7 @@ class _JoinResultTile extends StatelessWidget {
             artist,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -992,7 +1020,7 @@ class _AddedBadge extends StatelessWidget {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: const [
+        children: [
           Icon(Icons.check_rounded, size: 13, color: _partyAccentText),
           SizedBox(width: 4),
           Text(
@@ -1021,16 +1049,16 @@ class _AddButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: _partyDark,
+          color: _partyPrimary,
           borderRadius: BorderRadius.circular(10),
         ),
-        child: const Text(
+        child: Text(
           'Add',
           style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 13,
             fontWeight: FontWeight.w700,
-            color: Colors.white,
+            color: _partyOnPrimary,
           ),
         ),
       ),

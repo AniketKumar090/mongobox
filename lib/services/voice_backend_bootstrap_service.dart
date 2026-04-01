@@ -30,9 +30,16 @@ class VoiceBackendBootstrapService {
   static DateTime? _lastStartAttemptAt;
 
   static Future<VoiceBackendBootstrapResult> ensureBackendReady() async {
-    final backendUrl = EnvConfig.voiceBackendUrl;
+    final backendUrl = await EnvConfig.resolveVoiceBackendUrl();
     if (await _isBackendHealthy(backendUrl)) {
       return const VoiceBackendBootstrapResult(isHealthy: true);
+    }
+
+    if (await EnvConfig.isPhysicalIosDeviceUsingLocalBackend()) {
+      return VoiceBackendBootstrapResult(
+        isHealthy: false,
+        message: EnvConfig.voiceBackendPhysicalDeviceHelp(),
+      );
     }
 
     final uri = Uri.tryParse(backendUrl);
@@ -89,7 +96,7 @@ class VoiceBackendBootstrapService {
     final initial = await ensureBackendReady();
     if (initial.isHealthy) return initial;
 
-    final backendUrl = EnvConfig.voiceBackendUrl;
+    final backendUrl = await EnvConfig.resolveVoiceBackendUrl();
     final uri = Uri.tryParse(backendUrl);
     if (!_canAutoStart(uri) || startupTimeout <= Duration.zero) {
       return initial;
@@ -103,9 +110,7 @@ class VoiceBackendBootstrapService {
           isHealthy: true,
           didStart: initial.didStart,
           message:
-              initial.didStart
-                  ? 'Voice backend is ready.'
-                  : initial.message,
+              initial.didStart ? 'Voice backend is ready.' : initial.message,
         );
       }
     }

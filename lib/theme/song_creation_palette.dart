@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../constants/colors.dart';
 import 'app_theme_controller.dart';
 
 @immutable
@@ -62,9 +63,9 @@ class SongCreationPalette {
     grey2: Color(0xFF666666),
     grey3: Color(0xFF888888),
     grey4: Color(0xFFAAAAAA),
-    green: Color(0xFF11F08A),
-    greenSoft: Color(0xFFEAFAF2),
-    greenBorder: Color(0xFFB3EDD3),
+    green: AppColors.accent,
+    greenSoft: AppColors.accentSoft,
+    greenBorder: AppColors.accentBorder,
     chip: Color(0xFFE8E3DC),
     chipDark: Color(0xFFD8D4CC),
     red: Color(0xFFFF3B30),
@@ -86,9 +87,9 @@ class SongCreationPalette {
     grey2: Color(0xFFA4ADB7),
     grey3: Color(0xFF838D98),
     grey4: Color(0xFF616B75),
-    green: Color(0xFF11F08A),
-    greenSoft: Color(0xFF143626),
-    greenBorder: Color(0xFF265C45),
+    green: AppColors.accent,
+    greenSoft: AppColors.accentSoftDark,
+    greenBorder: AppColors.accentBorderDark,
     chip: Color(0xFF242A31),
     chipDark: Color(0xFF2D343C),
     red: Color(0xFFFF8A7A),

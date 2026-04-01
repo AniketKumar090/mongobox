@@ -5,11 +5,40 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'dart:async';
+import '../constants/colors.dart';
 import '../services/shared_queue_service.dart';
 import '../services/youtube_mobile_service.dart';
+import '../theme/app_theme_controller.dart';
 
 const String _appLink =
     'https://mongobox-79a1f.firebaseapp.com/join-queue.html';
+
+bool get _hostIsDark => AppThemeController.instance.isDarkMode;
+Color get _hostBg =>
+    _hostIsDark ? const Color(0xFF101316) : const Color(0xFFF5F3EF);
+Color get _hostCard =>
+    _hostIsDark ? const Color(0xFF171B20) : const Color(0xFFF0EDE7);
+Color get _hostCardAlt =>
+    _hostIsDark ? const Color(0xFF20252C) : const Color(0xFFF8F4EE);
+Color get _hostMutedSurface =>
+    _hostIsDark ? const Color(0xFF242A31) : const Color(0xFFECE8E2);
+Color get _hostBorder =>
+    _hostIsDark ? const Color(0xFF39424B) : const Color(0xFFD8D4CC);
+Color get _hostBorderSoft =>
+    _hostIsDark ? const Color(0xFF2D343C) : const Color(0xFFE8E4DC);
+Color get _hostText => _hostIsDark ? const Color(0xFFF4EFE7) : Colors.black;
+Color get _hostMuted =>
+    _hostIsDark ? const Color(0xFFA3ACB7) : const Color(0xFF888888);
+Color get _hostPrimary => _hostIsDark ? const Color(0xFFF4EFE7) : Colors.black;
+Color get _hostOnPrimary =>
+    _hostIsDark ? const Color(0xFF101316) : Colors.white;
+Color get _hostChip =>
+    _hostIsDark ? const Color(0xFF2A3139) : const Color(0xFFE4E0D9);
+Color get _hostChipStrong =>
+    _hostIsDark ? const Color(0xFF303843) : const Color(0xFFCBC7BF);
+Color get _hostGreen => AppColors.accent;
+Color get _hostDanger =>
+    _hostIsDark ? const Color(0xFFFF8A7A) : const Color(0xFFCC3333);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Host Party Screen
@@ -201,34 +230,34 @@ class _HostPartyScreenState extends State<HostPartyScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
+                Text(
                   'The daily YouTube API search limit has been reached.',
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 14,
-                    color: Color(0xFF555555),
+                    color: _hostMuted,
                   ),
                 ),
                 const SizedBox(height: 16),
                 _InfoBox(
                   children: [
-                    const Text(
+                    Text(
                       'Resets in',
                       style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF777777),
+                        color: _hostMuted,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       '${hours}h ${minutes.toString().padLeft(2, '0')}m',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 22,
                         fontWeight: FontWeight.w900,
-                        color: Color(0xFFFF4444),
+                        color: _hostDanger,
                       ),
                     ),
                   ],
@@ -347,7 +376,7 @@ class _HostPartyScreenState extends State<HostPartyScreen>
                     isDangerous
                         ? Icons.warning_rounded
                         : Icons.help_outline_rounded,
-                iconColor: isDangerous ? const Color(0xFFFF4444) : Colors.black,
+                iconColor: isDangerous ? _hostDanger : _hostText,
                 title: title,
                 actions: [
                   _DialogButton(
@@ -363,10 +392,10 @@ class _HostPartyScreenState extends State<HostPartyScreen>
                 ],
                 child: Text(
                   message,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 14,
-                    color: Color(0xFF555555),
+                    color: _hostMuted,
                   ),
                 ),
               ),
@@ -427,7 +456,7 @@ class _HostPartyScreenState extends State<HostPartyScreen>
         unawaited(_handleExitParty());
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F3EF),
+        backgroundColor: _hostBg,
         body: GestureDetector(
           onTap: () => FocusScope.of(context).unfocus(),
           behavior: HitTestBehavior.translucent,
@@ -517,14 +546,14 @@ class _HostHeader extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFECE8E2),
+                  color: _hostMutedSurface,
                   borderRadius: BorderRadius.circular(13),
-                  border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+                  border: Border.all(color: _hostBorder, width: 1),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.arrow_back_rounded,
                   size: 18,
-                  color: Color(0xFF333333),
+                  color: _hostText,
                 ),
               ),
             ),
@@ -534,7 +563,7 @@ class _HostHeader extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
-                children: const [
+                children: [
                   Text(
                     'Host a party',
                     maxLines: 1,
@@ -543,7 +572,7 @@ class _HostHeader extends StatelessWidget {
                       fontFamily: 'Inter',
                       fontSize: 17, // Reduced from 20/22 → fits on one line
                       fontWeight: FontWeight.w900,
-                      color: Colors.black,
+                      color: _hostText,
                       height: 1.1,
                     ),
                   ),
@@ -556,7 +585,7 @@ class _HostHeader extends StatelessWidget {
                       fontFamily: 'Inter',
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF888888),
+                      color: _hostMuted,
                     ),
                   ),
                 ],
@@ -577,16 +606,16 @@ class _HostHeader extends StatelessWidget {
                 height: 38,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: Colors.black,
+                  color: _hostPrimary,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       Icons.qr_code_2_rounded,
                       size: 15,
-                      color: Colors.white,
+                      color: _hostOnPrimary,
                     ),
                     //SizedBox(width: 5),
                     // Text('Share',
@@ -618,7 +647,7 @@ class _HostHeader extends StatelessWidget {
             _StatChip(
               icon: Icons.fiber_manual_record_rounded,
               label: 'Live',
-              iconColor: const Color(0xFF11F08A),
+              iconColor: _hostGreen,
             ),
           ],
         ),
@@ -645,11 +674,11 @@ class _HeaderIconBtn extends StatelessWidget {
         width: 38,
         height: 38,
         decoration: BoxDecoration(
-          color: const Color(0xFFECE8E2),
+          color: _hostMutedSurface,
           borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+          border: Border.all(color: _hostBorder, width: 1),
         ),
-        child: Icon(icon, size: 18, color: const Color(0xFF333333)),
+        child: Icon(icon, size: 18, color: _hostText),
       ),
     );
   }
@@ -666,22 +695,22 @@ class _StatChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFECE8E2),
+        color: _hostMutedSurface,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+        border: Border.all(color: _hostBorder, width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: iconColor ?? const Color(0xFF666666)),
+          Icon(icon, size: 12, color: iconColor ?? _hostMuted),
           const SizedBox(width: 5),
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF444444),
+              color: _hostText,
             ),
           ),
         ],
@@ -715,9 +744,9 @@ class _NowPlayingCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFFF0EDE7),
+          color: _hostCard,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color(0xFFD8D4CC), width: 1.5),
+          border: Border.all(color: _hostBorder, width: 1.5),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -754,16 +783,16 @@ class _NowPlayingCard extends StatelessWidget {
                               vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.black,
+                              color: _hostPrimary,
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: const Text(
+                            child: Text(
                               'NOW PLAYING',
                               style: TextStyle(
                                 fontFamily: 'Inter',
                                 fontSize: 9,
                                 fontWeight: FontWeight.w900,
-                                color: Colors.white,
+                                color: _hostOnPrimary,
                                 letterSpacing: 0.8,
                               ),
                             ),
@@ -779,11 +808,11 @@ class _NowPlayingCard extends StatelessWidget {
                         hasTrack ? nowPlaying!.title : 'No track playing',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 15,
                           fontWeight: FontWeight.w900,
-                          color: Colors.black,
+                          color: _hostText,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -793,11 +822,11 @@ class _NowPlayingCard extends StatelessWidget {
                             : 'Add a song to get started',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF777777),
+                          color: _hostMuted,
                         ),
                       ),
                     ],
@@ -931,7 +960,7 @@ class _FallbackThumb extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: const Color(0xFFDDD9D3),
+        color: _hostMutedSurface,
         borderRadius: BorderRadius.circular(size * 0.25),
       ),
       child: Center(
@@ -941,7 +970,7 @@ class _FallbackThumb extends StatelessWidget {
             fontFamily: 'Inter',
             fontSize: size * 0.25,
             fontWeight: FontWeight.w800,
-            color: const Color(0xFF888888),
+            color: _hostMuted,
           ),
         ),
       ),
@@ -966,15 +995,12 @@ class _ActionBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDisabled = onPressed == null;
     final bgColor =
-        filled
-            ? (isDisabled ? const Color(0xFFCDC9C2) : Colors.black)
-            : Colors.transparent;
+        filled ? (isDisabled ? _hostBorder : _hostPrimary) : Colors.transparent;
     final fgColor =
         filled
-            ? (isDisabled ? const Color(0xFF999590) : Colors.white)
-            : (isDisabled ? const Color(0xFFBBB8B2) : const Color(0xFF444444));
-    final borderColor =
-        isDisabled ? const Color(0xFFE2DED7) : const Color(0xFFD8D4CC);
+            ? (isDisabled ? _hostMuted : _hostOnPrimary)
+            : (isDisabled ? _hostMuted : _hostText);
+    final borderColor = isDisabled ? _hostBorderSoft : _hostBorder;
 
     return GestureDetector(
       onTap: onPressed,
@@ -1047,9 +1073,9 @@ class _QueueAndSearchPanelState extends State<_QueueAndSearchPanel> {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF0EDE7),
+        color: _hostCard,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFD8D4CC), width: 1.5),
+        border: Border.all(color: _hostBorder, width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1081,10 +1107,7 @@ class _QueueAndSearchPanelState extends State<_QueueAndSearchPanel> {
                         vertical: 7,
                       ),
                       decoration: BoxDecoration(
-                        color:
-                            widget.isReordering
-                                ? Colors.black
-                                : const Color(0xFFE4E0D9),
+                        color: widget.isReordering ? _hostPrimary : _hostChip,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Row(
@@ -1094,9 +1117,7 @@ class _QueueAndSearchPanelState extends State<_QueueAndSearchPanel> {
                             Icons.swap_vert_rounded,
                             size: 14,
                             color:
-                                widget.isReordering
-                                    ? const Color(0xFF11F08A)
-                                    : const Color(0xFF666666),
+                                widget.isReordering ? _hostGreen : _hostMuted,
                           ),
                           const SizedBox(width: 5),
                           Text(
@@ -1107,8 +1128,8 @@ class _QueueAndSearchPanelState extends State<_QueueAndSearchPanel> {
                               fontWeight: FontWeight.w800,
                               color:
                                   widget.isReordering
-                                      ? Colors.white
-                                      : const Color(0xFF444444),
+                                      ? _hostOnPrimary
+                                      : _hostText,
                             ),
                           ),
                         ],
@@ -1118,7 +1139,7 @@ class _QueueAndSearchPanelState extends State<_QueueAndSearchPanel> {
               ],
             ),
           ),
-          const Divider(height: 1, color: Color(0xFFD8D4CC)),
+          Divider(height: 1, color: _hostBorder),
           Expanded(
             child:
                 _tab == 0
@@ -1163,7 +1184,7 @@ class _Tab extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? Colors.black : Colors.transparent,
+          color: selected ? _hostPrimary : Colors.transparent,
           borderRadius: BorderRadius.circular(11),
         ),
         child: Row(
@@ -1175,7 +1196,7 @@ class _Tab extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
-                color: selected ? Colors.white : const Color(0xFF888888),
+                color: selected ? _hostOnPrimary : _hostMuted,
               ),
             ),
             if (count != null && count! > 0) ...[
@@ -1183,10 +1204,7 @@ class _Tab extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color:
-                      selected
-                          ? const Color(0xFF11F08A)
-                          : const Color(0xFFD8D4CC),
+                  color: selected ? _hostGreen : _hostBorder,
                   borderRadius: BorderRadius.circular(99),
                 ),
                 child: Text(
@@ -1195,7 +1213,7 @@ class _Tab extends StatelessWidget {
                     fontFamily: 'Inter',
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
-                    color: selected ? Colors.black : const Color(0xFF666666),
+                    color: selected ? _hostBg : _hostMuted,
                   ),
                 ),
               ),
@@ -1284,10 +1302,10 @@ class _QueueTile extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
-        color: isActive ? const Color(0xFFE8E4DC) : const Color(0xFFF8F4EE),
+        color: isActive ? _hostChip : _hostCardAlt,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isActive ? const Color(0xFFCBC7BF) : const Color(0xFFE8E4DC),
+          color: isActive ? _hostChipStrong : _hostBorderSoft,
           width: isActive ? 1.5 : 1,
         ),
       ),
@@ -1318,14 +1336,14 @@ class _QueueTile extends StatelessWidget {
                 child: Container(
                   width: 18,
                   height: 18,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF11F08A),
+                  decoration: BoxDecoration(
+                    color: _hostGreen,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.graphic_eq_rounded,
                     size: 11,
-                    color: Colors.black,
+                    color: _hostBg,
                   ),
                 ),
               ),
@@ -1335,11 +1353,11 @@ class _QueueTile extends StatelessWidget {
           song.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 14,
             fontWeight: FontWeight.w800,
-            color: Colors.black,
+            color: _hostText,
           ),
         ),
         subtitle: Padding(
@@ -1353,16 +1371,16 @@ class _QueueTile extends StatelessWidget {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.black,
+                    color: _hostPrimary,
                     borderRadius: BorderRadius.circular(5),
                   ),
-                  child: const Text(
+                  child: Text(
                     'PLAYING',
                     style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 9,
                       fontWeight: FontWeight.w900,
-                      color: Colors.white,
+                      color: _hostOnPrimary,
                       letterSpacing: 0.5,
                     ),
                   ),
@@ -1374,11 +1392,11 @@ class _QueueTile extends StatelessWidget {
                   song.artist,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF888888),
+                    color: _hostMuted,
                   ),
                 ),
               ),
@@ -1405,12 +1423,12 @@ class _QueueTile extends StatelessWidget {
                   onSelected: (action) {
                     if (action == _QueueAction.remove) onRemove();
                   },
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.more_horiz_rounded,
-                    color: Color(0xFF888888),
+                    color: _hostMuted,
                     size: 20,
                   ),
-                  color: const Color(0xFFF4EFE7),
+                  color: _hostCardAlt,
                   elevation: 8,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -1458,10 +1476,10 @@ class _ReorderBtn extends StatelessWidget {
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            color: const Color(0xFFE4E0D9),
+            color: _hostChip,
             borderRadius: BorderRadius.circular(9),
           ),
-          child: Icon(icon, size: 18, color: Colors.black),
+          child: Icon(icon, size: 18, color: _hostText),
         ),
       ),
     );
@@ -1480,8 +1498,7 @@ class _MenuItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        isDestructive ? const Color(0xFFCC3333) : const Color(0xFF222222);
+    final color = isDestructive ? _hostDanger : _hostText;
     return Row(
       children: [
         Icon(icon, size: 16, color: color),
@@ -1526,35 +1543,31 @@ class _AddSongsTab extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F4EE),
+              color: _hostCardAlt,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFFD8D4CC), width: 1.5),
+              border: Border.all(color: _hostBorder, width: 1.5),
             ),
             child: Row(
               children: [
                 const SizedBox(width: 12),
-                const Icon(
-                  Icons.search_rounded,
-                  color: Color(0xFF888888),
-                  size: 18,
-                ),
+                Icon(Icons.search_rounded, color: _hostMuted, size: 18),
                 Expanded(
                   child: TextField(
                     controller: searchController,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: Colors.black,
+                      color: _hostText,
                     ),
-                    cursorColor: Colors.black,
-                    decoration: const InputDecoration(
+                    cursorColor: _hostText,
+                    decoration: InputDecoration(
                       hintText: 'Search YouTube...',
                       hintStyle: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
-                        color: Color(0xFFAAAAAA),
+                        color: _hostMuted,
                       ),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
@@ -1580,26 +1593,26 @@ class _AddSongsTab extends StatelessWidget {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black,
+                        color: _hostPrimary,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child:
                           isSearching
-                              ? const SizedBox(
+                              ? SizedBox(
                                 width: 14,
                                 height: 14,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: Colors.white,
+                                  color: _hostOnPrimary,
                                 ),
                               )
-                              : const Text(
+                              : Text(
                                 'Search',
                                 style: TextStyle(
                                   fontFamily: 'Inter',
                                   fontSize: 12,
                                   fontWeight: FontWeight.w800,
-                                  color: Colors.white,
+                                  color: _hostOnPrimary,
                                 ),
                               ),
                     ),
@@ -1649,9 +1662,9 @@ class _SearchResultTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F4EE),
+        color: _hostCardAlt,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE8E4DC), width: 1),
+        border: Border.all(color: _hostBorderSoft, width: 1),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
@@ -1673,11 +1686,11 @@ class _SearchResultTile extends StatelessWidget {
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 14,
             fontWeight: FontWeight.w800,
-            color: Colors.black,
+            color: _hostText,
           ),
         ),
         subtitle: Padding(
@@ -1686,11 +1699,11 @@ class _SearchResultTile extends StatelessWidget {
             artist,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF888888),
+              color: _hostMuted,
             ),
           ),
         ),
@@ -1699,16 +1712,16 @@ class _SearchResultTile extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.black,
+              color: _hostPrimary,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Text(
+            child: Text(
               'Add',
               style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12,
                 fontWeight: FontWeight.w800,
-                color: Colors.white,
+                color: _hostOnPrimary,
               ),
             ),
           ),
@@ -1729,8 +1742,8 @@ class _ShareBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFFF5F3EF),
+      decoration: BoxDecoration(
+        color: _hostBg,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: SafeArea(
@@ -1744,30 +1757,30 @@ class _ShareBottomSheet extends StatelessWidget {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFCBC8C2),
+                    color: _hostBorder,
                     borderRadius: BorderRadius.circular(99),
                   ),
                 ),
               ),
               const SizedBox(height: 20),
-              const Text(
+              Text(
                 'Share your party',
                 style: TextStyle(
                   fontFamily: 'Inter',
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
-                  color: Colors.black,
+                  color: _hostText,
                 ),
               ),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 'Guests scan the QR code or tap the link. No sign-in needed.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontFamily: 'Inter',
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Color(0xFF888888),
+                  color: _hostMuted,
                 ),
               ),
               const SizedBox(height: 20),
@@ -1777,26 +1790,22 @@ class _ShareBottomSheet extends StatelessWidget {
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFECE8E2),
+                  color: _hostMutedSurface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+                  border: Border.all(color: _hostBorder, width: 1),
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.tag_rounded,
-                      size: 16,
-                      color: Color(0xFF888888),
-                    ),
+                    Icon(Icons.tag_rounded, size: 16, color: _hostMuted),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         partyId,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 13,
                           fontWeight: FontWeight.w800,
-                          color: Colors.black,
+                          color: _hostText,
                         ),
                       ),
                     ),
@@ -1808,33 +1817,30 @@ class _ShareBottomSheet extends StatelessWidget {
                         Navigator.of(context).pop();
                         messenger.showSnackBar(
                           SnackBar(
-                            content: const Text(
+                            content: Text(
                               'Party ID copied',
                               style: TextStyle(
                                 fontFamily: 'Inter',
                                 fontSize: 14,
                                 fontWeight: FontWeight.w800,
-                                color: Colors.black,
+                                color: _hostText,
                               ),
                             ),
-                            backgroundColor: const Color(0xFFF8F4EE),
+                            backgroundColor: _hostCardAlt,
                             behavior: SnackBarBehavior.floating,
                             elevation: 0,
                             margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16),
-                              side: const BorderSide(
-                                color: Color(0xFFD8D4CC),
-                                width: 1.2,
-                              ),
+                              side: BorderSide(color: _hostBorder, width: 1.2),
                             ),
                           ),
                         );
                       },
-                      child: const Icon(
+                      child: Icon(
                         Icons.copy_rounded,
                         size: 16,
-                        color: Color(0xFF888888),
+                        color: _hostMuted,
                       ),
                     ),
                   ],
@@ -1844,9 +1850,9 @@ class _ShareBottomSheet extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: _hostCardAlt,
                   borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+                  border: Border.all(color: _hostBorder, width: 1),
                 ),
                 child: QrImageView(
                   data: partyLink,
@@ -1880,16 +1886,16 @@ class _ShareBottomSheet extends StatelessWidget {
                           child: Container(
                             height: 50,
                             decoration: BoxDecoration(
-                              color: Colors.black,
+                              color: _hostPrimary,
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
                                   Icons.share_rounded,
                                   size: 16,
-                                  color: Colors.white,
+                                  color: _hostOnPrimary,
                                 ),
                                 SizedBox(width: 8),
                                 Text(
@@ -1898,7 +1904,7 @@ class _ShareBottomSheet extends StatelessWidget {
                                     fontFamily: 'Inter',
                                     fontSize: 14,
                                     fontWeight: FontWeight.w800,
-                                    color: Colors.white,
+                                    color: _hostOnPrimary,
                                   ),
                                 ),
                               ],
@@ -1915,21 +1921,18 @@ class _ShareBottomSheet extends StatelessWidget {
                       height: 50,
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFECE8E2),
+                        color: _hostMutedSurface,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: const Color(0xFFD8D4CC),
-                          width: 1,
-                        ),
+                        border: Border.all(color: _hostBorder, width: 1),
                       ),
-                      child: const Center(
+                      child: Center(
                         child: Text(
                           'Close',
                           style: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: 14,
                             fontWeight: FontWeight.w800,
-                            color: Color(0xFF444444),
+                            color: _hostText,
                           ),
                         ),
                       ),
@@ -1970,31 +1973,31 @@ class _EmptyState extends StatelessWidget {
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: const Color(0xFFECE8E2),
+                color: _hostMutedSurface,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Icon(icon, size: 30, color: const Color(0xFF888888)),
+              child: Icon(icon, size: 30, color: _hostMuted),
             ),
             const SizedBox(height: 14),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
-                color: Colors.black,
+                color: _hostText,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF888888),
+                color: _hostMuted,
                 height: 1.45,
               ),
             ),
@@ -2015,9 +2018,9 @@ class _InfoBox extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFECE8E2),
+        color: _hostMutedSurface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+        border: Border.all(color: _hostBorder, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2045,7 +2048,7 @@ class _StyledDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFFF5F3EF),
+      backgroundColor: _hostBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -2068,11 +2071,11 @@ class _StyledDialog extends StatelessWidget {
                 Flexible(
                   child: Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 17,
                       fontWeight: FontWeight.w900,
-                      color: Colors.black,
+                      color: _hostText,
                     ),
                   ),
                 ),
@@ -2116,12 +2119,11 @@ class _DialogButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final bg =
         isDangerous
-            ? const Color(0xFFCC3333)
+            ? _hostDanger
             : outlined
             ? Colors.transparent
-            : Colors.black;
-    final fg =
-        isDangerous || !outlined ? Colors.white : const Color(0xFF444444);
+            : _hostPrimary;
+    final fg = isDangerous || !outlined ? _hostOnPrimary : _hostText;
 
     return GestureDetector(
       onTap: onPressed,
@@ -2130,10 +2132,7 @@ class _DialogButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
-          border:
-              outlined
-                  ? Border.all(color: const Color(0xFFD8D4CC), width: 1.5)
-                  : null,
+          border: outlined ? Border.all(color: _hostBorder, width: 1.5) : null,
         ),
         child: Text(
           label,

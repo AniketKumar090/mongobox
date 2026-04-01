@@ -5,6 +5,7 @@ import 'package:flutter_twemoji/flutter_twemoji.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/song_reference.dart';
+import '../constants/colors.dart';
 import '../services/local_suggestions_service.dart';
 import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
@@ -67,7 +68,7 @@ String _getMoodPrompt(String mood) => _moodData[mood]?.prompt ?? '';
 Widget _emojiBadge(String emoji, {double size = 18}) =>
     Twemoji(emoji: emoji, width: size, height: size);
 
-// ─── HOME SCREEN PALETTE (matches lyric_home_screen) ──────────────────────────
+// ─── HOME SCREEN PALETTE ──────────────────────────────────────────────────────
 class _HP {
   static SongCreationPalette get _p => SongCreationPalette.current;
 
@@ -98,11 +99,11 @@ class _SongResult {
   });
 
   final String title;
-  final String hinglishLyrics; // Romanized Hindi (Hinglish) for Hindi-dominant
+  final String hinglishLyrics;
   final String englishLyrics;
   final String mood;
   final String genre;
-  final String dominantLanguage; // 'Hindi' | 'English'
+  final String dominantLanguage;
   final SongReference? referenceSong;
 
   String get fullText =>
@@ -268,13 +269,9 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     );
   }
 
-  // ─── IMPROVED LANGUAGE DETECTION ──────────────────────────────────────────
-  // Checks multiple signals: script, known Hindi/Urdu words, artist origin
-  // and uses a scoring approach rather than a binary flag.
-
+  // ─── LANGUAGE DETECTION ───────────────────────────────────────────────────
   bool _containsSouthAsianScript(String text) {
     for (final rune in text.runes) {
-      // Devanagari, Arabic/Urdu scripts
       if ((rune >= 0x0900 && rune <= 0x097F) ||
           (rune >= 0x0600 && rune <= 0x06FF)) {
         return true;
@@ -408,28 +405,20 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     'coke studio',
   ];
 
-  /// Returns a score 0.0–1.0 where >0.5 means Hindi/South-Asian dominant.
   double _southAsianScore(RecentTrack track) {
     double score = 0.0;
     final combined =
         '${track.trackName} ${track.artistName} ${track.lyricSnippet}'
             .toLowerCase();
-
-    // Hard signal: Devanagari/Arabic script in any field
     if (_containsSouthAsianScript('${track.trackName}${track.lyricSnippet}')) {
       score += 0.9;
       return score.clamp(0.0, 1.0);
     }
-
-    // Hindi/Urdu word matches in combined text
     int wordHits = 0;
     for (final word in _hindiUrduWords) {
       if (combined.contains(word)) wordHits++;
     }
-    // Each word hit contributes; cap contribution at 0.6
     score += (wordHits * 0.08).clamp(0.0, 0.6);
-
-    // Artist name matches South-Asian roster
     final artistLower = track.artistName.toLowerCase();
     for (final marker in _southAsianArtistMarkers) {
       if (artistLower.contains(marker)) {
@@ -437,11 +426,8 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         break;
       }
     }
-
-    // Track name in non-ASCII but not Devanagari (e.g. Romanized Hindi titles)
     final trackLower = track.trackName.toLowerCase();
     if (_hindiUrduWords.any(trackLower.contains)) score += 0.2;
-
     return score.clamp(0.0, 1.0);
   }
 
@@ -490,7 +476,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     final selectedReference = _selectedTrack;
     final moodPrompt = _customMoodPrompt;
 
-    // Use improved language detection
     final isHindiDominant =
         _generationMode == _GenerationMode.singleSong
             ? _isHindiDominantTrack(selectedReference!)
@@ -555,7 +540,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
 
       final parsed = json.decode(raw) as Map<String, dynamic>;
 
-      // For Hindi dominant: use hinglish_lyrics; for English: use english_lyrics
       final hinglishLyrics =
           (parsed['hinglish_lyrics'] ?? parsed['hindi_lyrics'] ?? '')
               as String? ??
@@ -586,24 +570,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         _result = result;
         _isLoading = false;
       });
-
-      if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder:
-              (_) => VoiceSampleScreen(
-                songTitle: result.title,
-                hindiLyrics:
-                    result.hinglishLyrics, // pass Hinglish as hindiLyrics
-                englishLyrics: result.englishLyrics,
-                dominantLanguage: result.dominantLanguage,
-                mood: result.mood,
-                genre: result.genre,
-                referenceSong: result.referenceSong,
-                hinglishLyrics: result.hinglishLyrics,
-              ),
-        ),
-      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -622,11 +588,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         SnackBar(
           content: Row(
             children: [
-              Icon(
-                Icons.check_circle_rounded,
-                size: 16,
-                color: Color(0xFF11F08A),
-              ),
+              Icon(Icons.check_circle_rounded, size: 16, color: _HP.green),
               SizedBox(width: 8),
               Text(
                 'Lyrics copied!',
@@ -669,6 +631,55 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
               hinglishLyrics: r.hinglishLyrics,
             ),
       ),
+    );
+  }
+
+  // ─── SONG PICKER MODAL ────────────────────────────────────────────────────
+  void _showSongPickerModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder:
+          (_) => _SongPickerSheet(
+            tracks: _recentTracks,
+            selectedTrack: _selectedTrack,
+            onSelected: (track) {
+              Navigator.of(context).pop();
+              _selectTrack(track);
+            },
+          ),
+    );
+  }
+
+  // ─── MOOD PICKER MODAL ────────────────────────────────────────────────────
+  void _showMoodPickerModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder:
+          (_) => _MoodPickerSheet(
+            selectedMood: _selectedMood ?? _aiSuggestedMood,
+            aiSuggestedMood: _aiSuggestedMood,
+            onSelected: (mood) {
+              Navigator.of(context).pop();
+              setState(() {
+                _selectedMood = mood;
+                _customMoodPrompt = _getMoodPrompt(mood);
+              });
+            },
+            onReset: () {
+              Navigator.of(context).pop();
+              setState(() {
+                _selectedMood = null;
+                _customMoodPrompt =
+                    _aiSuggestedMood != null
+                        ? _getMoodPrompt(_aiSuggestedMood!)
+                        : null;
+              });
+            },
+          ),
     );
   }
 
@@ -726,8 +737,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         );
   }
 
-  /// Hindi-dominant: output is HINGLISH (Romanized Hindi), NOT Devanagari.
-  /// P.S. from user: Hindi language lyrics should be in Hinglish.
   String _buildHindiPrompt({
     required String mood,
     required String moodInfo,
@@ -759,7 +768,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         '"english_lyrics":"[Verse 1]\\nEnglish translation line\\n\\n[Hook]\\nEnglish translation line\\n\\n[Verse 2]\\nEnglish translation line\\n\\n[Bridge]\\nEnglish translation line\\n\\n[Outro]\\nEnglish translation line"}';
   }
 
-  /// English-dominant: pure English with British flavour, no Hindi at all.
   String _buildEnglishPrompt({
     required String mood,
     required String moodInfo,
@@ -797,6 +805,8 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     final isCompact = screenWidth < 600;
     final hPad = isCompact ? screenWidth * 0.05 : screenWidth * 0.08;
 
+    final activeMood = _selectedMood ?? _aiSuggestedMood;
+
     return Scaffold(
       backgroundColor: _HP.background,
       bottomNavigationBar: SafeArea(
@@ -812,80 +822,81 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
         onTap: () => FocusScope.of(context).unfocus(),
         behavior: HitTestBehavior.opaque,
         child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return Column(
-                children: [
-                  // ── Header ──────────────────────────────────────────────
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 12),
-                    child: _ScreenHeader(
-                      hasResult: _result != null,
-                      onCopy: _copyToClipboard,
-                    ),
-                  ),
-                  // ── Scrollable content ───────────────────────────────────
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Reference song card
-                          _ReferenceCard(
-                            recentTracks: _recentTracks,
-                            mode: _generationMode,
-                            selectedTrack: _selectedTrack,
-                            onModeChanged: _setGenerationMode,
-                            onTrackSelected: _selectTrack,
-                          ),
-                          const SizedBox(height: 20),
-                          // Mood selector
-                          _MoodSection(
-                            aiSuggestedMood: _aiSuggestedMood,
-                            selectedMood: _selectedMood,
-                            isMoodLoading: _isMoodLoading,
-                            customPrompt: _customMoodPrompt,
-                            onMoodSelected:
-                                (mood) => setState(() {
-                                  _selectedMood =
-                                      _selectedMood == mood ? null : mood;
-                                }),
-                            onPromptChanged:
-                                (p) => setState(() => _customMoodPrompt = p),
-                          ),
-                          // Loading steps
-                          if (_isLoading) ...[
-                            const SizedBox(height: 20),
-                            const _LoadingSteps(),
-                          ],
-                          // Error message
-                          if (_errorMessage != null) ...[
-                            const SizedBox(height: 16),
-                            _ErrorBanner(message: _errorMessage!),
-                          ],
-                          // Result card
-                          if (_result != null) ...[
-                            const SizedBox(height: 24),
-                            _ResultCard(
-                              result: _result!,
-                              onCopy: _copyToClipboard,
-                            ),
-                            const SizedBox(height: 14),
-                            _ActionRow(
-                              isLoading: _isLoading,
-                              onRecord: _openVoiceClone,
-                              onRegenerate: _generate,
-                            ),
-                          ],
-                          const SizedBox(height: 16),
-                        ],
+          child: Column(
+            children: [
+              // ── Header ──────────────────────────────────────────────────
+              Padding(
+                padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 12),
+                child: _ScreenHeader(
+                  hasResult: _result != null,
+                  onCopy: _copyToClipboard,
+                ),
+              ),
+              // ── Scrollable content ──────────────────────────────────────
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // ── AI Songwriting card ──────────────────────────────
+                      _SongwritingCard(
+                        recentTracks: _recentTracks,
+                        mode: _generationMode,
+                        selectedTrack: _selectedTrack,
+                        onModeChanged: _setGenerationMode,
+                        onPickSong: () => _showSongPickerModal(context),
                       ),
-                    ),
+                      const SizedBox(height: 20),
+
+                      // ── Mood row (compact dropdown) ──────────────────────
+                      _MoodRow(
+                        activeMood: activeMood,
+                        aiSuggestedMood: _aiSuggestedMood,
+                        selectedMood: _selectedMood,
+                        isMoodLoading: _isMoodLoading,
+                        onOpenPicker: () => _showMoodPickerModal(context),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // ── Customize prompt ─────────────────────────────────
+                      if (activeMood != null)
+                        _CustomizePromptBox(
+                          activeMood: activeMood,
+                          customPrompt: _customMoodPrompt,
+                          onPromptChanged:
+                              (p) => setState(() => _customMoodPrompt = p),
+                        ),
+
+                      // ── Loading steps ────────────────────────────────────
+                      if (_isLoading) ...[
+                        const SizedBox(height: 20),
+                        const _LoadingSteps(),
+                      ],
+
+                      // ── Error message ────────────────────────────────────
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 16),
+                        _ErrorBanner(message: _errorMessage!),
+                      ],
+
+                      // ── Result card ──────────────────────────────────────
+                      if (_result != null) ...[
+                        const SizedBox(height: 24),
+                        _ResultCard(result: _result!, onCopy: _copyToClipboard),
+                        const SizedBox(height: 14),
+                        _ActionRow(
+                          isLoading: _isLoading,
+                          onRecord: _openVoiceClone,
+                          onRegenerate: _generate,
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                    ],
                   ),
-                ],
-              );
-            },
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -941,7 +952,7 @@ class _ScreenHeader extends StatelessWidget {
                       height: 1.05,
                     ),
                   ),
-                  SizedBox(height: 3),
+                  const SizedBox(height: 3),
                   Text(
                     'Choose the vibe, generate lyrics, then record.',
                     style: TextStyle(
@@ -961,28 +972,24 @@ class _ScreenHeader extends StatelessWidget {
   }
 }
 
-// ─── REFERENCE CARD ───────────────────────────────────────────────────────────
-class _ReferenceCard extends StatelessWidget {
-  const _ReferenceCard({
+// ─── SONGWRITING CARD (compact — no song chips) ───────────────────────────────
+class _SongwritingCard extends StatelessWidget {
+  const _SongwritingCard({
     required this.recentTracks,
     required this.mode,
     required this.selectedTrack,
     required this.onModeChanged,
-    required this.onTrackSelected,
+    required this.onPickSong,
   });
+
   final List<RecentTrack> recentTracks;
   final _GenerationMode mode;
   final RecentTrack? selectedTrack;
   final Future<void> Function(_GenerationMode) onModeChanged;
-  final Future<void> Function(RecentTrack) onTrackSelected;
+  final VoidCallback onPickSong;
 
   @override
   Widget build(BuildContext context) {
-    final visibleTracks =
-        mode == _GenerationMode.singleSong
-            ? recentTracks.take(4).toList()
-            : recentTracks;
-
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1038,7 +1045,8 @@ class _ReferenceCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          // Mode toggle — matches home screen pill style
+
+          // Mode toggle
           Row(
             children: [
               _ModePill(
@@ -1054,75 +1062,163 @@ class _ReferenceCard extends StatelessWidget {
               ),
             ],
           ),
+
           if (recentTracks.isNotEmpty) ...[
             const SizedBox(height: 14),
+            // Label
             Row(
               children: [
                 _emojiBadge(
                   mode == _GenerationMode.singleSong ? '🎧' : '📚',
-                  size: 14,
+                  size: 13,
                 ),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    mode == _GenerationMode.singleSong
-                        ? 'Choose a reference song'
-                        : 'Using ${recentTracks.length} tracks from your history',
-                    style: TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: _HP.grey1,
-                    ),
+                const SizedBox(width: 6),
+                Text(
+                  mode == _GenerationMode.singleSong
+                      ? 'Reference song'
+                      : 'Using ${recentTracks.length} tracks from your history',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _HP.grey1,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children:
-                  visibleTracks.map((t) {
-                    final isSelected =
-                        mode == _GenerationMode.singleSong &&
-                        selectedTrack?.trackName == t.trackName &&
-                        selectedTrack?.artistName == t.artistName;
-                    return GestureDetector(
-                      onTap:
-                          mode == _GenerationMode.singleSong
-                              ? () => onTrackSelected(t)
-                              : null,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 11,
-                          vertical: 6,
-                        ),
+            const SizedBox(height: 8),
+
+            // ── Compact song picker button (single song mode) ──────────────
+            if (mode == _GenerationMode.singleSong)
+              GestureDetector(
+                onTap: onPickSong,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _HP.chipDark,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _HP.border),
+                  ),
+                  child: Row(
+                    children: [
+                      // Music note icon
+                      Container(
+                        width: 34,
+                        height: 34,
                         decoration: BoxDecoration(
-                          color: isSelected ? _HP.black : _HP.chipDark,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: isSelected ? _HP.black : _HP.border,
-                          ),
+                          color: _HP.chip,
+                          borderRadius: BorderRadius.circular(9),
                         ),
-                        child: Text(
-                          '${t.trackName}${t.artistName.isEmpty ? '' : ' • ${t.artistName}'}',
-                          style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: isSelected ? _HP.onBlack : _HP.grey1,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        child: Icon(
+                          Icons.music_note_rounded,
+                          size: 16,
+                          color: _HP.grey2,
                         ),
                       ),
-                    );
-                  }).toList(),
-            ),
+                      const SizedBox(width: 10),
+                      // Track info
+                      Expanded(
+                        child:
+                            selectedTrack != null
+                                ? Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      selectedTrack!.trackName,
+                                      style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: _HP.black,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (selectedTrack!
+                                        .artistName
+                                        .isNotEmpty) ...[
+                                      const SizedBox(height: 1),
+                                      Text(
+                                        selectedTrack!.artistName,
+                                        style: TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                          color: _HP.grey2,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ],
+                                )
+                                : Text(
+                                  'Choose a song…',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: _HP.grey3,
+                                  ),
+                                ),
+                      ),
+                      const SizedBox(width: 8),
+                      // "Change" label + chevron
+                      Text(
+                        'Change',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _HP.grey2,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 18,
+                        color: _HP.grey2,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // History mode: show a summary chip instead
+            if (mode == _GenerationMode.history)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: _HP.chipDark,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _HP.border),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.queue_music_rounded, size: 16, color: _HP.grey2),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${recentTracks.length} recently played tracks',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _HP.grey1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ] else ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -1132,7 +1228,7 @@ class _ReferenceCard extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(Icons.info_outline_rounded, size: 14, color: _HP.grey2),
-                  SizedBox(width: 7),
+                  const SizedBox(width: 7),
                   Expanded(
                     child: Text(
                       'Play some songs first to build your taste profile.',
@@ -1154,6 +1250,7 @@ class _ReferenceCard extends StatelessWidget {
   }
 }
 
+// ─── MODE PILL ────────────────────────────────────────────────────────────────
 class _ModePill extends StatelessWidget {
   const _ModePill({
     required this.label,
@@ -1190,66 +1287,24 @@ class _ModePill extends StatelessWidget {
   }
 }
 
-// ─── MOOD SECTION ──────────────────────────────────────────────────────────────
-class _MoodSection extends StatefulWidget {
-  const _MoodSection({
+// ─── MOOD ROW (compact dropdown trigger) ─────────────────────────────────────
+class _MoodRow extends StatelessWidget {
+  const _MoodRow({
+    required this.activeMood,
     required this.aiSuggestedMood,
     required this.selectedMood,
     required this.isMoodLoading,
-    required this.customPrompt,
-    required this.onMoodSelected,
-    required this.onPromptChanged,
+    required this.onOpenPicker,
   });
+
+  final String? activeMood;
   final String? aiSuggestedMood;
   final String? selectedMood;
   final bool isMoodLoading;
-  final String? customPrompt;
-  final void Function(String) onMoodSelected;
-  final void Function(String) onPromptChanged;
-
-  @override
-  State<_MoodSection> createState() => _MoodSectionState();
-}
-
-class _MoodSectionState extends State<_MoodSection> {
-  final _promptController = TextEditingController();
-  String? _lastActiveMood;
-
-  @override
-  void initState() {
-    super.initState();
-    final initialMood = widget.selectedMood ?? widget.aiSuggestedMood;
-    if (initialMood != null) {
-      _promptController.text =
-          widget.customPrompt ?? _getMoodPrompt(initialMood);
-    }
-  }
-
-  @override
-  void dispose() {
-    _promptController.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(_MoodSection old) {
-    super.didUpdateWidget(old);
-    final activeMood = widget.selectedMood ?? widget.aiSuggestedMood;
-    if (activeMood != _lastActiveMood) {
-      _lastActiveMood = activeMood;
-      if (activeMood != null) {
-        _promptController.text =
-            widget.customPrompt ?? _getMoodPrompt(activeMood);
-      }
-    } else if (widget.customPrompt != null &&
-        _promptController.text != widget.customPrompt) {
-      _promptController.text = widget.customPrompt!;
-    }
-  }
+  final VoidCallback onOpenPicker;
 
   @override
   Widget build(BuildContext context) {
-    final activeMood = widget.selectedMood ?? widget.aiSuggestedMood;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1266,7 +1321,7 @@ class _MoodSectionState extends State<_MoodSection> {
               ),
             ),
             const SizedBox(width: 8),
-            if (widget.isMoodLoading)
+            if (isMoodLoading)
               SizedBox(
                 width: 12,
                 height: 12,
@@ -1275,8 +1330,7 @@ class _MoodSectionState extends State<_MoodSection> {
                   color: _HP.black,
                 ),
               )
-            else if (widget.aiSuggestedMood != null &&
-                widget.selectedMood == null)
+            else if (aiSuggestedMood != null && selectedMood == null)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
@@ -1290,148 +1344,672 @@ class _MoodSectionState extends State<_MoodSection> {
                     fontFamily: 'Inter',
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
-                    color: Color(0xFF0A9B5A),
+                    color: AppColors.accentStrong,
                   ),
                 ),
               ),
-            if (widget.selectedMood != null) ...[
-              const Spacer(),
-              GestureDetector(
-                onTap: () => widget.onMoodSelected(widget.selectedMood!),
-                child: Text(
-                  'Reset to AI',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: _HP.grey2,
-                    decoration: TextDecoration.underline,
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
-        const SizedBox(height: 12),
-        // Mood chips — same pill style as home screen
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children:
-              _moods.map((mood) {
-                final isActive = activeMood == mood;
-                return GestureDetector(
-                  onTap: () => widget.onMoodSelected(mood),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 13,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isActive ? _HP.black : _HP.chip,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: isActive ? _HP.black : _HP.border,
-                        width: isActive ? 1.5 : 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _emojiBadge(_getMoodEmoji(mood), size: 14),
-                        const SizedBox(width: 7),
-                        Text(
-                          mood,
-                          style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: isActive ? _HP.onBlack : _HP.grey1,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
-        ),
-        // Customize prompt — only when mood selected
-        if (activeMood != null) ...[
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(14),
+        const SizedBox(height: 10),
+
+        // Compact dropdown trigger button
+        GestureDetector(
+          onTap: onOpenPicker,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: _HP.card,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: _HP.border),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.edit_note_rounded, size: 14, color: _HP.grey2),
-                    SizedBox(width: 6),
-                    Text(
-                      'Customize prompt',
+                if (activeMood != null) ...[
+                  _emojiBadge(_getMoodEmoji(activeMood!), size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      activeMood!,
                       style: TextStyle(
                         fontFamily: 'Inter',
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: _HP.grey1,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: _HP.black,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Prompt edits change style and imagery — language follows your reference song.',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: _HP.grey3,
                   ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  decoration: BoxDecoration(
-                    color: _HP.background,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _HP.border),
+                ] else ...[
+                  Icon(Icons.mood_rounded, size: 18, color: _HP.grey3),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      isMoodLoading ? 'Detecting mood…' : 'Select a mood',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: _HP.grey3,
+                      ),
+                    ),
                   ),
-                  child: TextField(
-                    controller: _promptController,
-                    maxLines: 3,
-                    minLines: 2,
-                    onChanged: widget.onPromptChanged,
+                ],
+                Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 20,
+                  color: _HP.grey2,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── CUSTOMIZE PROMPT BOX ─────────────────────────────────────────────────────
+class _CustomizePromptBox extends StatefulWidget {
+  const _CustomizePromptBox({
+    required this.activeMood,
+    required this.customPrompt,
+    required this.onPromptChanged,
+  });
+  final String activeMood;
+  final String? customPrompt;
+  final void Function(String) onPromptChanged;
+
+  @override
+  State<_CustomizePromptBox> createState() => _CustomizePromptBoxState();
+}
+
+class _CustomizePromptBoxState extends State<_CustomizePromptBox> {
+  late TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(
+      text: widget.customPrompt ?? _getMoodPrompt(widget.activeMood),
+    );
+  }
+
+  @override
+  void didUpdateWidget(_CustomizePromptBox old) {
+    super.didUpdateWidget(old);
+    if (widget.activeMood != old.activeMood ||
+        (widget.customPrompt != null && widget.customPrompt != _ctrl.text)) {
+      _ctrl.text = widget.customPrompt ?? _getMoodPrompt(widget.activeMood);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _HP.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _HP.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.edit_note_rounded, size: 14, color: _HP.grey2),
+              const SizedBox(width: 6),
+              Text(
+                'Customize prompt',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: _HP.grey1,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Prompt edits change style and imagery — language follows your reference song.',
+            style: TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: _HP.grey3,
+            ),
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: TextField(
+              controller: _ctrl,
+              maxLines: 3,
+              minLines: 2,
+              onChanged: widget.onPromptChanged,
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: _HP.black,
+              ),
+              cursorColor: _HP.black,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: _HP.background,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _HP.border),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _HP.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _HP.border, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── SONG PICKER BOTTOM SHEET ─────────────────────────────────────────────────
+class _SongPickerSheet extends StatefulWidget {
+  const _SongPickerSheet({
+    required this.tracks,
+    required this.selectedTrack,
+    required this.onSelected,
+  });
+  final List<RecentTrack> tracks;
+  final RecentTrack? selectedTrack;
+  final void Function(RecentTrack) onSelected;
+
+  @override
+  State<_SongPickerSheet> createState() => _SongPickerSheetState();
+}
+
+class _SongPickerSheetState extends State<_SongPickerSheet> {
+  late List<RecentTrack> _filtered;
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _filtered = widget.tracks;
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _filter(String q) {
+    final ql = q.toLowerCase();
+    setState(() {
+      _filtered =
+          q.isEmpty
+              ? widget.tracks
+              : widget.tracks.where((t) {
+                return t.trackName.toLowerCase().contains(ql) ||
+                    t.artistName.toLowerCase().contains(ql);
+              }).toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return Container(
+      height: mq.size.height * 0.75,
+      decoration: BoxDecoration(
+        color: _HP.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+        border: Border.all(color: _HP.border),
+      ),
+      child: Column(
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 4),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: _HP.border,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Choose a reference song',
                     style: TextStyle(
                       fontFamily: 'Inter',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
                       color: _HP.black,
                     ),
-                    cursorColor: _HP.black,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      filled: true,
-                      fillColor: _HP.background,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: _HP.chipDark,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 15,
+                      color: _HP.grey1,
                     ),
                   ),
                 ),
               ],
             ),
           ),
+          // Search
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: _filter,
+                autofocus: false,
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 14,
+                  color: _HP.black,
+                ),
+                cursorColor: _HP.black,
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: _HP.background,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 11,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: _HP.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: _HP.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: _HP.border, width: 1.5),
+                  ),
+                  hintText: 'Search songs…',
+                  hintStyle: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 14,
+                    color: _HP.grey3,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    size: 18,
+                    color: _HP.grey2,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Track count hint
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${_filtered.length} song${_filtered.length == 1 ? '' : 's'}',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: _HP.grey3,
+                ),
+              ),
+            ),
+          ),
+          // Divider
+          Container(height: 1, color: _HP.border),
+          // List
+          Expanded(
+            child:
+                _filtered.isEmpty
+                    ? Center(
+                      child: Text(
+                        'No songs found',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 13,
+                          color: _HP.grey3,
+                        ),
+                      ),
+                    )
+                    : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, i) {
+                        final track = _filtered[i];
+                        final isSelected =
+                            widget.selectedTrack?.trackName ==
+                                track.trackName &&
+                            widget.selectedTrack?.artistName ==
+                                track.artistName;
+                        return _SongPickerItem(
+                          track: track,
+                          index: widget.tracks.indexOf(track),
+                          isSelected: isSelected,
+                          onTap: () => widget.onSelected(track),
+                        );
+                      },
+                    ),
+          ),
+          SizedBox(height: mq.padding.bottom + 8),
         ],
-      ],
+      ),
+    );
+  }
+}
+
+class _SongPickerItem extends StatelessWidget {
+  const _SongPickerItem({
+    required this.track,
+    required this.index,
+    required this.isSelected,
+    required this.onTap,
+  });
+  final RecentTrack track;
+  final int index;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? _HP.black : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            // Index badge
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color:
+                    isSelected
+                        ? _HP.onBlack.withValues(alpha: 0.15)
+                        : _HP.chipDark,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Center(
+                child: Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: isSelected ? _HP.onBlack : _HP.grey2,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // Track info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    track.trackName,
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected ? _HP.onBlack : _HP.black,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (track.artistName.isNotEmpty) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      track.artistName,
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color:
+                            isSelected
+                                ? _HP.onBlack.withValues(alpha: 0.6)
+                                : _HP.grey2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // Checkmark
+            if (isSelected)
+              Icon(Icons.check_circle_rounded, size: 18, color: _HP.onBlack),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── MOOD PICKER BOTTOM SHEET ─────────────────────────────────────────────────
+class _MoodPickerSheet extends StatelessWidget {
+  const _MoodPickerSheet({
+    required this.selectedMood,
+    required this.aiSuggestedMood,
+    required this.onSelected,
+    required this.onReset,
+  });
+  final String? selectedMood;
+  final String? aiSuggestedMood;
+  final void Function(String) onSelected;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: _HP.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+        border: Border.all(color: _HP.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 4),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: _HP.border,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Select mood',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                      color: _HP.black,
+                    ),
+                  ),
+                ),
+                // Reset to AI button (only when user has manually selected)
+                if (selectedMood != null && aiSuggestedMood != null)
+                  GestureDetector(
+                    onTap: onReset,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _HP.green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _HP.green.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Text(
+                        'Reset to AI',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.accentStrong,
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: _HP.chipDark,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 15,
+                      color: _HP.grey1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          // Mood 2-column grid
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+                childAspectRatio: 3.2,
+              ),
+              itemCount: _moods.length,
+              itemBuilder: (context, i) {
+                final mood = _moods[i];
+                final isActive = selectedMood == mood;
+                final isAiPicked =
+                    aiSuggestedMood == mood && selectedMood == null;
+                return GestureDetector(
+                  onTap: () => onSelected(mood),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isActive ? _HP.black : _HP.chipDark,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color:
+                            isAiPicked
+                                ? _HP.green.withValues(alpha: 0.5)
+                                : isActive
+                                ? _HP.black
+                                : _HP.border,
+                        width: isAiPicked ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        _emojiBadge(_getMoodEmoji(mood), size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            mood,
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: isActive ? _HP.onBlack : _HP.grey1,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isAiPicked)
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: _HP.green,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SizedBox(height: mq.padding.bottom + 8),
+        ],
+      ),
     );
   }
 }
@@ -1595,7 +2173,7 @@ class _ResultCard extends StatelessWidget {
           ),
           // Divider
           Container(height: 1, color: _HP.border),
-          // Lyrics preview
+          // Lyrics
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -1619,8 +2197,8 @@ class _ResultCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 10),
-                Text(
-                  lyrics.length > 400 ? '${lyrics.substring(0, 400)}…' : lyrics,
+                SelectableText(
+                  lyrics,
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 13,
@@ -1665,7 +2243,7 @@ class _ResultChip extends StatelessWidget {
   }
 }
 
-// ─── ACTION ROW (after result) ────────────────────────────────────────────────
+// ─── ACTION ROW ───────────────────────────────────────────────────────────────
 class _ActionRow extends StatelessWidget {
   const _ActionRow({
     required this.isLoading,
@@ -1759,7 +2337,7 @@ class _HomeStyleButton extends StatelessWidget {
   }
 }
 
-// ─── GENERATE BUTTON (bottom bar) ────────────────────────────────────────────
+// ─── GENERATE BUTTON ─────────────────────────────────────────────────────────
 class _GenerateButton extends StatelessWidget {
   const _GenerateButton({
     required this.isLoading,

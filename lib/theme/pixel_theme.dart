@@ -1,24 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../constants/colors.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PIXEL ART COLOR PALETTE
 // ─────────────────────────────────────────────────────────────────────────────
 class PixelColors {
   PixelColors._();
 
-  static const bg         = Color(0xFF0D0D1A); // deep navy — main background
-  static const card       = Color(0xFF12122A); // slightly lighter — card surface
-  static const card2      = Color(0xFF1C1C3A); // elevated card / input fills
-  static const green      = Color(0xFF00FF88); // phosphor green — primary accent
-  static const greenDim   = Color(0xFF00CC6A); // shadow / pressed green
-  static const yellow     = Color(0xFFFFE600); // tip / warning accent
-  static const red        = Color(0xFFFF3D5A); // error / recording accent
-  static const blue       = Color(0xFF4DA6FF); // karaoke / info accent
-  static const purple     = Color(0xFFB57AFF); // header card / reference accent
-  static const purpleDim  = Color(0xFF6A3AAA); // purple shadow
-  static const muted      = Color(0xFF8E8EBA); // inactive text / borders
-  static const textPrimary  = Color(0xFFE8E8FF); // near-white body text
+  static const bg = Color(0xFF0D0D1A); // deep navy — main background
+  static const card = Color(0xFF12122A); // slightly lighter — card surface
+  static const card2 = Color(0xFF1C1C3A); // elevated card / input fills
+  static const green = AppColors.accent; // primary accent
+  static const greenDim = AppColors.accentStrong; // pressed accent
+  static const yellow = Color(0xFFFFE600); // tip / warning accent
+  static const red = Color(0xFFFF3D5A); // error / recording accent
+  static const blue = Color(0xFF4DA6FF); // karaoke / info accent
+  static const purple = AppColors.accent; // header card / reference accent
+  static const purpleDim = AppColors.accentStrong; // accent shadow
+  static const muted = Color(0xFF8E8EBA); // inactive text / borders
+  static const textPrimary = Color(0xFFE8E8FF); // near-white body text
   static const textSecondary = Color(0xFFC2C2E8); // secondary labels
 }
 
@@ -34,13 +36,12 @@ class PixelFonts {
     Color color = PixelColors.textPrimary,
     double letterSpacing = 0.5,
     FontWeight weight = FontWeight.w400,
-  }) =>
-      GoogleFonts.pressStart2p(
-        fontSize: size,
-        color: color,
-        letterSpacing: letterSpacing,
-        fontWeight: weight,
-      );
+  }) => GoogleFonts.pressStart2p(
+    fontSize: size,
+    color: color,
+    letterSpacing: letterSpacing,
+    fontWeight: weight,
+  );
 
   /// Use for lyric lines, karaoke words, body-style reading text.
   static TextStyle vt323({
@@ -48,13 +49,12 @@ class PixelFonts {
     Color color = PixelColors.textPrimary,
     double letterSpacing = 0.5,
     double height = 1.4,
-  }) =>
-      GoogleFonts.vt323(
-        fontSize: size,
-        color: color,
-        letterSpacing: letterSpacing,
-        height: height,
-      );
+  }) => GoogleFonts.vt323(
+    fontSize: size,
+    color: color,
+    letterSpacing: letterSpacing,
+    height: height,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,70 +64,70 @@ class PixelTheme {
   PixelTheme._();
 
   static ThemeData get theme => ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: _colorScheme,
-        scaffoldBackgroundColor: PixelColors.bg,
-        textTheme: _textTheme,
-        appBarTheme: _appBarTheme,
-        filledButtonTheme: _filledButtonTheme,
-        outlinedButtonTheme: _outlinedButtonTheme,
-        cardTheme: _cardTheme,
-        snackBarTheme: _snackBarTheme,
-        dialogTheme: _dialogTheme,
-        inputDecorationTheme: _inputDecorationTheme,
-        dividerTheme: const DividerThemeData(
-          color: PixelColors.card2,
-          thickness: 2,
-          space: 0,
-        ),
-      );
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    colorScheme: _colorScheme,
+    scaffoldBackgroundColor: PixelColors.bg,
+    textTheme: _textTheme,
+    appBarTheme: _appBarTheme,
+    filledButtonTheme: _filledButtonTheme,
+    outlinedButtonTheme: _outlinedButtonTheme,
+    cardTheme: _cardTheme,
+    snackBarTheme: _snackBarTheme,
+    dialogTheme: _dialogTheme,
+    inputDecorationTheme: _inputDecorationTheme,
+    dividerTheme: const DividerThemeData(
+      color: PixelColors.card2,
+      thickness: 2,
+      space: 0,
+    ),
+  );
 
   // ── ColorScheme ────────────────────────────────────────────────────────────
   static const _colorScheme = ColorScheme(
     brightness: Brightness.dark,
-    primary:          PixelColors.green,
-    onPrimary:        PixelColors.bg,
+    primary: PixelColors.green,
+    onPrimary: PixelColors.bg,
     primaryContainer: PixelColors.card,
     onPrimaryContainer: PixelColors.textPrimary,
-    secondary:        PixelColors.purple,
-    onSecondary:      PixelColors.bg,
+    secondary: PixelColors.purple,
+    onSecondary: PixelColors.bg,
     secondaryContainer: PixelColors.card2,
     onSecondaryContainer: PixelColors.textPrimary,
-    tertiary:         PixelColors.blue,
-    onTertiary:       PixelColors.bg,
+    tertiary: PixelColors.blue,
+    onTertiary: PixelColors.bg,
     tertiaryContainer: PixelColors.card2,
     onTertiaryContainer: PixelColors.textPrimary,
-    error:            PixelColors.red,
-    onError:          PixelColors.bg,
-    errorContainer:   Color(0xFF2A0D12),
+    error: PixelColors.red,
+    onError: PixelColors.bg,
+    errorContainer: Color(0xFF2A0D12),
     onErrorContainer: PixelColors.red,
-    surface:          PixelColors.bg,
-    onSurface:        PixelColors.textPrimary,
+    surface: PixelColors.bg,
+    onSurface: PixelColors.textPrimary,
     surfaceContainerHighest: PixelColors.card2,
     onSurfaceVariant: PixelColors.textSecondary,
-    outline:          PixelColors.muted,
-    inverseSurface:   PixelColors.card,
+    outline: PixelColors.muted,
+    inverseSurface: PixelColors.card,
     onInverseSurface: PixelColors.textPrimary,
   );
 
   // ── TextTheme  (maps Flutter's named styles → pixel fonts) ────────────────
   static TextTheme get _textTheme => TextTheme(
-        // Titles → Press Start 2P
-        titleLarge:  PixelFonts.pressStart(size: 11),
-        titleMedium: PixelFonts.pressStart(size: 9),
-        titleSmall:  PixelFonts.pressStart(size: 8),
-        // Labels → Press Start 2P (small pixel labels)
-        labelLarge:  PixelFonts.pressStart(size: 8),
-        labelMedium: PixelFonts.pressStart(size: 7),
-        labelSmall:  PixelFonts.pressStart(size: 6),
-        // Body → VT323 (lyric / reading text)
-        bodyLarge:   PixelFonts.vt323(size: 19),
-        bodyMedium:  PixelFonts.vt323(size: 16),
-        bodySmall:   PixelFonts.vt323(size: 14, color: PixelColors.textSecondary),
-        // Display (unused in this screen, fallback)
-        displaySmall: PixelFonts.pressStart(size: 13),
-      );
+    // Titles → Press Start 2P
+    titleLarge: PixelFonts.pressStart(size: 11),
+    titleMedium: PixelFonts.pressStart(size: 9),
+    titleSmall: PixelFonts.pressStart(size: 8),
+    // Labels → Press Start 2P (small pixel labels)
+    labelLarge: PixelFonts.pressStart(size: 8),
+    labelMedium: PixelFonts.pressStart(size: 7),
+    labelSmall: PixelFonts.pressStart(size: 6),
+    // Body → VT323 (lyric / reading text)
+    bodyLarge: PixelFonts.vt323(size: 19),
+    bodyMedium: PixelFonts.vt323(size: 16),
+    bodySmall: PixelFonts.vt323(size: 14, color: PixelColors.textSecondary),
+    // Display (unused in this screen, fallback)
+    displaySmall: PixelFonts.pressStart(size: 13),
+  );
 
   // ── AppBar ─────────────────────────────────────────────────────────────────
   static const _appBarTheme = AppBarTheme(
@@ -136,9 +136,7 @@ class PixelTheme {
     elevation: 0,
     scrolledUnderElevation: 0,
     centerTitle: true,
-    shape: Border(
-      bottom: BorderSide(color: PixelColors.green, width: 2),
-    ),
+    shape: Border(bottom: BorderSide(color: PixelColors.green, width: 2)),
   );
 
   // ── FilledButton  (record / primary actions) ───────────────────────────────
@@ -156,7 +154,9 @@ class PixelTheme {
       side: WidgetStatePropertyAll(
         const BorderSide(color: PixelColors.greenDim, width: 2),
       ),
-      textStyle: WidgetStatePropertyAll(PixelFonts.pressStart(size: 7, color: PixelColors.bg)),
+      textStyle: WidgetStatePropertyAll(
+        PixelFonts.pressStart(size: 7, color: PixelColors.bg),
+      ),
       padding: const WidgetStatePropertyAll(
         EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       ),
@@ -216,10 +216,7 @@ class PixelTheme {
   static final _inputDecorationTheme = InputDecorationTheme(
     filled: true,
     fillColor: PixelColors.card2,
-    hintStyle: PixelFonts.vt323(
-      size: 16,
-      color: PixelColors.textSecondary,
-    ),
+    hintStyle: PixelFonts.vt323(size: 16, color: PixelColors.textSecondary),
     labelStyle: PixelFonts.pressStart(
       size: 7,
       color: PixelColors.textSecondary,
@@ -268,14 +265,15 @@ class PixelCard extends StatelessWidget {
       padding: padding,
       decoration: BoxDecoration(
         color: backgroundColor,
-        border: leftAccentColor != null
-            ? Border(
-                top:    BorderSide(color: borderColor, width: 2),
-                right:  BorderSide(color: borderColor, width: 2),
-                bottom: BorderSide(color: borderColor, width: 2),
-                left:   BorderSide(color: leftAccentColor!, width: 3),
-              )
-            : Border.all(color: borderColor, width: 2),
+        border:
+            leftAccentColor != null
+                ? Border(
+                  top: BorderSide(color: borderColor, width: 2),
+                  right: BorderSide(color: borderColor, width: 2),
+                  bottom: BorderSide(color: borderColor, width: 2),
+                  left: BorderSide(color: leftAccentColor!, width: 3),
+                )
+                : Border.all(color: borderColor, width: 2),
       ),
       child: child,
     );
@@ -299,7 +297,11 @@ class PixelLabel extends StatelessWidget {
 
 /// A FilledButton pre-styled for the "error / recording" state.
 class PixelStopButton extends StatelessWidget {
-  const PixelStopButton({super.key, required this.label, required this.onPressed});
+  const PixelStopButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
   final String label;
   final VoidCallback onPressed;
 
@@ -318,7 +320,10 @@ class PixelStopButton extends StatelessWidget {
           elevation: 0,
         ),
         icon: const Icon(Icons.stop_rounded, size: 18),
-        label: Text(label, style: PixelFonts.pressStart(size: 7, color: PixelColors.bg)),
+        label: Text(
+          label,
+          style: PixelFonts.pressStart(size: 7, color: PixelColors.bg),
+        ),
       ),
     );
   }
@@ -326,7 +331,11 @@ class PixelStopButton extends StatelessWidget {
 
 /// A purple FilledButton for "Use This Recording" / secondary CTAs.
 class PixelPurpleButton extends StatelessWidget {
-  const PixelPurpleButton({super.key, required this.label, required this.onPressed});
+  const PixelPurpleButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
   final String label;
   final VoidCallback onPressed;
 
@@ -345,7 +354,10 @@ class PixelPurpleButton extends StatelessWidget {
           elevation: 0,
         ),
         icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-        label: Text(label, style: PixelFonts.pressStart(size: 6, color: PixelColors.textPrimary)),
+        label: Text(
+          label,
+          style: PixelFonts.pressStart(size: 6, color: PixelColors.textPrimary),
+        ),
       ),
     );
   }
