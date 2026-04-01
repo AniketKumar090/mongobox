@@ -87,7 +87,9 @@ class EnvConfig {
       print('⚠️  Error reading GENIUS_ACCESS_TOKEN from .env: $e');
     }
 
-    final envVarKey = _clean(const String.fromEnvironment('GENIUS_ACCESS_TOKEN'));
+    final envVarKey = _clean(
+      const String.fromEnvironment('GENIUS_ACCESS_TOKEN'),
+    );
     if (envVarKey.isNotEmpty) {
       return envVarKey;
     }
@@ -199,5 +201,25 @@ class EnvConfig {
       'http://127.0.0.1:8000 for local simulator testing.',
     );
     return 'http://127.0.0.1:8000';
+  }
+
+  static String get invidiousBaseUrl {
+    try {
+      final envFileValue = _clean(dotenv.env['INVIDIOUS_BASE_URL']);
+      if (envFileValue.isNotEmpty) {
+        return envFileValue.replaceFirst(RegExp(r'/+$'), '');
+      }
+    } catch (e) {
+      print('⚠️  Error reading INVIDIOUS_BASE_URL from .env: $e');
+    }
+
+    final envVarValue = _clean(
+      const String.fromEnvironment('INVIDIOUS_BASE_URL'),
+    );
+    if (envVarValue.isNotEmpty) {
+      return envVarValue.replaceFirst(RegExp(r'/+$'), '');
+    }
+
+    return '';
   }
 }

@@ -1,4 +1,4 @@
-import 'youtube_mobile_service.dart';
+import 'env_config.dart';
 
 /// YouTube API Quota Monitor
 /// Tracks quota usage and estimates reset time
@@ -48,7 +48,7 @@ class YouTubeQuotaMonitor {
 
   /// Log a search API call (costs 100 quota units)
   void logSearchCall(String query) {
-    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    final keyFingerprint = _activeYoutubeApiKeyFingerprint();
     _estimatedUsageByKey[keyFingerprint] =
         (_estimatedUsageByKey[keyFingerprint] ?? 0) + searchCost;
     _usageLogByKey
@@ -66,7 +66,7 @@ class YouTubeQuotaMonitor {
   /// Log a video.get API call (costs 1 quota unit)
   void logVideoCall(List<String> videoIds) {
     final cost = videoCost * videoIds.length;
-    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    final keyFingerprint = _activeYoutubeApiKeyFingerprint();
     _estimatedUsageByKey[keyFingerprint] =
         (_estimatedUsageByKey[keyFingerprint] ?? 0) + cost;
     _usageLogByKey
@@ -84,7 +84,7 @@ class YouTubeQuotaMonitor {
   /// Get current quota status
   QuotaStatus getStatus() {
     _updateQuotaResetTime();
-    final keyFingerprint = activeYoutubeApiKeyFingerprint();
+    final keyFingerprint = _activeYoutubeApiKeyFingerprint();
     final estimatedUsage = _estimatedUsageByKey[keyFingerprint] ?? 0;
     final usageLog = List<QuotaEvent>.from(
       _usageLogByKey[keyFingerprint] ?? const [],
@@ -166,6 +166,17 @@ ${_getWarningMessage(status.percentageUsed)}
       return '🟡 CAUTION: You are using 70%+ of your daily quota.';
     } else {
       return '🟢 OK: Quota usage is healthy.';
+    }
+  }
+
+  String _activeYoutubeApiKeyFingerprint() {
+    try {
+      final apiKey = EnvConfig.youtubeApiKey.trim();
+      if (apiKey.isEmpty) return 'missing-key';
+      if (apiKey.length <= 8) return apiKey;
+      return apiKey.substring(apiKey.length - 8);
+    } catch (_) {
+      return 'missing-key';
     }
   }
 }

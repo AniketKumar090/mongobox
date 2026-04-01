@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/song_reference.dart';
 import '../services/local_suggestions_service.dart';
+import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
 import 'voice_sample_screen.dart';
 
@@ -68,20 +69,20 @@ Widget _emojiBadge(String emoji, {double size = 18}) =>
 
 // ─── HOME SCREEN PALETTE (matches lyric_home_screen) ──────────────────────────
 class _HP {
-  static const background = Color(0xFFF5F3EF);
-  static const card = Color(0xFFF0EDE7);
-  static const cardAlt = Color(0xFFFAF8F5);
-  static const border = Color(0xFFD8D4CC);
-  static const borderAlt = Color(0xFFEAE6E0);
-  static const black = Color(0xFF111111);
-  static const blackSoft = Color(0xFF1E1E1E);
-  static const grey1 = Color(0xFF444444);
-  static const grey2 = Color(0xFF666666);
-  static const grey3 = Color(0xFF888888);
-  static const grey4 = Color(0xFFAAAAAA);
-  static const green = Color(0xFF11F08A);
-  static const chip = Color(0xFFE8E3DC);
-  static const chipDark = Color(0xFFD8D4CC);
+  static SongCreationPalette get _p => SongCreationPalette.current;
+
+  static Color get background => _p.background;
+  static Color get card => _p.card;
+  static Color get border => _p.border;
+  static Color get black => _p.black;
+  static Color get blackSoft => _p.blackSoft;
+  static Color get grey1 => _p.grey1;
+  static Color get grey2 => _p.grey2;
+  static Color get grey3 => _p.grey3;
+  static Color get green => _p.green;
+  static Color get chip => _p.chip;
+  static Color get chipDark => _p.chipDark;
+  static Color get onBlack => _p.onBlack;
 }
 
 // ─── RESULT MODEL ─────────────────────────────────────────────────────────────
@@ -177,18 +178,20 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
   Future<void> _refreshMoodSuggestion() async {
     final tracks = _analysisTracks;
     if (tracks.isEmpty) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _aiSuggestedMood = null;
           _isMoodLoading = false;
         });
+      }
       return;
     }
-    if (mounted)
+    if (mounted) {
       setState(() {
         _isMoodLoading = true;
         _aiSuggestedMood = null;
       });
+    }
     try {
       final mood = await _detectMood(tracks);
       if (mounted) setState(() => _aiSuggestedMood = mood);
@@ -273,8 +276,9 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
     for (final rune in text.runes) {
       // Devanagari, Arabic/Urdu scripts
       if ((rune >= 0x0900 && rune <= 0x097F) ||
-          (rune >= 0x0600 && rune <= 0x06FF))
+          (rune >= 0x0600 && rune <= 0x06FF)) {
         return true;
+      }
     }
     return false;
   }
@@ -536,10 +540,11 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
           .timeout(const Duration(seconds: 40));
 
       if (!mounted) return;
-      if (response.statusCode != 200)
+      if (response.statusCode != 200) {
         throw Exception(
           'Groq API error ${response.statusCode}: ${response.body}',
         );
+      }
 
       final data = json.decode(response.body);
       final raw =
@@ -615,7 +620,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Row(
+          content: Row(
             children: [
               Icon(
                 Icons.check_circle_rounded,
@@ -629,7 +634,7 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
                   fontFamily: 'Inter',
                   fontWeight: FontWeight.w700,
                   fontSize: 14,
-                  color: Colors.white,
+                  color: _HP.onBlack,
                 ),
               ),
             ],
@@ -789,7 +794,6 @@ class _GenerateSongScreenState extends State<GenerateSongScreen>
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final screenWidth = mq.size.width;
-    final screenHeight = mq.size.height;
     final isCompact = screenWidth < 600;
     final hPad = isCompact ? screenWidth * 0.05 : screenWidth * 0.08;
 
@@ -915,7 +919,7 @@ class _ScreenHeader extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _HP.border),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.arrow_back_rounded,
                   size: 20,
                   color: _HP.black,
@@ -923,7 +927,7 @@ class _ScreenHeader extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -999,14 +1003,14 @@ class _ReferenceCard extends StatelessWidget {
                   color: _HP.black,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.auto_awesome_rounded,
-                  color: Colors.white,
+                  color: _HP.onBlack,
                   size: 18,
                 ),
               ),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1064,7 +1068,7 @@ class _ReferenceCard extends StatelessWidget {
                     mode == _GenerationMode.singleSong
                         ? 'Choose a reference song'
                         : 'Using ${recentTracks.length} tracks from your history',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -1108,7 +1112,7 @@ class _ReferenceCard extends StatelessWidget {
                             fontFamily: 'Inter',
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: isSelected ? Colors.white : _HP.grey1,
+                            color: isSelected ? _HP.onBlack : _HP.grey1,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1125,7 +1129,7 @@ class _ReferenceCard extends StatelessWidget {
                 color: _HP.chipDark,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Row(
+              child: Row(
                 children: [
                   Icon(Icons.info_outline_rounded, size: 14, color: _HP.grey2),
                   SizedBox(width: 7),
@@ -1178,7 +1182,7 @@ class _ModePill extends StatelessWidget {
             fontFamily: 'Inter',
             fontSize: 13,
             fontWeight: FontWeight.w800,
-            color: active ? Colors.white : _HP.grey1,
+            color: active ? _HP.onBlack : _HP.grey1,
           ),
         ),
       ),
@@ -1233,9 +1237,10 @@ class _MoodSectionState extends State<_MoodSection> {
     final activeMood = widget.selectedMood ?? widget.aiSuggestedMood;
     if (activeMood != _lastActiveMood) {
       _lastActiveMood = activeMood;
-      if (activeMood != null)
+      if (activeMood != null) {
         _promptController.text =
             widget.customPrompt ?? _getMoodPrompt(activeMood);
+      }
     } else if (widget.customPrompt != null &&
         _promptController.text != widget.customPrompt) {
       _promptController.text = widget.customPrompt!;
@@ -1251,7 +1256,7 @@ class _MoodSectionState extends State<_MoodSection> {
         // Section title row
         Row(
           children: [
-            const Text(
+            Text(
               'Mood',
               style: TextStyle(
                 fontFamily: 'Inter',
@@ -1262,7 +1267,7 @@ class _MoodSectionState extends State<_MoodSection> {
             ),
             const SizedBox(width: 8),
             if (widget.isMoodLoading)
-              const SizedBox(
+              SizedBox(
                 width: 12,
                 height: 12,
                 child: CircularProgressIndicator(
@@ -1293,7 +1298,7 @@ class _MoodSectionState extends State<_MoodSection> {
               const Spacer(),
               GestureDetector(
                 onTap: () => widget.onMoodSelected(widget.selectedMood!),
-                child: const Text(
+                child: Text(
                   'Reset to AI',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -1342,7 +1347,7 @@ class _MoodSectionState extends State<_MoodSection> {
                             fontFamily: 'Inter',
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
-                            color: isActive ? Colors.white : _HP.grey1,
+                            color: isActive ? _HP.onBlack : _HP.grey1,
                           ),
                         ),
                       ],
@@ -1364,7 +1369,7 @@ class _MoodSectionState extends State<_MoodSection> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                Row(
                   children: [
                     Icon(Icons.edit_note_rounded, size: 14, color: _HP.grey2),
                     SizedBox(width: 6),
@@ -1380,7 +1385,7 @@ class _MoodSectionState extends State<_MoodSection> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Prompt edits change style and imagery — language follows your reference song.',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -1396,47 +1401,29 @@ class _MoodSectionState extends State<_MoodSection> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: _HP.border),
                   ),
-                  child: Theme(
-                    // Force light theme on the TextField so it never inherits
-                    // a dark scaffold's input decoration colors.
-                    data: ThemeData(
-                      brightness: Brightness.light,
-                      colorScheme: const ColorScheme.light(
-                        primary: _HP.black,
-                        surface: _HP.background,
-                      ),
-                      inputDecorationTheme: const InputDecorationTheme(
-                        filled: true,
-                        fillColor: _HP.background,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                      ),
+                  child: TextField(
+                    controller: _promptController,
+                    maxLines: 3,
+                    minLines: 2,
+                    onChanged: widget.onPromptChanged,
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: _HP.black,
                     ),
-                    child: TextField(
-                      controller: _promptController,
-                      maxLines: 3,
-                      minLines: 2,
-                      onChanged: widget.onPromptChanged,
-                      style: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: _HP.black,
+                    cursorColor: _HP.black,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      filled: true,
+                      fillColor: _HP.background,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
                       ),
-                      cursorColor: _HP.black,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        filled: true,
-                        fillColor: _HP.background,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
                     ),
                   ),
                 ),
@@ -1489,7 +1476,7 @@ class _LoadingStepsState extends State<_LoadingSteps> {
           _steps[_step],
           key: ValueKey(_step),
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 13,
             fontWeight: FontWeight.w600,
@@ -1575,7 +1562,7 @@ class _ResultCard extends StatelessWidget {
                     children: [
                       Text(
                         '"${result.title}"',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
@@ -1601,11 +1588,7 @@ class _ResultCard extends StatelessWidget {
                 ),
                 IconButton(
                   onPressed: onCopy,
-                  icon: const Icon(
-                    Icons.copy_rounded,
-                    size: 18,
-                    color: _HP.grey2,
-                  ),
+                  icon: Icon(Icons.copy_rounded, size: 18, color: _HP.grey2),
                 ),
               ],
             ),
@@ -1620,17 +1603,13 @@ class _ResultCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    const Icon(
-                      Icons.lyrics_outlined,
-                      size: 13,
-                      color: _HP.grey3,
-                    ),
+                    Icon(Icons.lyrics_outlined, size: 13, color: _HP.grey3),
                     const SizedBox(width: 5),
                     Text(
                       result.dominantLanguage == 'Hindi'
                           ? 'Hinglish Lyrics'
                           : 'English Lyrics',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -1642,7 +1621,7 @@ class _ResultCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   lyrics.length > 400 ? '${lyrics.substring(0, 400)}…' : lyrics,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -1679,7 +1658,7 @@ class _ResultChip extends StatelessWidget {
           fontFamily: 'Inter',
           fontSize: 11,
           fontWeight: FontWeight.w700,
-          color: highlight ? Colors.white : _HP.grey1,
+          color: highlight ? _HP.onBlack : _HP.grey1,
         ),
       ),
     );
@@ -1761,7 +1740,7 @@ class _HomeStyleButton extends StatelessWidget {
             Icon(
               icon,
               size: 16,
-              color: filled ? Colors.white : (enabled ? _HP.black : _HP.grey3),
+              color: filled ? _HP.onBlack : (enabled ? _HP.black : _HP.grey3),
             ),
             const SizedBox(width: 7),
             Text(
@@ -1770,8 +1749,7 @@ class _HomeStyleButton extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
-                color:
-                    filled ? Colors.white : (enabled ? _HP.black : _HP.grey3),
+                color: filled ? _HP.onBlack : (enabled ? _HP.black : _HP.grey3),
               ),
             ),
           ],
@@ -1825,15 +1803,13 @@ class _GenerateButton extends StatelessWidget {
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.2,
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                          Colors.white,
-                        ),
+                        valueColor: AlwaysStoppedAnimation<Color>(_HP.onBlack),
                       ),
                     )
-                    : const Icon(
+                    : Icon(
                       Icons.auto_awesome_rounded,
                       size: 20,
-                      color: Colors.white,
+                      color: _HP.onBlack,
                     ),
                 const SizedBox(width: 10),
                 Text(
@@ -1842,11 +1818,11 @@ class _GenerateButton extends StatelessWidget {
                       : mode == _GenerationMode.singleSong
                       ? 'Generate From This Song'
                       : 'Generate My Song',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 15,
                     fontWeight: FontWeight.w900,
-                    color: Colors.white,
+                    color: _HP.onBlack,
                   ),
                 ),
               ],

@@ -24,11 +24,12 @@ class LyricPageScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pageTheme = lyricScreenTheme(context);
+    final palette = LyricScreenPalette.of(context);
 
     return Theme(
       data: pageTheme,
       child: Scaffold(
-        backgroundColor: LyricScreenPalette.background,
+        backgroundColor: palette.background,
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {

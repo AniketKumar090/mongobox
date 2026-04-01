@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/lyric_screen_theme.dart';
+
 /// A slim, inline step-progress indicator that stretches full width.
 ///
 /// Usage:
@@ -17,6 +19,7 @@ class SongFlowTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final safeStep = currentStep.clamp(1, labels.length);
+    final palette = LyricScreenPalette.of(context);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -45,7 +48,7 @@ class SongFlowTimeline extends StatelessWidget {
                     top: (markerSize - lineHeight) / 2,
                     child: Container(
                       height: lineHeight,
-                      color: const Color(0xFFD8D4CC),
+                      color: palette.outline,
                     ),
                   ),
                   if (activeLineWidth > 0)
@@ -53,10 +56,7 @@ class SongFlowTimeline extends StatelessWidget {
                       left: markerSize / 2,
                       top: (markerSize - lineHeight) / 2,
                       width: activeLineWidth,
-                      child: Container(
-                        height: lineHeight,
-                        color: const Color(0xFF111111),
-                      ),
+                      child: Container(height: lineHeight, color: palette.ink),
                     ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -107,8 +107,8 @@ class SongFlowTimeline extends StatelessWidget {
                                 : FontWeight.w600,
                         color:
                             isCurrent || isCompleted
-                                ? const Color(0xFF444444)
-                                : const Color(0xFFAAAAAA),
+                                ? palette.mutedText
+                                : palette.outline,
                       ),
                     ),
                   ),
@@ -137,15 +137,18 @@ class _StepMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+
     if (isCompleted) {
       return Container(
         width: size,
         height: size,
-        decoration: const BoxDecoration(
-          color: Color(0xFF111111),
-          shape: BoxShape.circle,
+        decoration: BoxDecoration(color: palette.ink, shape: BoxShape.circle),
+        child: Icon(
+          Icons.check_rounded,
+          color: palette.background,
+          size: size * 0.6,
         ),
-        child: Icon(Icons.check_rounded, color: Colors.white, size: size * 0.6),
       );
     }
 
@@ -155,14 +158,14 @@ class _StepMarker extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0xFF111111), width: 1.4),
+          border: Border.all(color: palette.ink, width: 1.4),
         ),
         padding: const EdgeInsets.all(2),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF111111),
+            color: palette.ink,
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 1.6),
+            border: Border.all(color: palette.background, width: 1.6),
           ),
           child: Center(
             child: Text(
@@ -171,7 +174,7 @@ class _StepMarker extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: size * 0.42,
                 fontWeight: FontWeight.w800,
-                color: Colors.white,
+                color: palette.background,
                 height: 1,
               ),
             ),
@@ -183,8 +186,8 @@ class _StepMarker extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(
-        color: Color(0xFFF0EDE7),
+      decoration: BoxDecoration(
+        color: palette.mutedSurface,
         shape: BoxShape.circle,
       ),
       child: Center(
@@ -193,7 +196,7 @@ class _StepMarker extends StatelessWidget {
           height: size * 0.34,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: const Color(0xFF888888), width: 1.2),
+            border: Border.all(color: palette.mutedText, width: 1.2),
           ),
         ),
       ),

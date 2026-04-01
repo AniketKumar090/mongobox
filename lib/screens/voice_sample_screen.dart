@@ -8,24 +8,28 @@ import 'package:record/record.dart';
 import '../models/song_reference.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
+import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
 import 'voice_song_screen.dart';
 
 // ─── HOME SCREEN PALETTE ──────────────────────────────────────────────────────
 class _HP {
-  static const background = Color(0xFFF5F3EF);
-  static const card = Color(0xFFF0EDE7);
-  static const border = Color(0xFFD8D4CC);
-  static const black = Color(0xFF111111);
-  static const grey1 = Color(0xFF444444);
-  static const grey2 = Color(0xFF666666);
-  static const grey3 = Color(0xFF888888);
-  static const chip = Color(0xFFE8E3DC);
-  static const chipDark = Color(0xFFD8D4CC);
-  static const green = Color(0xFF11F08A);
-  static const red = Color(0xFFFF3B30);
-  static const redSoft = Color(0xFFFFF0EE);
-  static const redBorder = Color(0xFFFFCCCC);
+  static SongCreationPalette get _p => SongCreationPalette.current;
+
+  static Color get background => _p.background;
+  static Color get card => _p.card;
+  static Color get border => _p.border;
+  static Color get black => _p.black;
+  static Color get grey1 => _p.grey1;
+  static Color get grey2 => _p.grey2;
+  static Color get grey3 => _p.grey3;
+  static Color get chip => _p.chip;
+  static Color get chipDark => _p.chipDark;
+  static Color get green => _p.green;
+  static Color get red => _p.red;
+  static Color get redSoft => _p.redSoft;
+  static Color get redBorder => _p.redBorder;
+  static Color get onBlack => _p.onBlack;
 }
 
 class VoiceSampleScreen extends StatefulWidget {
@@ -179,7 +183,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
             ),
-            title: const Row(
+            title: Row(
               children: [
                 Icon(Icons.mic_off_rounded, color: _HP.red, size: 20),
                 SizedBox(width: 8),
@@ -194,7 +198,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                 ),
               ],
             ),
-            content: const Text(
+            content: Text(
               'Microphone access is disabled. Please enable it in Settings to continue recording.',
               style: TextStyle(
                 fontFamily: 'Inter',
@@ -206,7 +210,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text(
+                child: Text(
                   'Cancel',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -229,13 +233,13 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                     color: _HP.black,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Text(
+                  child: Text(
                     'Open Settings',
                     style: TextStyle(
                       fontFamily: 'Inter',
                       fontWeight: FontWeight.w800,
                       fontSize: 13,
-                      color: Colors.white,
+                      color: _HP.onBlack,
                     ),
                   ),
                 ),
@@ -347,11 +351,11 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
         SnackBar(
           content: Text(
             msg,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontWeight: FontWeight.w700,
               fontSize: 14,
-              color: Colors.white,
+              color: _HP.onBlack,
             ),
           ),
           behavior: SnackBarBehavior.floating,
@@ -628,7 +632,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                       ),
                       const SizedBox(height: 16),
                       if (_karaokeFlowLines.isNotEmpty) ...[
-                        const Text(
+                        Text(
                           'Follow the highlighted words',
                           textAlign: TextAlign.center,
                           style: TextStyle(
@@ -674,7 +678,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
             // ── Bottom action bar ─────────────────────────────────────────
             Container(
               padding: EdgeInsets.fromLTRB(hPad, 14, hPad, 22),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: _HP.background,
                 border: Border(top: BorderSide(color: _HP.border)),
               ),
@@ -721,7 +725,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(color: _HP.redBorder),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
@@ -790,11 +794,6 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayTitle =
-        referenceSong != null
-            ? '${referenceSong!.trackName} — ${referenceSong!.artistName}'
-            : songTitle;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -813,7 +812,7 @@ class _TopBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _HP.border),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.arrow_back_rounded,
                   size: 20,
                   color: _HP.black,
@@ -825,7 +824,7 @@ class _TopBar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Record your voice',
                     style: TextStyle(
                       fontFamily: 'Inter',
@@ -838,47 +837,11 @@ class _TopBar extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     'Read a short sample clearly for your voice clone.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
                       color: _HP.grey2,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _HP.chip,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _HP.border),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.music_note_rounded,
-                          size: 12,
-                          color: _HP.grey2,
-                        ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            displayTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontFamily: 'Inter',
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: _HP.grey1,
-                            ),
-                          ),
-                        ),
-                      ],
                     ),
                   ),
                 ],
@@ -909,12 +872,12 @@ class _HintCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.info_outline_rounded, size: 16, color: _HP.grey3),
+          Icon(Icons.info_outline_rounded, size: 16, color: _HP.grey3),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
@@ -1029,10 +992,10 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                       color: _HP.black,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.mic_rounded,
                       size: 16,
-                      color: Colors.white,
+                      color: _HP.onBlack,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1040,7 +1003,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Your Speaking Lines',
                           style: TextStyle(
                             fontFamily: 'Inter',
@@ -1051,7 +1014,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                         ),
                         Text(
                           '${_lines.length} lines to record',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
@@ -1064,7 +1027,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                   AnimatedRotation(
                     turns: _expanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: const Icon(
+                    child: Icon(
                       Icons.keyboard_arrow_down_rounded,
                       color: _HP.grey2,
                       size: 20,
@@ -1083,7 +1046,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                 bottom: Radius.circular(18),
               ),
               child: Container(
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   border: Border(top: BorderSide(color: _HP.border)),
                 ),
                 child: Scrollbar(
@@ -1095,7 +1058,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Practice these before recording:',
                           style: TextStyle(
                             fontFamily: 'Inter',
@@ -1111,7 +1074,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
+                                Text(
                                   '›  ',
                                   style: TextStyle(
                                     fontFamily: 'Inter',
@@ -1123,7 +1086,7 @@ class _SpeakingLinesCardState extends State<_SpeakingLinesCard> {
                                 Expanded(
                                   child: Text(
                                     line,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontFamily: 'Inter',
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
@@ -1188,14 +1151,14 @@ class _LyricsCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: _HP.border),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.lyrics_outlined,
                       size: 16,
                       color: _HP.black,
                     ),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Generated Lyrics',
                       style: TextStyle(
@@ -1209,7 +1172,7 @@ class _LyricsCard extends StatelessWidget {
                   AnimatedRotation(
                     turns: showFull ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: const Icon(
+                    child: Icon(
                       Icons.keyboard_arrow_down_rounded,
                       color: _HP.grey2,
                       size: 20,
@@ -1228,7 +1191,7 @@ class _LyricsCard extends StatelessWidget {
                 bottom: Radius.circular(18),
               ),
               child: Container(
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   border: Border(top: BorderSide(color: _HP.border)),
                 ),
                 child: Scrollbar(
@@ -1299,7 +1262,7 @@ class _WaveBar extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             'REC ${seconds}s / 30s',
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 13,
               fontWeight: FontWeight.w800,
@@ -1415,13 +1378,13 @@ class _KaraokeBox extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.queue_music_rounded, size: 13, color: _HP.grey3),
+              Icon(Icons.queue_music_rounded, size: 13, color: _HP.grey3),
               const SizedBox(width: 5),
               Text(
                 referenceMsPerWord != null
                     ? 'Karaoke Guide (Reference Tempo)'
                     : 'Karaoke Guide ($targetWpm WPM)',
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'Inter',
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
@@ -1474,7 +1437,7 @@ class _KaraokeBox extends StatelessWidget {
                                 child: Container(
                                   width: 6,
                                   height: 6,
-                                  decoration: const BoxDecoration(
+                                  decoration: BoxDecoration(
                                     color: _HP.black,
                                     shape: BoxShape.circle,
                                   ),
@@ -1517,7 +1480,7 @@ class _KaraokeBox extends StatelessWidget {
                                 isCurrent ? FontWeight.w800 : FontWeight.w500,
                             color:
                                 isCurrent
-                                    ? Colors.white
+                                    ? _HP.onBlack
                                     : isPast
                                     ? _HP.grey1
                                     : _HP.grey3,
@@ -1555,7 +1518,7 @@ class _RecordedLinesCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(Icons.article_outlined, size: 13, color: _HP.grey3),
               SizedBox(width: 5),
@@ -1577,7 +1540,7 @@ class _RecordedLinesCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     '›  ',
                     style: TextStyle(
                       fontFamily: 'Inter',
@@ -1589,7 +1552,7 @@ class _RecordedLinesCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       line,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -1652,7 +1615,7 @@ class _PaceBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HAPTIC FLOW CLONE BUTTON
+// HAPTIC FLOW CLONE BUTTON  (fixed for light + dark mode)
 // ─────────────────────────────────────────────────────────────────────────────
 class _HapticFlowCloneButton extends StatefulWidget {
   const _HapticFlowCloneButton({required this.onCompleted});
@@ -1755,6 +1718,14 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
 
   @override
   Widget build(BuildContext context) {
+    // Use Brightness to resolve explicit colors — avoids palette inversion issues
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final btnBg = const Color(0xFF0E0E0E);
+    final btnFg = isDark ? const Color(0xFFFFFFFF) : const Color(0xFFFFFFFF);
+    final btnSubFg = const Color(0xFFFFFFFF).withValues(alpha: 0.40);
+    final activeBorder = _HP.green.withValues(alpha: 0.6);
+    final inactiveBorder =
+        isDark ? const Color(0xFF2E2E2E) : const Color(0xFF222222);
     return SizedBox(
       height: 72,
       width: double.infinity,
@@ -1777,23 +1748,20 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 decoration: BoxDecoration(
-                  color: _HP.black,
+                  color: btnBg,
                   borderRadius: BorderRadius.circular(26),
                   border: Border.all(
-                    color:
-                        isActive
-                            ? _HP.green.withValues(alpha: 0.55)
-                            : Colors.black.withValues(alpha: 0.92),
+                    color: isActive ? activeBorder : inactiveBorder,
                     width: 1.4,
                   ),
                   boxShadow: [
                     BoxShadow(
                       color:
                           isActive
-                              ? _HP.green.withValues(alpha: 0.18)
-                              : Colors.black.withValues(alpha: 0.18),
-                      blurRadius: isActive ? 20 : 10,
-                      offset: const Offset(0, 6),
+                              ? _HP.green.withValues(alpha: 0.2)
+                              : Colors.black.withValues(alpha: 0.10),
+                      blurRadius: isActive ? 20 : 8,
+                      offset: const Offset(0, 5),
                     ),
                   ],
                 ),
@@ -1801,24 +1769,7 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
                   borderRadius: BorderRadius.circular(26),
                   child: Stack(
                     children: [
-                      Positioned.fill(
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors:
-                                  isActive
-                                      ? [
-                                        const Color(0xFF181818),
-                                        const Color(0xFF101010),
-                                      ]
-                                      : [_HP.black, _HP.black],
-                            ),
-                          ),
-                        ),
-                      ),
+                      // Green fill sweep during hold
                       AnimatedPositioned(
                         duration: const Duration(milliseconds: 90),
                         curve: Curves.easeOutCubic,
@@ -1832,19 +1783,20 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
                               begin: Alignment.centerLeft,
                               end: Alignment.centerRight,
                               colors: [
-                                _HP.green.withValues(alpha: 0.08),
-                                _HP.green.withValues(alpha: 0.28),
-                                _HP.green.withValues(alpha: 0.08),
+                                _HP.green.withValues(alpha: 0.0),
+                                _HP.green.withValues(alpha: 0.22),
+                                _HP.green.withValues(alpha: 0.0),
                               ],
                             ),
                           ),
                         ),
                       ),
+                      // Shimmer
                       Positioned.fill(
                         child: IgnorePointer(
                           child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 150),
-                            opacity: isActive ? 0.9 : 1,
+                            opacity: isActive ? 0.6 : 1.0,
                             child: AnimatedBuilder(
                               animation: _shimmer,
                               builder: (_, __) {
@@ -1853,6 +1805,7 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
                                   painter: _ShimmerPainter(
                                     progress: _shimmer.value,
                                     bw: bw,
+                                    shimmerColor: btnFg,
                                   ),
                                 );
                               },
@@ -1860,48 +1813,64 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
                           ),
                         ),
                       ),
+                      // Label
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
                         child: Center(
                           child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 120),
                             opacity: _isSubmitting ? 0.7 : 1,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
+                            child: Row(
                               children: [
-                                Text(
-                                  _isSubmitting
-                                      ? 'Starting voice clone…'
-                                      : isActive
-                                      ? 'Keep holding to clone'
-                                      : 'Hold to Clone My Voice',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: titleSize,
-                                    fontWeight: FontWeight.w900,
-                                    color: isActive ? _HP.green : Colors.white,
+                                _ChevronCluster(
+                                  towardCenter: true,
+                                  color: isActive ? _HP.green : btnFg,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _isSubmitting
+                                            ? 'Starting voice clone…'
+                                            : isActive
+                                            ? 'Keep holding to clone'
+                                            : 'Hold to Clone My Voice',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontSize: titleSize,
+                                          fontWeight: FontWeight.w900,
+                                          color: isActive ? _HP.green : btnFg,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        _isSubmitting
+                                            ? 'Opening voice clone flow'
+                                            : isActive
+                                            ? 'Release to cancel'
+                                            : 'AI writes in your voice',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontSize: subSize,
+                                          fontWeight: FontWeight.w500,
+                                          color: btnSubFg,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  _isSubmitting
-                                      ? 'Opening voice clone flow'
-                                      : isActive
-                                      ? 'Release to cancel'
-                                      : 'AI writes in your voice',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: subSize,
-                                    fontWeight: FontWeight.w500,
-                                    color: const Color(0xFF9E9E9E),
-                                  ),
+                                const SizedBox(width: 10),
+                                _ChevronCluster(
+                                  towardCenter: false,
+                                  color: isActive ? _HP.green : btnFg,
                                 ),
                               ],
                             ),
@@ -1920,19 +1889,54 @@ class _HapticFlowCloneButtonState extends State<_HapticFlowCloneButton>
   }
 }
 
+class _ChevronCluster extends StatelessWidget {
+  const _ChevronCluster({required this.towardCenter, required this.color});
+
+  final bool towardCenter;
+  final Color color;
+
+  static const List<double> _opacities = [0.24, 0.46, 0.72, 1.0];
+
+  @override
+  Widget build(BuildContext context) {
+    final icon =
+        towardCenter ? Icons.chevron_left_rounded : Icons.chevron_right_rounded;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(_opacities.length, (index) {
+        final opacity =
+            towardCenter
+                ? _opacities[index]
+                : _opacities[_opacities.length - 1 - index];
+        return Padding(
+          padding: EdgeInsets.only(
+            right: index == _opacities.length - 1 ? 0 : 1,
+          ),
+          child: Icon(icon, size: 16, color: color.withValues(alpha: opacity)),
+        );
+      }),
+    );
+  }
+}
+
 class _ShimmerPainter extends CustomPainter {
-  const _ShimmerPainter({required this.progress, required this.bw});
+  const _ShimmerPainter({
+    required this.progress,
+    required this.bw,
+    required this.shimmerColor,
+  });
   final double progress;
   final double bw;
+  final Color shimmerColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final gradColors = [
-      Colors.white.withValues(alpha: 0),
-      Colors.white.withValues(alpha: 0.03),
-      Colors.white.withValues(alpha: 0.11),
-      Colors.white.withValues(alpha: 0.03),
-      Colors.white.withValues(alpha: 0),
+      shimmerColor.withValues(alpha: 0),
+      shimmerColor.withValues(alpha: 0.03),
+      shimmerColor.withValues(alpha: 0.10),
+      shimmerColor.withValues(alpha: 0.03),
+      shimmerColor.withValues(alpha: 0),
     ];
     final centerX = size.width / 2;
     final travel = (size.width / 2) + bw;
@@ -1951,39 +1955,24 @@ class _ShimmerPainter extends CustomPainter {
       colors: gradColors,
     ).createShader(Rect.fromLTWH(rightX, 0, bw, size.height));
 
-    final paintLeft =
+    canvas
+      ..drawRect(
+        Rect.fromLTWH(leftX, 0, bw, size.height),
         Paint()
           ..shader = leftGrad
-          ..blendMode = BlendMode.screen;
-    final paintRight =
+          ..blendMode = BlendMode.screen,
+      )
+      ..drawRect(
+        Rect.fromLTWH(rightX, 0, bw, size.height),
         Paint()
           ..shader = rightGrad
-          ..blendMode = BlendMode.screen;
-
-    canvas.drawRect(Rect.fromLTWH(leftX, 0, bw, size.height), paintLeft);
-    canvas.drawRect(Rect.fromLTWH(rightX, 0, bw, size.height), paintRight);
-
-    final centerGlow = LinearGradient(
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-      colors: [
-        Colors.white.withValues(alpha: 0.0),
-        Colors.white.withValues(alpha: 0.025),
-        Colors.white.withValues(alpha: 0.05),
-        Colors.white.withValues(alpha: 0.025),
-        Colors.white.withValues(alpha: 0),
-      ],
-    ).createShader(Rect.fromLTWH(centerX - 36, 0, 72, size.height));
-    canvas.drawRect(
-      Rect.fromLTWH(centerX - 36, 0, 72, size.height),
-      Paint()
-        ..shader = centerGlow
-        ..blendMode = BlendMode.screen,
-    );
+          ..blendMode = BlendMode.screen,
+      );
   }
 
   @override
-  bool shouldRepaint(_ShimmerPainter o) => o.progress != progress || o.bw != bw;
+  bool shouldRepaint(_ShimmerPainter o) =>
+      o.progress != progress || o.bw != bw || o.shimmerColor != shimmerColor;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2016,7 +2005,7 @@ class _PrimaryButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 18, color: filled ? Colors.white : _HP.black),
+            Icon(icon, size: 18, color: filled ? _HP.onBlack : _HP.black),
             const SizedBox(width: 8),
             Text(
               label,
@@ -2024,7 +2013,7 @@ class _PrimaryButton extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 15,
                 fontWeight: FontWeight.w800,
-                color: filled ? Colors.white : _HP.black,
+                color: filled ? _HP.onBlack : _HP.black,
               ),
             ),
           ],
@@ -2063,7 +2052,7 @@ class _RedButton extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 15,
                 fontWeight: FontWeight.w800,
@@ -2105,7 +2094,7 @@ class _OutlineButton extends StatelessWidget {
             const SizedBox(width: 7),
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 14,
                 fontWeight: FontWeight.w700,

@@ -18,6 +18,8 @@ import '../services/lyric_audio_registry.dart';
 import '../services/lyric_audio_playback.dart';
 import '../services/youtube_audio_stream_service.dart';
 import '../services/audio_session_service.dart';
+import '../theme/app_theme_controller.dart';
+import '../theme/lyric_screen_theme.dart';
 import 'host_party_screen.dart';
 import 'join_via_link_screen.dart';
 import 'saved_voice_songs_screen.dart';
@@ -591,26 +593,21 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       if (_isQuotaSavingMode) {
         final lightweightResults = await _lightweightService
             .searchSingleLineLyrics(query, cacheOnly: true);
-        options =
-            lightweightResults
-                .map(
-                  (result) => PlaybackOption(
-                    result: PlaybackResult(
-                      videoId: result.videoId,
-                      startTimeSeconds: result.startTimeSeconds,
-                      trackName: result.trackName,
-                      artistName: result.artistName,
-                      matchedLineTimeSeconds: result.matchedLineTimeSeconds,
-                      matchedLyricLine: result.matchedLyricLine,
-                    ),
-                    confidence: result.confidence,
-                    source: result.source,
-                    evidenceText: result.matchedLyricLine,
-                  ),
-                )
-                .toList();
+        options = _playbackOptionsFromLightweight(lightweightResults);
       } else {
-        options = await _playbackService.resolveCandidates(query, limit: 5);
+        final lightweightFuture = _lightweightService.searchSingleLineLyrics(
+          query,
+        );
+        final fullOptionsFuture = _playbackService.resolveCandidates(
+          query,
+          limit: 5,
+        );
+        final lightweightResults = await lightweightFuture;
+        final fullOptions = await fullOptionsFuture;
+        final lightweightOptions = _playbackOptionsFromLightweight(
+          lightweightResults,
+        );
+        options = _mergePlaybackOptions(lightweightOptions, fullOptions);
       }
       if (!mounted) return;
       if (options.isEmpty) {
@@ -653,6 +650,60 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
       // regardless of whether playback succeeded or failed.
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  List<PlaybackOption> _playbackOptionsFromLightweight(
+    List<LightweightSearchResult> results,
+  ) {
+    return results
+        .map(
+          (result) => PlaybackOption(
+            result: PlaybackResult(
+              videoId: result.videoId,
+              startTimeSeconds: result.startTimeSeconds,
+              trackName: result.trackName,
+              artistName: result.artistName,
+              matchedLineTimeSeconds: result.matchedLineTimeSeconds,
+              matchedLyricLine: result.matchedLyricLine,
+            ),
+            confidence: result.confidence,
+            source: result.source,
+            evidenceText: result.matchedLyricLine,
+          ),
+        )
+        .toList();
+  }
+
+  List<PlaybackOption> _mergePlaybackOptions(
+    List<PlaybackOption> primary,
+    List<PlaybackOption> secondary,
+  ) {
+    final byVideoId = <String, PlaybackOption>{};
+
+    PlaybackOption prefer(PlaybackOption a, PlaybackOption b) {
+      final aHasLine =
+          (a.result.matchedLyricLine ?? '').trim().isNotEmpty ||
+          (a.result.matchedLineTimeSeconds ?? 0) > 0;
+      final bHasLine =
+          (b.result.matchedLyricLine ?? '').trim().isNotEmpty ||
+          (b.result.matchedLineTimeSeconds ?? 0) > 0;
+      if (aHasLine != bHasLine) {
+        return aHasLine ? a : b;
+      }
+      return a.confidence >= b.confidence ? a : b;
+    }
+
+    for (final option in [...primary, ...secondary]) {
+      final videoId = option.result.videoId;
+      if (videoId.isEmpty) continue;
+      final existing = byVideoId[videoId];
+      byVideoId[videoId] = existing == null ? option : prefer(existing, option);
+    }
+
+    final merged =
+        byVideoId.values.toList()
+          ..sort((a, b) => b.confidence.compareTo(a.confidence));
+    return merged.take(5).toList();
   }
 
   void _openHostParty() {
@@ -831,6 +882,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     final mq = MediaQuery.of(context);
     final screenWidth = mq.size.width;
     final screenHeight = mq.size.height;
@@ -839,7 +891,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
     final vGap = screenHeight < 700 ? 8.0 : 12.0;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: const Color(0xFFF5F3EF),
+      backgroundColor: palette.background,
       bottomNavigationBar: SafeArea(
         minimum: EdgeInsets.fromLTRB(hPad, 8, hPad, 12),
         child: SizedBox(
@@ -941,6 +993,7 @@ class _SongPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return DraggableScrollableSheet(
       initialChildSize: 0.72,
       minChildSize: 0.45,
@@ -948,9 +1001,9 @@ class _SongPickerSheet extends StatelessWidget {
       expand: false,
       builder: (ctx, scrollController) {
         return Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFFF5F3EF),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          decoration: BoxDecoration(
+            color: palette.background,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           ),
           child: Column(
             children: [
@@ -961,7 +1014,10 @@ class _SongPickerSheet extends StatelessWidget {
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFCBC8C2),
+                      color:
+                          palette.isDark
+                              ? palette.outline
+                              : const Color(0xFFCBC8C2),
                       borderRadius: BorderRadius.circular(99),
                     ),
                   ),
@@ -976,32 +1032,32 @@ class _SongPickerSheet extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'Pick a match',
                             style: TextStyle(
                               fontFamily: 'Inter',
                               fontSize: 22,
                               fontWeight: FontWeight.w900,
-                              color: Colors.black,
+                              color: palette.ink,
                               height: 1.1,
                             ),
                           ),
                           const SizedBox(height: 5),
                           RichText(
                             text: TextSpan(
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontFamily: 'Inter',
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
-                                color: Color(0xFF888888),
+                                color: palette.mutedText,
                                 height: 1.45,
                               ),
                               children: [
                                 const TextSpan(text: 'Exact lyric hits play '),
                                 TextSpan(
                                   text: '${preRollSeconds}s before',
-                                  style: const TextStyle(
-                                    color: Colors.black,
+                                  style: TextStyle(
+                                    color: palette.ink,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
@@ -1019,16 +1075,16 @@ class _SongPickerSheet extends StatelessWidget {
                         vertical: 7,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black,
+                        color: palette.ink,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         '${options.length} result${options.length == 1 ? '' : 's'}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
-                          color: Colors.white,
+                          color: palette.surface,
                         ),
                       ),
                     ),
@@ -1064,8 +1120,8 @@ class _SongPickerSheet extends StatelessWidget {
                     child: OutlinedButton(
                       onPressed: () => Navigator.of(context).pop(),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF444444),
-                        side: const BorderSide(color: Color(0xFFD8D4CC)),
+                        foregroundColor: palette.ink,
+                        side: BorderSide(color: palette.outline),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(18),
                         ),
@@ -1119,6 +1175,7 @@ class _SongPickerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     final result = option.result;
     final hasExactLine =
         (result.matchedLyricLine ?? '').trim().isNotEmpty &&
@@ -1133,6 +1190,24 @@ class _SongPickerCard extends StatelessWidget {
     final confidencePct = (option.confidence * 100).clamp(0, 100).round();
     final accentColor = _confidenceColor(option.confidence);
     final isTopResult = rank == 0;
+    final cardColor =
+        palette.isDark
+            ? (isTopResult ? palette.mutedSurface : palette.surface)
+            : (isTopResult ? const Color(0xFFF0EDE7) : const Color(0xFFFAF8F5));
+    final borderColor =
+        palette.isDark
+            ? palette.outline
+            : (isTopResult ? const Color(0xFFD8D4CC) : const Color(0xFFEAE6E0));
+    final secondaryText =
+        palette.isDark ? palette.mutedText : const Color(0xFF777777);
+    final quoteSurface =
+        palette.isDark ? const Color(0xFF1F242A) : const Color(0xFFEAE6DF);
+    final quoteText =
+        palette.isDark
+            ? palette.ink.withValues(alpha: 0.8)
+            : const Color(0xFF444444);
+    final chevronColor =
+        palette.isDark ? palette.mutedText : const Color(0xFFAAAAAA);
 
     return Material(
       color: Colors.transparent,
@@ -1143,14 +1218,10 @@ class _SongPickerCard extends StatelessWidget {
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color:
-                isTopResult ? const Color(0xFFF0EDE7) : const Color(0xFFFAF8F5),
+            color: cardColor,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color:
-                  isTopResult
-                      ? const Color(0xFFD8D4CC)
-                      : const Color(0xFFEAE6E0),
+              color: borderColor,
               width: isTopResult ? 1.5 : 1,
             ),
           ),
@@ -1199,11 +1270,11 @@ class _SongPickerCard extends StatelessWidget {
                             result.trackName,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: 'Inter',
                               fontSize: 15,
                               fontWeight: FontWeight.w800,
-                              color: Colors.black,
+                              color: palette.ink,
                               height: 1.2,
                             ),
                           ),
@@ -1238,11 +1309,11 @@ class _SongPickerCard extends StatelessWidget {
                       result.artistName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF777777),
+                        color: secondaryText,
                       ),
                     ),
                     if (snippet != null) ...[
@@ -1254,18 +1325,18 @@ class _SongPickerCard extends StatelessWidget {
                           vertical: 9,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEAE6DF),
+                          color: quoteSurface,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Padding(
+                            Padding(
                               padding: EdgeInsets.only(top: 1),
                               child: Icon(
                                 Icons.format_quote_rounded,
                                 size: 13,
-                                color: Color(0xFF888888),
+                                color: secondaryText,
                               ),
                             ),
                             const SizedBox(width: 5),
@@ -1274,12 +1345,12 @@ class _SongPickerCard extends StatelessWidget {
                                 snippet!,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontFamily: 'Inter',
                                   fontSize: 12,
                                   fontStyle: FontStyle.italic,
                                   fontWeight: FontWeight.w600,
-                                  color: Color(0xFF444444),
+                                  color: quoteText,
                                   height: 1.4,
                                 ),
                               ),
@@ -1314,11 +1385,11 @@ class _SongPickerCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 2),
                 child: Icon(
                   Icons.chevron_right_rounded,
-                  color: Color(0xFFAAAAAA),
+                  color: chevronColor,
                   size: 22,
                 ),
               ),
@@ -1355,10 +1426,10 @@ class _ZoomedCircularThumbnail extends StatelessWidget {
         fit: BoxFit.cover,
         filterQuality: FilterQuality.high,
         // This effectively zooms in on the image by scaling it up slightly
-        // and centering it within the oval. 
+        // and centering it within the oval.
         // A scale of 1.3 provides a nice zoomed-in effect that fills the circle
         // without losing important visual details for most YouTube thumbnails.
-        scale: 0.85, 
+        scale: 0.85,
         errorBuilder: (_, __, ___) {
           return Container(
             width: size,
@@ -1387,7 +1458,6 @@ class _ZoomedCircularThumbnail extends StatelessWidget {
   }
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // _MetaChip
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1405,10 +1475,16 @@ class _MetaChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: highlighted ? const Color(0xFF111111) : const Color(0xFFE4E0D9),
+        color:
+            highlighted
+                ? palette.ink
+                : (palette.isDark
+                    ? palette.mutedSurface
+                    : const Color(0xFFE4E0D9)),
         borderRadius: BorderRadius.circular(99),
       ),
       child: Row(
@@ -1417,7 +1493,12 @@ class _MetaChip extends StatelessWidget {
           Icon(
             icon,
             size: 11,
-            color: highlighted ? Colors.white : const Color(0xFF666666),
+            color:
+                highlighted
+                    ? palette.surface
+                    : (palette.isDark
+                        ? palette.mutedText
+                        : const Color(0xFF666666)),
           ),
           const SizedBox(width: 4),
           Text(
@@ -1426,7 +1507,12 @@ class _MetaChip extends StatelessWidget {
               fontFamily: 'Inter',
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: highlighted ? Colors.white : const Color(0xFF555555),
+              color:
+                  highlighted
+                      ? palette.surface
+                      : (palette.isDark
+                          ? palette.ink
+                          : const Color(0xFF555555)),
             ),
           ),
         ],
@@ -1705,8 +1791,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                       height: labelSize,
                                                       child: ClipOval(
                                                         clipBehavior:
-                                                            Clip
-                                                                .antiAliasWithSaveLayer,
+                                                            Clip.antiAliasWithSaveLayer,
                                                         child:
                                                             widget.nowPlaying !=
                                                                     null
@@ -1730,22 +1815,26 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                                           __,
                                                                           ___,
                                                                         ) => Container(
-                                                                          color:
-                                                                              const Color(
-                                                                                0xFFD8D4CC,
-                                                                              ),
-                                                                          child:
-                                                                              Center(
-                                                                                child: Text(
-                                                                                  'LYRICQSK',
-                                                                                  style: TextStyle(
-                                                                                    fontFamily: 'Inter',
-                                                                                    fontSize: labelSize * 0.12,
-                                                                                    fontWeight: FontWeight.w700,
-                                                                                    color: const Color(0xFF6B6B6B),
-                                                                                  ),
+                                                                          color: const Color(
+                                                                            0xFFD8D4CC,
+                                                                          ),
+                                                                          child: Center(
+                                                                            child: Text(
+                                                                              'LYRICQSK',
+                                                                              style: TextStyle(
+                                                                                fontFamily:
+                                                                                    'Inter',
+                                                                                fontSize:
+                                                                                    labelSize *
+                                                                                    0.12,
+                                                                                fontWeight:
+                                                                                    FontWeight.w700,
+                                                                                color: const Color(
+                                                                                  0xFF6B6B6B,
                                                                                 ),
                                                                               ),
+                                                                            ),
+                                                                          ),
                                                                         ),
                                                                   ),
                                                                 )
@@ -1774,10 +1863,9 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                                                             labelFontSize,
                                                                         fontWeight:
                                                                             FontWeight.w700,
-                                                                        color:
-                                                                            const Color(
-                                                                              0xFF6B6B6B,
-                                                                            ),
+                                                                        color: const Color(
+                                                                          0xFF6B6B6B,
+                                                                        ),
                                                                         letterSpacing:
                                                                             0.6,
                                                                       ),
@@ -2195,6 +2283,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
   OverlayEntry _buildOverlayEntry() {
     return OverlayEntry(
       builder: (context) {
+        final palette = LyricScreenPalette.of(context);
         final lines = _filteredLines;
         if (lines.isEmpty) return const SizedBox.shrink();
         return Positioned(
@@ -2209,12 +2298,12 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
               color: Colors.transparent,
               child: Container(
                 decoration: BoxDecoration(
-                  color: const Color(0xFFEDE8E0),
+                  color: palette.mutedSurface,
                   borderRadius: const BorderRadius.only(
                     bottomLeft: Radius.circular(22),
                     bottomRight: Radius.circular(22),
                   ),
-                  border: Border.all(color: const Color(0xFFD8D4CC), width: 1),
+                  border: Border.all(color: palette.outline, width: 1),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x18000000),
@@ -2255,7 +2344,10 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                                 vertical: 10,
                               ),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFD8D4CC),
+                                color:
+                                    palette.isDark
+                                        ? palette.surface
+                                        : const Color(0xFFD8D4CC),
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Column(
@@ -2266,11 +2358,11 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                                     line,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontFamily: 'Inter',
                                       fontSize: 12,
                                       fontWeight: FontWeight.w700,
-                                      color: Colors.black,
+                                      color: palette.ink,
                                       height: 1.3,
                                     ),
                                   ),
@@ -2301,6 +2393,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     final titleFontSize = (widget.availableWidth * 0.058).clamp(16.0, 24.0);
     final subtitleFontSize = (widget.availableWidth * 0.034).clamp(11.0, 14.0);
     final showSubtitle = widget.screenHeight > 680;
@@ -2321,7 +2414,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                     fontFamily: 'Inter',
                     fontSize: titleFontSize,
                     fontWeight: FontWeight.w900,
-                    color: Colors.black,
+                    color: palette.ink,
                     height: 1.05,
                   ),
                 ),
@@ -2343,7 +2436,7 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                 fontFamily: 'Inter',
                 fontSize: subtitleFontSize,
                 fontWeight: FontWeight.w600,
-                color: const Color(0xFF666666),
+                color: palette.mutedText,
               ),
             ),
           ],
@@ -2352,31 +2445,30 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
             link: _layerLink,
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFFF8F4EE),
+                color: palette.surface,
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(
-                  color:
-                      widget.isListening
-                          ? const Color(0xFF11F08A)
-                          : const Color(0xFFD8D4CC),
+                  color: widget.isListening ? palette.accent : palette.outline,
                   width: 1.5,
                 ),
               ),
               child: Row(
                 children: [
                   const SizedBox(width: 14),
-                  const Icon(
+                  Icon(
                     Icons.search_rounded,
-                    color: Color(0xFF555555),
+                    color: palette.mutedText,
                     size: 20,
                   ),
                   Expanded(
                     child: Theme(
                       data: Theme.of(context).copyWith(
-                        textSelectionTheme: const TextSelectionThemeData(
-                          cursorColor: Colors.black,
-                          selectionColor: Color(0x4411F08A),
-                          selectionHandleColor: Colors.black,
+                        textSelectionTheme: TextSelectionThemeData(
+                          cursorColor: palette.ink,
+                          selectionColor: palette.accent.withValues(
+                            alpha: 0.26,
+                          ),
+                          selectionHandleColor: palette.ink,
                         ),
                       ),
                       child: TextField(
@@ -2384,27 +2476,27 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                         focusNode: _focusNode,
                         maxLines: 1,
                         enabled: !widget.isLoading,
-                        cursorColor: Colors.black,
-                        style: const TextStyle(
+                        cursorColor: palette.ink,
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: palette.ink,
                         ),
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'e.g. Hello from the other side',
                           hintStyle: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
-                            color: Color(0xFFAAAAAA),
+                            color: palette.mutedText.withValues(alpha: 0.85),
                           ),
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
                           focusedBorder: InputBorder.none,
                           filled: true,
                           fillColor: Colors.transparent,
-                          contentPadding: EdgeInsets.symmetric(
+                          contentPadding: const EdgeInsets.symmetric(
                             horizontal: 10,
                             vertical: 16,
                           ),
@@ -2431,8 +2523,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                       decoration: BoxDecoration(
                         color:
                             widget.isListening
-                                ? const Color(0xFF11F08A)
-                                : const Color(0xFFD8D4CC),
+                                ? palette.accent
+                                : palette.mutedSurface,
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -2441,8 +2533,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                             : Icons.mic_none_rounded,
                         color:
                             widget.isListening
-                                ? Colors.black
-                                : const Color(0xFF555555),
+                                ? const Color(0xFF0D1511)
+                                : palette.mutedText,
                         size: 18,
                       ),
                     ),
@@ -2460,10 +2552,16 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                   child: FilledButton.icon(
                     onPressed: widget.isLoading ? null : widget.onSearch,
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.black,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFF333333),
-                      disabledForegroundColor: const Color(0xFF888888),
+                      backgroundColor: palette.ink,
+                      foregroundColor: palette.surface,
+                      disabledBackgroundColor:
+                          palette.isDark
+                              ? const Color(0xFF2A2F35)
+                              : const Color(0xFF333333),
+                      disabledForegroundColor:
+                          palette.isDark
+                              ? palette.mutedText
+                              : const Color(0xFF888888),
                       elevation: 0,
                       shadowColor: Colors.transparent,
                       shape: RoundedRectangleBorder(
@@ -2472,13 +2570,13 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                     ),
                     icon:
                         widget.isLoading
-                            ? const SizedBox(
+                            ? SizedBox(
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
                                 valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
+                                  palette.surface,
                                 ),
                               ),
                             )
@@ -2505,8 +2603,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                   decoration: BoxDecoration(
                     color:
                         widget.isQuotaSavingMode
-                            ? Colors.black
-                            : const Color(0xFFE8E3DC),
+                            ? palette.ink
+                            : palette.mutedSurface,
                     borderRadius: BorderRadius.circular(btnHeight / 2),
                   ),
                   child: Row(
@@ -2517,8 +2615,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                         size: 17,
                         color:
                             widget.isQuotaSavingMode
-                                ? const Color(0xFF11F08A)
-                                : const Color(0xFF666666),
+                                ? palette.accent
+                                : palette.mutedText,
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -2529,8 +2627,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                           fontWeight: FontWeight.w800,
                           color:
                               widget.isQuotaSavingMode
-                                  ? Colors.white
-                                  : const Color(0xFF444444),
+                                  ? palette.surface
+                                  : palette.ink.withValues(alpha: 0.82),
                         ),
                       ),
                     ],
@@ -3213,8 +3311,10 @@ class _HeaderQuickMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return PopupMenuButton<_HeaderMenuAction>(
       tooltip: 'Open menu',
+      constraints: const BoxConstraints(minWidth: 0, maxWidth: 224),
       onSelected: (value) {
         switch (value) {
           case _HeaderMenuAction.hostParty:
@@ -3228,30 +3328,39 @@ class _HeaderQuickMenu extends StatelessWidget {
             break;
         }
       },
-      color: const Color(0xFFF4EFE7),
+      color: palette.surface,
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       itemBuilder:
-          (context) => const [
-            PopupMenuItem<_HeaderMenuAction>(
+          (context) => [
+            const PopupMenuItem<_HeaderMenuAction>(
               value: _HeaderMenuAction.hostParty,
               child: _HeaderMenuItem(
                 icon: Icons.celebration_rounded,
                 label: 'Host a party',
               ),
             ),
-            PopupMenuItem<_HeaderMenuAction>(
+            const PopupMenuItem<_HeaderMenuAction>(
               value: _HeaderMenuAction.joinParty,
               child: _HeaderMenuItem(
                 icon: Icons.group_add_rounded,
                 label: 'Join a party',
               ),
             ),
-            PopupMenuItem<_HeaderMenuAction>(
+            const PopupMenuItem<_HeaderMenuAction>(
               value: _HeaderMenuAction.downloads,
               child: _HeaderMenuItem(
                 icon: Icons.download_rounded,
                 label: 'Downloads',
+              ),
+            ),
+            const PopupMenuDivider(height: 8),
+            PopupMenuItem<_HeaderMenuAction>(
+              enabled: false,
+              padding: EdgeInsets.zero,
+              height: 50,
+              child: _ThemeToggleMenuItem(
+                isDarkMode: AppThemeController.instance.isDarkMode,
               ),
             ),
           ],
@@ -3259,16 +3368,16 @@ class _HeaderQuickMenu extends StatelessWidget {
         height: compact ? 28 : 20,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFF8F4EE),
+          color: palette.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFD8D3CC), width: 1),
+          border: Border.all(color: palette.outline, width: 1),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               Icons.keyboard_arrow_down_rounded,
-              color: const Color(0xFF333333),
+              color: palette.ink.withValues(alpha: 0.82),
               size: compact ? 20 : 22,
             ),
           ],
@@ -3287,20 +3396,117 @@ class _HeaderMenuItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
     return Row(
       children: [
-        Icon(icon, size: 18, color: const Color(0xFF222222)),
+        Icon(icon, size: 18, color: palette.ink.withValues(alpha: 0.92)),
         const SizedBox(width: 10),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontFamily: 'Inter',
             fontSize: 14,
             fontWeight: FontWeight.w700,
-            color: Color(0xFF222222),
+            color: palette.ink.withValues(alpha: 0.92),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ThemeToggleMenuItem extends StatelessWidget {
+  const _ThemeToggleMenuItem({required this.isDarkMode});
+
+  final bool isDarkMode;
+
+  Future<void> _toggleTheme(BuildContext context, bool value) async {
+    await AppThemeController.instance.setDarkMode(value);
+    if (context.mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+    return InkWell(
+      onTap: () => _toggleTheme(context, !isDarkMode),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        child: Row(
+          children: [
+            Icon(
+              isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+              size: 17,
+              color: palette.ink.withValues(alpha: 0.92),
+            ),
+            const SizedBox(width: 9),
+            Text(
+              'Dark mode',
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: palette.ink.withValues(alpha: 0.92),
+              ),
+            ),
+            const Spacer(),
+            _ThemeMiniSwitch(
+              value: isDarkMode,
+              onChanged: (value) => _toggleTheme(context, value),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ThemeMiniSwitch extends StatelessWidget {
+  const _ThemeMiniSwitch({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = LyricScreenPalette.of(context);
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        width: 38,
+        height: 22,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color:
+              value
+                  ? palette.accent.withValues(alpha: 0.28)
+                  : palette.outline.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Align(
+          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: 18,
+            height: 18,
+            decoration: BoxDecoration(
+              color: value ? palette.accent : palette.surface,
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: value ? 0.18 : 0.10),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,8 +1,6 @@
 // Lightweight search service optimized for single-line lyric searches
 // Reduces YouTube API quota usage by implementing smart caching and fallback strategies
 
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'lyrics_service.dart';
 import 'youtube_mobile_service.dart';
 import 'youtube_quota_monitor.dart';
@@ -36,13 +34,11 @@ class LightweightSearchService {
   final LyricsService _lyrics = LyricsService();
   final YoutubeMobileService _youtube = YoutubeMobileService();
   final YouTubeQuotaMonitor _quotaMonitor = YouTubeQuotaMonitor();
-  final http.Client _client = http.Client();
   final GrokSearchRefinement _grokRefinement = GrokSearchRefinement();
 
   // Aggressive caching to reduce API calls
   final Map<String, List<LightweightSearchResult>> _searchCache = {};
   final Map<String, String> _videoIdCache = {};
-  final Map<String, String> _titleCache = {};
 
   // When quota is exceeded, only use cached results
   bool get _isQuotaExceeded {
@@ -126,7 +122,6 @@ class LightweightSearchService {
     }
 
     _videoIdCache[normalizedTrackKey] = videoId;
-    _titleCache[normalizedTrackKey] = videoId;
   }
 
   List<LightweightSearchResult> _mergeResults(
@@ -147,7 +142,11 @@ class LightweightSearchService {
   }
 
   String _normalize(String text) =>
-      text.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+      text
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
 
   /// Optimized search that uses minimal API calls
   Future<List<LightweightSearchResult>> searchSingleLineLyrics(
@@ -270,7 +269,7 @@ class LightweightSearchService {
 
     for (final q in variants) {
       try {
-        final list = await _youtube.searchSongs(q);
+        final list = await _youtube.searchSongs(q, maxResults: 2);
         for (final item in list) {
           final id = item['id'] as String? ?? '';
           if (id.isEmpty || !seen.add(id)) continue;
@@ -353,7 +352,7 @@ class LightweightSearchService {
     String artistName,
   ) async {
     final cacheKey =
-        '${activeYoutubeApiKeyFingerprint()}::${trackName.toLowerCase()}::${artistName.toLowerCase()}';
+        '${activeYoutubeApiKeyFingerprint()}::${_normalize(trackName)}::${_normalize(artistName)}';
 
     // Check cache first
     final cached = _videoIdCache[cacheKey];
@@ -366,71 +365,12 @@ class LightweightSearchService {
       return null;
     }
 
-    // Make minimal YouTube API call
-    final videoId = await _searchSingleVideo(trackName, artistName);
+    final videoId = await _youtube.resolveSongVideoId(trackName, artistName);
 
     // Cache the result (even if null to avoid repeated calls)
     _videoIdCache[cacheKey] = videoId ?? '';
 
     return videoId;
-  }
-
-  /// Minimal YouTube search - just one API call
-  Future<String?> _searchSingleVideo(
-    String trackName,
-    String artistName,
-  ) async {
-    final searchQuery = '$trackName $artistName official audio';
-    final cacheKey =
-        '${activeYoutubeApiKeyFingerprint()}::${searchQuery.toLowerCase()}';
-
-    final cached = _titleCache[cacheKey];
-    if (cached != null) {
-      return cached.isEmpty ? null : cached;
-    }
-
-    try {
-      final youtubeApiKey = getActiveYoutubeApiKey();
-      final uri = Uri.parse(
-        'https://www.googleapis.com/youtube/v3/search'
-        '?part=snippet&maxResults=1&q=${Uri.encodeQueryComponent(searchQuery)}'
-        '&type=video&key=$youtubeApiKey',
-      );
-
-      final response = await _client
-          .get(uri)
-          .timeout(const Duration(seconds: 6));
-
-      if (response.statusCode == 403) {
-        // Quota exceeded - log and return null
-        _quotaMonitor.logSearchCall(searchQuery);
-        _titleCache[cacheKey] = '';
-        return null;
-      }
-
-      if (response.statusCode != 200) {
-        _titleCache[cacheKey] = '';
-        return null;
-      }
-
-      final data = json.decode(response.body) as Map<String, dynamic>?;
-      final items = data?['items'] as List<dynamic>?;
-
-      if (items == null || items.isEmpty) {
-        _titleCache[cacheKey] = '';
-        return null;
-      }
-
-      final videoId = items.first['id']['videoId'] as String?;
-      _quotaMonitor.logSearchCall(searchQuery);
-
-      // Cache the result
-      _titleCache[cacheKey] = videoId ?? '';
-      return videoId;
-    } catch (_) {
-      _titleCache[cacheKey] = '';
-      return null;
-    }
   }
 
   /// Fallback search using only cached data when quota is exceeded
@@ -524,7 +464,6 @@ class LightweightSearchService {
   void clearCache() {
     _searchCache.clear();
     _videoIdCache.clear();
-    _titleCache.clear();
     _grokRefinement.clearCache();
   }
 
@@ -533,7 +472,6 @@ class LightweightSearchService {
     return {
       'searchCache': _searchCache.length,
       'videoIdCache': _videoIdCache.length,
-      'titleCache': _titleCache.length,
       ..._grokRefinement.getCacheStats(),
     };
   }

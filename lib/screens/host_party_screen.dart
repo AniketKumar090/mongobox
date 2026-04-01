@@ -146,7 +146,7 @@ class _HostPartyScreenState extends State<HostPartyScreen>
     if (q.isEmpty) return;
     setState(() => _searching = true);
     try {
-      final results = await _youtube.searchSongs(q);
+      final results = await _youtube.searchSongs(q, maxResults: 6);
       if (mounted) {
         setState(() {
           _searchResults = results;

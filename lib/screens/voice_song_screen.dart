@@ -13,28 +13,31 @@ import '../services/saved_voice_song_service.dart';
 import '../services/audio_session_service.dart';
 import '../services/background_music_service.dart';
 import '../services/voice_clone_service.dart';
+import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
 import 'saved_voice_songs_screen.dart';
 
 // ─── PALETTE — mirrors VoiceSampleScreen's _HP ────────────────────────────────
 class _P {
-  static const background = Color(0xFFF5F3EF);
-  static const card = Color(0xFFF0EDE7);
-  static const border = Color(0xFFD8D4CC);
-  static const black = Color(0xFF111111);
-  static const blackSoft = Color(0xFF1E1E1E);
-  static const grey1 = Color(0xFF444444);
-  static const grey2 = Color(0xFF666666);
-  static const grey3 = Color(0xFF888888);
-  static const grey4 = Color(0xFFAAAAAA);
-  static const chip = Color(0xFFE8E3DC);
-  static const chipDark = Color(0xFFD8D4CC);
-  static const green = Color(0xFF11F08A);
-  static const greenSoft = Color(0xFFEAFAF2);
-  static const greenBorder = Color(0xFFB3EDD3);
-  static const red = Color(0xFFFF3B30);
-  static const redSoft = Color(0xFFFFF0EE);
-  static const redBorder = Color(0xFFFFCCCC);
+  static SongCreationPalette get _p => SongCreationPalette.current;
+
+  static Color get background => _p.background;
+  static Color get card => _p.card;
+  static Color get border => _p.border;
+  static Color get black => _p.black;
+  static Color get blackSoft => _p.blackSoft;
+  static Color get grey1 => _p.grey1;
+  static Color get grey2 => _p.grey2;
+  static Color get grey3 => _p.grey3;
+  static Color get chip => _p.chip;
+  static Color get chipDark => _p.chipDark;
+  static Color get green => _p.green;
+  static Color get greenSoft => _p.greenSoft;
+  static Color get greenBorder => _p.greenBorder;
+  static Color get red => _p.red;
+  static Color get redSoft => _p.redSoft;
+  static Color get redBorder => _p.redBorder;
+  static Color get onBlack => _p.onBlack;
 }
 
 enum _CloneStep { cloning, ready, error }
@@ -251,12 +254,13 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
           await _musicPlayer.seek(Duration.zero);
         } catch (_) {
           canPlayMusic = false;
-          if (mounted)
+          if (mounted) {
             setState(() {
               _musicSourceUrl = null;
               _musicSourceLabel = null;
               _musicSourceHeaders = null;
             });
+          }
         }
       }
       await _voiceStateSub?.cancel();
@@ -418,11 +422,11 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       barrierDismissible: true,
       builder:
           (dialogContext) => AlertDialog(
-            backgroundColor: const Color(0xFFF8F4EE),
+            backgroundColor: _P.card,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(24),
             ),
-            title: const Text(
+            title: Text(
               'Cloning is still running',
               style: TextStyle(
                 fontFamily: 'Inter',
@@ -431,7 +435,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                 color: _P.black,
               ),
             ),
-            content: const Text(
+            content: Text(
               'Do you want us to save the song when cloning completes, or stop the process and go back now?',
               style: TextStyle(
                 fontFamily: 'Inter',
@@ -444,7 +448,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text(
+                child: Text(
                   'Cancel',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -458,7 +462,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     () => Navigator.of(
                       dialogContext,
                     ).pop(_PendingCloneExitAction.stopProcess),
-                child: const Text(
+                child: Text(
                   'Stop process',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -474,7 +478,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     ).pop(_PendingCloneExitAction.saveWhenReady),
                 style: FilledButton.styleFrom(
                   backgroundColor: _P.black,
-                  foregroundColor: Colors.white,
+                  foregroundColor: _P.onBlack,
                 ),
                 child: const Text(
                   'Save when ready',
@@ -500,11 +504,11 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
               Expanded(
                 child: Text(
                   msg,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
-                    color: Colors.white,
+                    color: _P.onBlack,
                   ),
                 ),
               ),
@@ -523,7 +527,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                     ),
                     child: Text(
                       action.label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Inter',
                         fontWeight: FontWeight.w800,
                         fontSize: 12,
@@ -749,7 +753,7 @@ class _TopBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _P.border),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.arrow_back_rounded,
                   size: 20,
                   color: _P.black,
@@ -761,7 +765,7 @@ class _TopBar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Preview your song',
                     style: TextStyle(
                       fontFamily: 'Inter',
@@ -772,7 +776,7 @@ class _TopBar extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 3),
-                  const Text(
+                  Text(
                     'Your cloned vocal is being prepared.',
                     style: TextStyle(
                       fontFamily: 'Inter',
@@ -804,18 +808,14 @@ class _TopBar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
-                      Icons.music_note_rounded,
-                      size: 12,
-                      color: _P.grey2,
-                    ),
+                    Icon(Icons.music_note_rounded, size: 12, color: _P.grey2),
                     const SizedBox(width: 5),
                     Flexible(
                       child: Text(
                         displayTitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -840,7 +840,7 @@ class _TopBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: _P.border),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
@@ -901,11 +901,7 @@ class _SongInfoPill extends StatelessWidget {
               color: _P.black,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(
-              Icons.graphic_eq_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+            child: Icon(Icons.graphic_eq_rounded, color: _P.onBlack, size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -917,7 +913,7 @@ class _SongInfoPill extends StatelessWidget {
                   '"$songTitle"',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
@@ -959,7 +955,7 @@ class _Chip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'Inter',
           fontSize: 11,
           fontWeight: FontWeight.w600,
@@ -1073,7 +1069,7 @@ class _StatusRow extends StatelessWidget {
             height: 36,
             child:
                 isLoading
-                    ? const Padding(
+                    ? Padding(
                       padding: EdgeInsets.all(6),
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
@@ -1085,7 +1081,7 @@ class _StatusRow extends StatelessWidget {
                         color: iconBg,
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Icon(icon, size: 18, color: Colors.white),
+                      child: Icon(icon, size: 18, color: _P.onBlack),
                     ),
           ),
           const SizedBox(width: 12),
@@ -1109,7 +1105,7 @@ class _StatusRow extends StatelessWidget {
                 ),
                 Text(
                   subtitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
@@ -1142,7 +1138,7 @@ class _ErrorCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(Icons.error_outline_rounded, size: 15, color: _P.red),
               SizedBox(width: 7),
@@ -1160,7 +1156,7 @@ class _ErrorCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             message,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -1176,13 +1172,13 @@ class _ErrorCard extends StatelessWidget {
                 color: _P.black,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
+              child: Text(
                 'Try Again',
                 style: TextStyle(
                   fontFamily: 'Inter',
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
-                  color: Colors.white,
+                  color: _P.onBlack,
                 ),
               ),
             ),
@@ -1229,7 +1225,7 @@ class _PlayButton extends StatelessWidget {
             Icon(
               isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
               size: 26,
-              color: isPlaying ? _P.green : Colors.white,
+              color: isPlaying ? _P.green : _P.onBlack,
             ),
             const SizedBox(width: 9),
             Text(
@@ -1242,7 +1238,7 @@ class _PlayButton extends StatelessWidget {
                 fontFamily: 'Inter',
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
-                color: isPlaying ? _P.green : Colors.white,
+                color: isPlaying ? _P.green : _P.onBlack,
               ),
             ),
           ],
@@ -1333,7 +1329,7 @@ class _MixCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(Icons.tune_rounded, size: 14, color: _P.grey3),
               SizedBox(width: 6),
@@ -1415,7 +1411,7 @@ class _SliderRow extends StatelessWidget {
           width: 52,
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -1448,7 +1444,7 @@ class _SliderRow extends StatelessWidget {
           child: Text(
             valueLabel,
             textAlign: TextAlign.right,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Inter',
               fontSize: 11,
               fontWeight: FontWeight.w700,
@@ -1495,7 +1491,7 @@ class _OutlineButton extends StatelessWidget {
             const SizedBox(width: 7),
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -1553,7 +1549,7 @@ class _LyricsCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: _P.border),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.lyrics_outlined,
                       size: 16,
                       color: _P.black,
@@ -1564,7 +1560,7 @@ class _LyricsCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Lyrics',
                           style: TextStyle(
                             fontFamily: 'Inter',
@@ -1575,7 +1571,7 @@ class _LyricsCard extends StatelessWidget {
                         ),
                         Text(
                           language,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontFamily: 'Inter',
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
@@ -1588,7 +1584,7 @@ class _LyricsCard extends StatelessWidget {
                   AnimatedRotation(
                     turns: showFull ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: const Icon(
+                    child: Icon(
                       Icons.keyboard_arrow_down_rounded,
                       color: _P.grey2,
                       size: 20,
@@ -1607,7 +1603,7 @@ class _LyricsCard extends StatelessWidget {
                 bottom: Radius.circular(18),
               ),
               child: Container(
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   border: Border(top: BorderSide(color: _P.border)),
                 ),
                 child: Scrollbar(
@@ -1620,8 +1616,9 @@ class _LyricsCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children:
                           lines.map((line) {
-                            if (line.trim().isEmpty)
+                            if (line.trim().isEmpty) {
                               return const SizedBox(height: 4);
+                            }
                             final isHeader = RegExp(
                               r'^\[',
                               caseSensitive: false,

@@ -12,7 +12,7 @@ import 'services/env_config.dart';
 import 'services/audio_session_service.dart';
 import 'services/lyric_audio_registry.dart';
 import 'services/lyric_background_audio_handler.dart';
-import 'theme/pixel_theme.dart';
+import 'theme/app_theme_controller.dart';
 
 bool get _isIosOrAndroid =>
     !kIsWeb &&
@@ -45,6 +45,72 @@ const PageTransitionsTheme _noTransitionsTheme = PageTransitionsTheme(
 
 ThemeData _withNoTransitions(ThemeData theme) =>
     theme.copyWith(pageTransitionsTheme: _noTransitionsTheme);
+
+ThemeData _buildAppTheme(Brightness brightness) {
+  final isDark = brightness == Brightness.dark;
+  final scheme = ColorScheme(
+    brightness: brightness,
+    primary: isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
+    onPrimary: isDark ? const Color(0xFF111111) : const Color(0xFFF8F4EE),
+    primaryContainer:
+        isDark ? const Color(0xFF20242A) : const Color(0xFFF8F4EE),
+    onPrimaryContainer:
+        isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
+    secondary: const Color(0xFF11F08A),
+    onSecondary: const Color(0xFF0D1511),
+    secondaryContainer:
+        isDark ? const Color(0xFF123427) : const Color(0xFFDDFBEF),
+    onSecondaryContainer:
+        isDark ? const Color(0xFFBDF8DE) : const Color(0xFF111111),
+    tertiary: isDark ? const Color(0xFF262C33) : const Color(0xFFEDE8E0),
+    onTertiary: isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
+    tertiaryContainer:
+        isDark ? const Color(0xFF171B20) : const Color(0xFFF8F4EE),
+    onTertiaryContainer:
+        isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
+    error: isDark ? const Color(0xFFFF8A7A) : const Color(0xFFB05A49),
+    onError: isDark ? const Color(0xFF2A1411) : const Color(0xFFF8F4EE),
+    errorContainer: isDark ? const Color(0xFF3D2420) : const Color(0xFFF2DFD8),
+    onErrorContainer:
+        isDark ? const Color(0xFFFFD6D0) : const Color(0xFF111111),
+    surface: isDark ? const Color(0xFF111315) : const Color(0xFFF5F3EF),
+    onSurface: isDark ? const Color(0xFFF4EFE7) : const Color(0xFF111111),
+    surfaceContainerHighest:
+        isDark ? const Color(0xFF262C33) : const Color(0xFFEDE8E0),
+    onSurfaceVariant:
+        isDark ? const Color(0xFFA4ADB7) : const Color(0xFF666666),
+    outline: isDark ? const Color(0xFF3C454F) : const Color(0xFFD7D0C6),
+    inverseSurface: isDark ? const Color(0xFFF4EFE7) : const Color(0xFF1A1A1A),
+    onInverseSurface:
+        isDark ? const Color(0xFF111111) : const Color(0xFFF8F4EE),
+  );
+
+  final base = ThemeData(
+    useMaterial3: true,
+    brightness: brightness,
+    fontFamily: 'Inter',
+    colorScheme: scheme,
+  );
+
+  return _withNoTransitions(
+    base.copyWith(
+      scaffoldBackgroundColor: scheme.surface,
+      textTheme: base.textTheme.apply(
+        bodyColor: scheme.onSurface,
+        displayColor: scheme.onSurface,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: scheme.inverseSurface,
+        contentTextStyle: TextStyle(
+          fontFamily: 'Inter',
+          color: scheme.onInverseSurface,
+          fontWeight: FontWeight.w600,
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    ),
+  );
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -91,6 +157,7 @@ void main() async {
 
   // Ensure background-friendly playback audio session on mobile platforms.
   await AppAudioSessionService.ensureConfigured();
+  await AppThemeController.instance.load();
 
   runApp(const MyApp());
 }
@@ -100,36 +167,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'LyricQsk',
-      // ── Mobile: pixel art dark theme ──────────────────────────────────────
-      theme:
-          kIsWeb
-              ? _withNoTransitions(
-                ThemeData(
-                  useMaterial3: true,
-                  primarySwatch: Colors.blue,
-                  fontFamily: 'Inter',
-                  textTheme: const TextTheme(
-                    displayLarge: TextStyle(color: Colors.black87),
-                    bodyLarge: TextStyle(color: Colors.black87),
-                  ),
-                ),
-              )
-              : _withNoTransitions(PixelTheme.theme),
-      darkTheme:
-          kIsWeb
-              ? _withNoTransitions(
-                ThemeData(
-                  useMaterial3: true,
-                  brightness: Brightness.dark,
-                  fontFamily: 'Inter',
-                ),
-              )
-              : _withNoTransitions(PixelTheme.theme),
-      themeMode: kIsWeb ? ThemeMode.light : ThemeMode.dark,
-      home: kIsWeb ? const jukebox.HomeScreen() : const MobileLyricApp(),
+    return AnimatedBuilder(
+      animation: AppThemeController.instance,
+      builder: (context, _) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'LyricQsk',
+          theme: _buildAppTheme(Brightness.light),
+          darkTheme: _buildAppTheme(Brightness.dark),
+          themeMode: AppThemeController.instance.themeMode,
+          home: kIsWeb ? const jukebox.HomeScreen() : const MobileLyricApp(),
+        );
+      },
     );
   }
 }

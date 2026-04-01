@@ -166,10 +166,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
           margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(
-              color: Color(0xFFD8D4CC),
-              width: 1.2,
-            ),
+            side: const BorderSide(color: Color(0xFFD8D4CC), width: 1.2),
           ),
         ),
       );
@@ -184,7 +181,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
     if (q.isEmpty) return;
     setState(() => _searching = true);
     try {
-      final list = await _youtube.searchSongs(q);
+      final list = await _youtube.searchSongs(q, maxResults: 6);
       if (!mounted) return;
       setState(() {
         _results = list;
@@ -279,9 +276,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                       const SizedBox(height: 10),
 
                       // ── Results: Expanded fills all remaining space ──────
-                      Expanded(
-                        child: _buildResultsCard(),
-                      ),
+                      Expanded(child: _buildResultsCard()),
                     ],
                   ),
                 ),
@@ -375,8 +370,8 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               ),
             ),
           ],
+
           // ────────────────────────────────────────────────────────
-       
         ],
       ),
     );
@@ -442,10 +437,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               color: isLive ? _partyAccentBg : const Color(0x33FF6B6B),
               borderRadius: BorderRadius.circular(999),
               border: Border.all(
-                color:
-                    isLive
-                        ? _partyAccentBorder
-                        : const Color(0x66FF6B6B),
+                color: isLive ? _partyAccentBorder : const Color(0x66FF6B6B),
               ),
             ),
             child: Row(
@@ -466,8 +458,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                     fontFamily: 'Inter',
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color:
-                        isLive ? _partyAccent : const Color(0xFFFF9A9A),
+                    color: isLive ? _partyAccent : const Color(0xFFFF9A9A),
                   ),
                 ),
               ],
@@ -644,16 +635,17 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(21),
-        child: _searching
-            ? const Center(
-                child: CircularProgressIndicator(
-                  color: _partyAccent,
-                  strokeWidth: 2.5,
-                ),
-              )
-            : !_isPartyLive
+        child:
+            _searching
+                ? const Center(
+                  child: CircularProgressIndicator(
+                    color: _partyAccent,
+                    strokeWidth: 2.5,
+                  ),
+                )
+                : !_isPartyLive
                 ? _buildPartyEndedFill()
-            : _results.isEmpty
+                : _results.isEmpty
                 ? _buildEmptyFill()
                 : _buildResultsFill(),
       ),
@@ -905,24 +897,25 @@ class _SearchButton extends StatelessWidget {
           color: disabled ? const Color(0xFFCCCAC4) : _partyDark,
           borderRadius: BorderRadius.circular(10),
         ),
-        child: loading
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
+        child:
+            loading
+                ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                : Text(
+                  'Search',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: disabled ? _partyMuted : Colors.white,
+                  ),
                 ),
-              )
-            : Text(
-                'Search',
-                style: TextStyle(
-                  fontFamily: 'Inter',
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: disabled ? _partyMuted : Colors.white,
-                ),
-              ),
       ),
     );
   }
@@ -949,9 +942,7 @@ class _JoinResultTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: added ? const Color(0xFFEBF9F3) : _partyCardInner,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: added ? _partyAccentBorder : _partyBorder,
-        ),
+        border: Border.all(color: added ? _partyAccentBorder : _partyBorder),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

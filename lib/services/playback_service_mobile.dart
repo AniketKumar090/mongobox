@@ -47,38 +47,6 @@ class PlaybackServiceMobile {
   // Avoid repeated network calls for the same lyric line in one app session.
   final Map<String, List<PlaybackOption>> _resolvedCache = {};
 
-  static const _badVersionKeywords = [
-    'remix',
-    'reel',
-    'shorts',
-    '#shorts',
-    'sped up',
-    'slowed',
-    'nightcore',
-    'lofi',
-    'mashup',
-    'edit',
-    'dj',
-    '8d',
-    'bass boosted',
-    'fanmade',
-    'cover',
-    'karaoke',
-    'instrumental',
-    'live',
-    'short video',
-    'status',
-  ];
-
-  static const _goodVersionKeywords = [
-    'official audio',
-    'official video',
-    'audio',
-    'lyric video',
-    'topic',
-    'vevo',
-  ];
-
   Future<PlaybackResult?> resolveAndSearch(String lyricLine) async {
     final options = await resolveCandidates(lyricLine, limit: 1);
     if (options.isEmpty) return null;
@@ -333,50 +301,7 @@ class PlaybackServiceMobile {
   Future<String?> _searchBestVideoIdForSong(
     String trackName,
     String artistName,
-  ) async {
-    final base = '$trackName $artistName'.trim();
-    if (base.isEmpty) return null;
-
-    final queries = <String>[
-      '$trackName $artistName',
-      '$trackName $artistName official',
-      '$trackName $artistName audio',
-      '$trackName $artistName lyrics',
-    ];
-
-    final seen = <String>{};
-    final pool = <Map<String, dynamic>>[];
-
-    for (final q in queries) {
-      final list = await _youtube.searchSongs(q);
-      for (final item in list) {
-        final id = item['id'] as String? ?? '';
-        if (id.isEmpty || !seen.add(id)) continue;
-        pool.add(item);
-      }
-      if (pool.length >= 40) break;
-    }
-
-    if (pool.isEmpty) return null;
-
-    pool.sort((a, b) {
-      final right = _scoreOriginalSongCandidate(
-        song: b,
-        trackName: trackName,
-        artistName: artistName,
-      );
-      final left = _scoreOriginalSongCandidate(
-        song: a,
-        trackName: trackName,
-        artistName: artistName,
-      );
-      return right.compareTo(left);
-    });
-
-    final top = pool.first;
-    final topId = top['id'] as String? ?? '';
-    return topId.isEmpty ? null : topId;
-  }
+  ) => _youtube.resolveSongVideoId(trackName, artistName);
 
   Future<List<PlaybackOption>> _resolveFromGlobalYoutubeOptions(
     String lyricLine, {
@@ -386,14 +311,14 @@ class PlaybackServiceMobile {
     final seenIds = <String>{};
     final merged = <Map<String, dynamic>>[];
 
-    for (final q in queries) {
-      final list = await _youtube.searchSongs(q);
+    for (final q in queries.take(6)) {
+      final list = await _youtube.searchSongs(q, maxResults: 2);
       for (final item in list) {
         final id = item['id'] as String? ?? '';
         if (id.isEmpty || !seenIds.add(id)) continue;
         merged.add(item);
       }
-      if (merged.length >= 25) break;
+      if (merged.length >= 10) break;
     }
 
     if (merged.isEmpty) return const [];
@@ -463,44 +388,6 @@ class PlaybackServiceMobile {
 
   double _scoreYoutubeCandidate(Map<String, dynamic> song, String lyricLine) =>
       LyricsService.scoreYoutubeCandidateForLyricLine(song, lyricLine);
-
-  double _scoreOriginalSongCandidate({
-    required Map<String, dynamic> song,
-    required String trackName,
-    required String artistName,
-  }) {
-    final title = (song['title'] as String? ?? '').toLowerCase();
-    final channel = (song['artist'] as String? ?? '').toLowerCase();
-    final description = (song['description'] as String? ?? '').toLowerCase();
-    final durationSeconds = (song['durationSeconds'] as num?)?.toInt() ?? 0;
-
-    final expected = '$trackName $artistName'.toLowerCase().trim();
-    final text = '$title $channel';
-    var score = LyricsService.scoreTextMatch(text, expected);
-
-    if (_containsAny(title, _badVersionKeywords) ||
-        _containsAny(description, _badVersionKeywords)) {
-      score -= 0.45;
-    }
-
-    if (_containsAny(title, _goodVersionKeywords) ||
-        _containsAny(channel, _goodVersionKeywords)) {
-      score += 0.18;
-    }
-
-    if (channel.contains('- topic') || channel.contains('official')) {
-      score += 0.14;
-    }
-
-    if (title.contains(trackName.toLowerCase())) score += 0.12;
-    if (title.contains(artistName.toLowerCase()) ||
-        channel.contains(artistName.toLowerCase())) {
-      score += 0.12;
-    }
-    if (durationSeconds >= 150) score += 0.1;
-
-    return score;
-  }
 
   Future<LyricPlayResult?> _resolveLyricMetadataForYoutubeCandidate({
     required String pickedTitle,
@@ -707,13 +594,6 @@ class PlaybackServiceMobile {
         lowered.contains('&') ||
         lowered.contains('x ') ||
         lowered.contains('official');
-  }
-
-  bool _containsAny(String value, List<String> terms) {
-    for (final t in terms) {
-      if (value.contains(t)) return true;
-    }
-    return false;
   }
 
   int _applyLinePreroll(int startTimeSeconds) {
