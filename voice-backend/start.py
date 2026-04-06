@@ -16,6 +16,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ def banner() -> None:
         f"""
 {BOLD}╔══════════════════════════════════════════╗
 ║   MongoBox  •  Voice Cloning Backend     ║
-║   Coqui XTTS-v2  •  Free / Local         ║
+║   NeuTTS  •  Free / Local                ║
 ╚══════════════════════════════════════════╝{RESET}
 """
     )
@@ -65,6 +66,25 @@ def check_ffmpeg(auto_continue: bool = False) -> None:
         sys.exit(1)
 
 
+def check_espeak(auto_continue: bool = False) -> None:
+    if shutil.which("espeak-ng") or shutil.which("espeak"):
+        print(f"{GREEN}✓  eSpeak found{RESET}")
+        return
+
+    print(
+        f"{YELLOW}⚠  eSpeak not found — required by NeuTTS phonemization and fallback synthesis.{RESET}"
+    )
+    print("   macOS:   brew install espeak")
+    print("   Ubuntu:  sudo apt install espeak-ng")
+    print("   Windows: install eSpeak NG and add it to PATH")
+    if auto_continue:
+        print(f"{YELLOW}ℹ  Continuing because auto-boot mode is enabled.{RESET}")
+        return
+    answer = input("\n   Continue anyway? [y/N] ").strip().lower()
+    if answer != "y":
+        sys.exit(1)
+
+
 def install_requirements() -> None:
     req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
     if not os.path.exists(req_file):
@@ -79,6 +99,30 @@ def install_requirements() -> None:
     print(f"{GREEN}✓  All packages installed{RESET}")
 
 
+def check_background_mix_stack(auto_continue: bool = False) -> None:
+    missing: list[str] = []
+    for module_name, label in (("demucs", "demucs"), ("torchcodec", "torchcodec")):
+        try:
+            importlib.import_module(module_name)
+        except Exception:
+            missing.append(label)
+
+    if not missing:
+        print(f"{GREEN}✓  Background music extraction stack ready{RESET}")
+        return
+
+    print(
+        f"{YELLOW}⚠  Background music mixing may be unavailable — missing: {', '.join(missing)}{RESET}"
+    )
+    print("   Run: python -m pip install -r requirements.txt")
+    if auto_continue:
+        print(f"{YELLOW}ℹ  Continuing because auto-boot mode is enabled.{RESET}")
+        return
+    answer = input("\n   Continue anyway? [y/N] ").strip().lower()
+    if answer != "y":
+        sys.exit(1)
+
+
 def check_cuda() -> None:
     try:
         import torch
@@ -88,7 +132,7 @@ def check_cuda() -> None:
             print(f"{GREEN}✓  CUDA GPU detected: {name} — inference will be fast{RESET}")
         else:
             print(f"{YELLOW}ℹ  No CUDA GPU — running on CPU.{RESET}")
-            print("   CPU inference can take ~30–120 s depending on lyrics length.")
+            print("   CPU inference can take a while during first-run warmup.")
     except ImportError:
         pass
 
@@ -103,7 +147,7 @@ def start_server(host: str, port: int, reload: bool) -> None:
     print(f"  Health: {GREEN}http://{host}:{port}/health{RESET}")
     print(f"\n  Flutter VOICE_BACKEND_URL = http://<your-machine-ip>:{port}")
     print("  (For iOS Simulator use 127.0.0.1; for Android emulator use 10.0.2.2)")
-    print("\n  XTTS-v2 model (~2 GB) downloads on first run.\n")
+    print("\n  NeuTTS and optional local transcription models download on first run.\n")
 
     cmd = [
         sys.executable,
@@ -148,10 +192,12 @@ def main() -> None:
     print("─" * 44)
     check_python()
     check_ffmpeg(auto_continue=auto_boot)
+    check_espeak(auto_continue=auto_boot)
 
     if not args.skip_install:
         install_requirements()
 
+    check_background_mix_stack(auto_continue=auto_boot)
     check_cuda()
     start_server(args.host, args.port, args.reload)
 

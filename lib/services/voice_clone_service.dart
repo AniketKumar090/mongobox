@@ -12,11 +12,15 @@ class VoiceCloneResult {
     required this.file,
     required this.mixIncluded,
     this.mixLabel,
+    this.backgroundMusicUrl,
+    this.backgroundMusicLabel,
   });
 
   final File file;
   final bool mixIncluded;
   final String? mixLabel;
+  final String? backgroundMusicUrl;
+  final String? backgroundMusicLabel;
 }
 
 // ── Language metadata sent to the Python backend ──────────────────────────────
@@ -329,11 +333,21 @@ class VoiceCloneService {
     final mixStatus =
         (response.headers['x-mongobox-mix-status'] ?? '').trim().toLowerCase();
     final mixLabel = response.headers['x-mongobox-mix-label']?.trim();
+    final musicUrlHeader = response.headers['x-mongobox-music-url']?.trim();
+    final musicLabel = response.headers['x-mongobox-music-label']?.trim();
+    final resolvedMusicUrl =
+        musicUrlHeader == null || musicUrlHeader.isEmpty
+            ? null
+            : Uri.parse(backendUrl).resolve(musicUrlHeader).toString();
 
     return VoiceCloneResult(
       file: file,
       mixIncluded: mixStatus == 'mixed',
       mixLabel: mixLabel?.isNotEmpty == true ? mixLabel : null,
+      backgroundMusicUrl:
+          resolvedMusicUrl?.isNotEmpty == true ? resolvedMusicUrl : null,
+      backgroundMusicLabel:
+          musicLabel?.isNotEmpty == true ? musicLabel : null,
     );
   }
 

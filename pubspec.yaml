@@ -34,7 +34,7 @@ dependencies:
   flutter_dotenv: ^5.1.0
   google_fonts: ^8.0.2
   flutter_twemoji: ^1.1.0
-  volume_controller: ^3.4.2
+  volume_controller: ^3.4.4
 
 dev_dependencies:
   flutter_test:

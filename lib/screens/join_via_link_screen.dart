@@ -496,7 +496,7 @@ class _ScannerCornerOverlay extends StatelessWidget {
 class _CornerBracketPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    const color = AppColors.accent;
+    final color = AppColors.accent;
     final paint =
         Paint()
           ..color = color

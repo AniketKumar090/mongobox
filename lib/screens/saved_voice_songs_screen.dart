@@ -93,7 +93,11 @@ class _SavedVoiceSongsScreenState extends State<SavedVoiceSongsScreen>
     final bgUrl = song.backgroundMusicUrl.trim();
     if (bgUrl.isNotEmpty) {
       try {
-        await _musicPlayer.setUrl(bgUrl);
+        if (bgUrl.startsWith('http://') || bgUrl.startsWith('https://')) {
+          await _musicPlayer.setUrl(bgUrl);
+        } else {
+          await _musicPlayer.setFilePath(bgUrl);
+        }
         await _musicPlayer.setLoopMode(LoopMode.all);
         await _musicPlayer.seek(Duration.zero);
       } catch (_) {

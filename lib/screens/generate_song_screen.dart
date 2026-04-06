@@ -1338,7 +1338,7 @@ class _MoodRow extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: _HP.green.withValues(alpha: 0.4)),
                 ),
-                child: const Text(
+                child: Text(
                   'AI picked',
                   style: TextStyle(
                     fontFamily: 'Inter',

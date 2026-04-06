@@ -13,14 +13,16 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import uuid
 from pathlib import Path
 
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from neutts import BACKBONE_LANGUAGE_MAP, NeuTTS
 from starlette.background import BackgroundTask
-from TTS.api import TTS
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -35,21 +37,34 @@ app = FastAPI(title="MongoBox Voice Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Flutter on device/simulator
+    allow_origins=["*"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
-# ── XTTS model (loaded once at startup) ────────────────────────────────────────
-_tts: TTS | None = None
+# ── NeuTTS models (loaded on demand) ───────────────────────────────────────────
+_DEFAULT_NEUTTS_BACKBONE = os.environ.get(
+    "MONGOBOX_NEUTTS_DEFAULT_BACKBONE", "neuphonic/neutts-air"
+)
+_DEFAULT_NEUTTS_CODEC = os.environ.get(
+    "MONGOBOX_NEUTTS_CODEC_REPO", "neuphonic/neucodec"
+)
+_DEFAULT_REFERENCE_ASR_MODEL = os.environ.get(
+    "MONGOBOX_NEUTTS_REFERENCE_ASR_MODEL", "openai/whisper-tiny"
+)
+
+_PRIMARY_BACKBONE_REPO = _DEFAULT_NEUTTS_BACKBONE
+_tts_models: dict[str, NeuTTS] = {}
 _device: str = "cpu"
-_fallback_tts_models: dict[str, TTS] = {}
+_reference_asr_pipeline = None
 _cancelled_clone_request_ids: set[str] = set()
 _active_clone_request_ids: set[str] = set()
 _clone_request_lock = threading.Lock()
+_artifact_root = Path(tempfile.gettempdir()) / "mongobox_voice_artifacts"
+_artifact_ttl_seconds = 60 * 60 * 12
 
 # ── Indic transliteration (loaded lazily) ─────────────────────────────────────
-_indic_trans = None  # indic_transliteration.sanscript module, if available
+_indic_trans = None
 
 
 @dataclass(frozen=True)
@@ -67,18 +82,24 @@ class CloneRequestParams:
     reference_track_title: str
     reference_artist_name: str
     reference_lyric_snippet: str
+    reference_transcript: str
     reference_video_id: str
+
+
+@dataclass(frozen=True)
+class LyricChunk:
+    text: str
+    pause_ms: int = 0
 
 
 @app.on_event("startup")
 def load_model() -> None:
-    global _tts, _device
+    global _device
     _device = "cuda" if torch.cuda.is_available() else "cpu"
-    log.info("Loading XTTS-v2 on %s …", _device)
-    _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(_device)
-    log.info("XTTS-v2 ready ✓")
+    log.info("Loading NeuTTS backbone %s on %s …", _PRIMARY_BACKBONE_REPO, _device)
+    _get_or_load_neutts_model(_PRIMARY_BACKBONE_REPO)
+    log.info("NeuTTS ready ✓")
 
-    # Try loading indic_transliteration for Hinglish → Devanagari conversion
     global _indic_trans
     try:
         from indic_transliteration import sanscript
@@ -91,15 +112,9 @@ def load_model() -> None:
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HINGLISH → DEVANAGARI  (the core accent fix)
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Hinglish → Devanagari ──────────────────────────────────────────────────────
 
-# Manual phonetic map for common Hinglish words/syllables that the library
-# sometimes mis-handles. Applied as a pre-pass before library transliteration.
-# Format: (regex_pattern, devanagari_replacement)
 _HINGLISH_WORD_MAP: list[tuple[re.Pattern[str], str]] = [
-    # Pronouns / common words
     (re.compile(r"\bmain\b", re.IGNORECASE), "मैं"),
     (re.compile(r"\bmeri\b", re.IGNORECASE), "मेरी"),
     (re.compile(r"\bmera\b", re.IGNORECASE), "मेरा"),
@@ -125,7 +140,6 @@ _HINGLISH_WORD_MAP: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bki\b", re.IGNORECASE), "की"),
     (re.compile(r"\bka\b", re.IGNORECASE), "का"),
     (re.compile(r"\bjo\b", re.IGNORECASE), "जो"),
-    # Emotions / lyrics staples
     (re.compile(r"\bdil\b", re.IGNORECASE), "दिल"),
     (re.compile(r"\bjaan\b", re.IGNORECASE), "जान"),
     (re.compile(r"\byaar\b", re.IGNORECASE), "यार"),
@@ -199,31 +213,16 @@ _HINGLISH_WORD_MAP: list[tuple[re.Pattern[str], str]] = [
 
 
 def _transliterate_hinglish_line(line: str) -> str:
-    """
-    Convert a Hinglish (Roman-script Hindi) line to Devanagari.
-
-    Strategy (in order):
-    1. Apply the hand-curated word map for high-frequency lyrics words.
-    2. Try indic_transliteration library for any remaining Roman tokens.
-    3. Leave unrecognised tokens (English words, punctuation) as-is.
-
-    The result is a mixed Devanagari + English string that XTTS's Hindi
-    tokenizer handles far better than pure Romanized text.
-    """
-    # Step 1: hand-curated replacements (full-word, case-insensitive)
     result = line
     for pattern, devanagari in _HINGLISH_WORD_MAP:
         result = pattern.sub(devanagari, result)
 
-    # Step 2: library-based transliteration of remaining Roman tokens
     if _indic_trans is not None:
         tokens = result.split()
         converted: list[str] = []
         for token in tokens:
-            # Only process tokens that are still purely ASCII alphabetic
-            # (i.e. not already Devanagari and not punctuation/numbers)
             clean = re.sub(r"[^a-zA-Z]", "", token)
-            if clean and token == clean:  # pure ASCII alpha token → transliterate
+            if clean and token == clean:
                 try:
                     deva = _indic_trans.transliterate(
                         token,
@@ -241,10 +240,6 @@ def _transliterate_hinglish_line(line: str) -> str:
 
 
 def _prepare_hindi_text(text: str) -> str:
-    """
-    Full pipeline: for each non-header line in Hinglish lyrics, convert to
-    Devanagari so XTTS synthesises with a genuine Hindi accent.
-    """
     lines = text.splitlines()
     out: list[str] = []
     for line in lines:
@@ -252,15 +247,13 @@ def _prepare_hindi_text(text: str) -> str:
         if not stripped:
             out.append(line)
             continue
-        # Leave section headers like [Verse 1] untouched
         if re.match(r"^\[", stripped):
             out.append(line)
             continue
-        # Check if line is already mostly Devanagari — don't double-convert
         devanagari_count = sum(1 for ch in stripped if 0x0900 <= ord(ch) <= 0x097F)
         total_alpha = sum(1 for ch in stripped if ch.isalpha())
         if total_alpha > 0 and (devanagari_count / total_alpha) > 0.5:
-            out.append(line)  # already Hindi script
+            out.append(line)
         else:
             out.append(_transliterate_hinglish_line(line))
     converted = "\n".join(out)
@@ -271,7 +264,6 @@ def _prepare_hindi_text(text: str) -> str:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _strip_section_tags(text: str) -> str:
-    """Remove [Verse 1] / [Chorus] headers — keep only singable lines."""
     lines = [
         line
         for line in text.splitlines()
@@ -299,6 +291,7 @@ def _parse_clone_request(
     reference_track_title: str,
     reference_artist_name: str,
     reference_lyric_snippet: str,
+    reference_transcript: str,
     reference_video_id: str,
 ) -> CloneRequestParams:
     return CloneRequestParams(
@@ -315,7 +308,8 @@ def _parse_clone_request(
         reference_track_title=reference_track_title,
         reference_artist_name=reference_artist_name,
         reference_lyric_snippet=reference_lyric_snippet,
-        reference_video_id=reference_video_id,
+        reference_transcript=reference_transcript,
+        reference_video_id=(reference_video_id or "").strip(),
     )
 
 
@@ -357,43 +351,190 @@ def _raise_if_clone_cancelled(request_id: str) -> None:
         raise RuntimeError("Clone request was cancelled.")
 
 
-def _chunk_lyrics(text: str, max_chars: int = 220) -> list[str]:
-    """
-    XTTS works best on short sentences (≤ ~250 chars).
-    Split on newlines first, then hard-wrap long lines.
-    """
-    chunks: list[str] = []
+def _cleanup_stale_artifacts() -> None:
+    try:
+        _artifact_root.mkdir(parents=True, exist_ok=True)
+        current_time = time.time()
+        for child in _artifact_root.iterdir():
+            try:
+                if not child.is_dir():
+                    continue
+                age = current_time - child.stat().st_mtime
+                if age > _artifact_ttl_seconds:
+                    shutil.rmtree(child, ignore_errors=True)
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def _artifact_key(request_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", (request_id or "").strip())
+    cleaned = cleaned.strip("_")[:80]
+    return cleaned or uuid.uuid4().hex
+
+
+def _persist_request_artifact(src_path: str, request_id: str, file_name: str) -> str | None:
+    try:
+        _cleanup_stale_artifacts()
+        key = _artifact_key(request_id)
+        artifact_dir = _artifact_root / key
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        dest = artifact_dir / file_name
+        shutil.copy2(src_path, dest)
+        return f"/artifacts/{key}/{file_name}"
+    except OSError as exc:
+        log.warning("Could not persist artifact %s: %s", file_name, exc)
+        return None
+
+
+def _header_safe(value: str) -> str:
+    """Return an HTTP-header-safe string (latin-1 encodable, ASCII punctuation)."""
+    normalized = (
+        (value or "")
+        .replace("—", "-")
+        .replace("–", "-")
+        .replace("…", "...")
+    )
+    return normalized.encode("latin-1", "ignore").decode("latin-1")
+
+
+@app.get("/artifacts/{artifact_key}/{file_name:path}", include_in_schema=False)
+def get_artifact(artifact_key: str, file_name: str) -> FileResponse:
+    safe_key = _artifact_key(artifact_key)
+    artifact_dir = (_artifact_root / safe_key).resolve()
+    target = (artifact_dir / file_name).resolve()
+
+    if artifact_dir != target.parent:
+        raise HTTPException(404, "Artifact not found.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "Artifact not found.")
+
+    media_type = "audio/wav" if target.suffix.lower() == ".wav" else "application/octet-stream"
+    return FileResponse(str(target), media_type=media_type)
+
+
+def _preferred_pause_ms(text: str, *, is_line_end: bool) -> int:
+    trimmed = text.strip()
+    if not trimmed:
+        return 0
+    if re.search(r"[.!?…]['\"\)]?$", trimmed):
+        return 240
+    if re.search(r"[,;:]['\"\)]?$", trimmed):
+        return 150
+    if is_line_end:
+        return 180
+    return 100
+
+
+def _split_long_phrase(phrase: str, max_chars: int) -> list[str]:
+    remainder = re.sub(r"\s+", " ", phrase).strip()
+    pieces: list[str] = []
+
+    while len(remainder) > max_chars:
+        window = remainder[:max_chars]
+        cut = max(
+            window.rfind(" - "),
+            window.rfind(", "),
+            window.rfind("; "),
+            window.rfind(": "),
+            window.rfind(" and "),
+            window.rfind(" but "),
+            window.rfind(" then "),
+            window.rfind(" so "),
+            window.rfind(" ", max_chars // 2),
+        )
+        if cut <= 0:
+            cut = window.rfind(" ")
+        if cut <= 0:
+            cut = max_chars
+
+        piece = remainder[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remainder = remainder[cut:].strip()
+
+    if remainder:
+        pieces.append(remainder)
+    return pieces
+
+
+def _split_line_into_phrases(line: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", line).strip()
+    if not normalized:
+        return []
+
+    raw_parts = re.split(r"(?<=[,;:!?…])\s+|(?<=\.)\s+", normalized)
+    phrases: list[str] = []
+    for part in raw_parts:
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        phrases.extend(_split_long_phrase(cleaned, max_chars=140))
+    return phrases
+
+
+def _flush_chunk(
+    chunks: list[LyricChunk],
+    buffer: str,
+    *,
+    is_line_end: bool,
+) -> str:
+    cleaned = buffer.strip()
+    if cleaned:
+        chunks.append(LyricChunk(cleaned, _preferred_pause_ms(cleaned, is_line_end=is_line_end)))
+    return ""
+
+
+def _chunk_lyrics(text: str, max_chars: int = 170) -> list[LyricChunk]:
+    chunks: list[LyricChunk] = []
+    buffer = ""
+
     for line in text.splitlines():
         line = line.strip()
         if not line:
+            buffer = _flush_chunk(chunks, buffer, is_line_end=True)
             continue
-        while len(line) > max_chars:
-            cut = line.rfind(" ", 0, max_chars)
-            if cut == -1:
-                cut = max_chars
-            chunks.append(line[:cut].strip())
-            line = line[cut:].strip()
-        if line:
-            chunks.append(line)
+
+        phrases = _split_line_into_phrases(line)
+        for index, phrase in enumerate(phrases):
+            is_last_phrase = index == len(phrases) - 1
+            candidate = phrase if not buffer else f"{buffer} {phrase}"
+
+            if len(candidate) <= max_chars:
+                buffer = candidate
+                continue
+
+            buffer = _flush_chunk(chunks, buffer, is_line_end=False)
+            if len(phrase) <= max_chars:
+                buffer = phrase
+                continue
+
+            pieces = _split_long_phrase(phrase, max_chars=max_chars)
+            for piece_index, piece in enumerate(pieces):
+                is_piece_last = piece_index == len(pieces) - 1
+                should_end_line = is_last_phrase and is_piece_last
+                chunks.append(
+                    LyricChunk(
+                        piece,
+                        _preferred_pause_ms(piece, is_line_end=should_end_line),
+                    )
+                )
+            buffer = ""
+
+        buffer = _flush_chunk(chunks, buffer, is_line_end=True)
+
     return chunks
 
 
 def _run_ffmpeg_wav_convert(src: str, dst: str, sample_rate: int, channels: int = 1) -> None:
-    """Convert audio to a normalized PCM WAV format with ffmpeg."""
     cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        src,
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-c:a",
-        "pcm_s16le",
+        "ffmpeg", "-y", "-i", src,
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-c:a", "pcm_s16le",
         dst,
-        "-loglevel",
-        "error",
+        "-loglevel", "error",
     ]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -416,15 +557,22 @@ def _normalize_generated_wav(src: str, dst: str) -> None:
     _run_ffmpeg_wav_convert(src, dst, sample_rate=24000, channels=1)
 
 
-def _merge_wav_chunks(chunk_paths: list[str], out_path: str) -> None:
-    """Concatenate multiple WAV files into one (all chunks must match format)."""
+def _merge_wav_chunks(
+    chunk_paths: list[str],
+    out_path: str,
+    *,
+    pause_ms_by_chunk: list[int] | None = None,
+    crossfade_ms: int = 18,
+) -> None:
     import array
     import wave
 
     out_frames = array.array("h")
     format_params = None
+    framerate = None
+    channels = 1
 
-    for p in chunk_paths:
+    for index, p in enumerate(chunk_paths):
         with wave.open(p, "rb") as wf:
             if wf.getsampwidth() != 2:
                 raise RuntimeError("Unsupported WAV sample width; expected 16-bit PCM.")
@@ -437,10 +585,44 @@ def _merge_wav_chunks(chunk_paths: list[str], out_path: str) -> None:
             )
             if format_params is None:
                 format_params = current_format
+                framerate = current_format[2]
+                channels = current_format[0]
             elif current_format != format_params:
                 raise RuntimeError("WAV chunks have mismatched audio parameters; cannot merge.")
             raw = wf.readframes(wf.getnframes())
-            out_frames.frombytes(raw)
+            chunk_frames = array.array("h")
+            chunk_frames.frombytes(raw)
+
+            if not out_frames:
+                out_frames.extend(chunk_frames)
+            else:
+                overlap = min(
+                    len(out_frames),
+                    len(chunk_frames),
+                    max(int((framerate or 24000) * crossfade_ms / 1000) * channels, 0),
+                )
+                if overlap > 0:
+                    start = len(out_frames) - overlap
+                    for i in range(overlap):
+                        ratio = (i + 1) / overlap
+                        mixed = int(
+                            (out_frames[start + i] * (1.0 - ratio))
+                            + (chunk_frames[i] * ratio)
+                        )
+                        out_frames[start + i] = mixed
+                    out_frames.extend(chunk_frames[overlap:])
+                else:
+                    out_frames.extend(chunk_frames)
+
+            if (
+                pause_ms_by_chunk is not None
+                and index < len(pause_ms_by_chunk)
+                and index < len(chunk_paths) - 1
+            ):
+                pause_ms = max(pause_ms_by_chunk[index], 0)
+                silence_frames = int(((framerate or 24000) * pause_ms / 1000)) * channels
+                if silence_frames > 0:
+                    out_frames.extend([0] * silence_frames)
 
     if format_params is None or not out_frames:
         raise RuntimeError("No audio chunks to merge.")
@@ -453,16 +635,12 @@ def _merge_wav_chunks(chunk_paths: list[str], out_path: str) -> None:
         wf.writeframes(out_frames.tobytes())
 
 
-# ── Language detection helper ──────────────────────────────────────────────────
+# ── Language detection ─────────────────────────────────────────────────────────
+
 def _detect_language_code(text: str) -> str:
-    """Heuristic Unicode-script detection, falls back to 'en'."""
     counts: dict[str, int] = {
-        "devanagari": 0,
-        "arabic": 0,
-        "hangul": 0,
-        "hiragana": 0,
-        "cjk": 0,
-        "cyrillic": 0,
+        "devanagari": 0, "arabic": 0, "hangul": 0,
+        "hiragana": 0, "cjk": 0, "cyrillic": 0,
     }
     for ch in text:
         cp = ord(ch)
@@ -480,12 +658,8 @@ def _detect_language_code(text: str) -> str:
             counts["cyrillic"] += 1
 
     script_to_lang = {
-        "devanagari": "hi",
-        "arabic": "ar",
-        "hangul": "ko",
-        "hiragana": "ja",
-        "cjk": "zh",
-        "cyrillic": "ru",
+        "devanagari": "hi", "arabic": "ar", "hangul": "ko",
+        "hiragana": "ja", "cjk": "zh", "cyrillic": "ru",
     }
     best = max(counts, key=counts.get)
     return script_to_lang[best] if counts[best] >= 5 else "en"
@@ -504,13 +678,9 @@ def _resolve_language_code(
     explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
     normalized = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
     combined_reference_text = "\n".join(
-        part
-        for part in [
-            text,
-            reference_lyric_snippet,
-            reference_track_title,
-            reference_artist_name,
-            genre_hint,
+        part for part in [
+            text, reference_lyric_snippet, reference_track_title,
+            reference_artist_name, genre_hint,
         ]
         if part and part.strip()
     )
@@ -564,24 +734,6 @@ def _resolve_language_code(
     return _detect_language_code(combined_reference_text)
 
 
-def _resolve_pronunciation_profile(
-    language_hint: str,
-    genre_hint: str,
-    reference_track_title: str,
-    reference_artist_name: str,
-    reference_lyric_snippet: str,
-) -> str:
-    combined = " ".join(
-        part.lower()
-        for part in [language_hint, genre_hint, reference_track_title,
-                     reference_artist_name, reference_lyric_snippet]
-        if part and part.strip()
-    )
-    if any(token in combined for token in ["urdu", "hindi", "bollywood", "ghazal", "qawwali", "desi", "hinglish"]):
-        return "south_asian"
-    return "default"
-
-
 def _resolve_accent_hint(
     accent_hint: str,
     language_hint: str,
@@ -598,9 +750,10 @@ def _resolve_accent_hint(
         return "indian"
 
     combined = " ".join(
-        part.lower()
-        for part in [language_hint, genre_hint, reference_track_title,
-                     reference_artist_name, reference_lyric_snippet]
+        part.lower() for part in [
+            language_hint, genre_hint, reference_track_title,
+            reference_artist_name, reference_lyric_snippet,
+        ]
         if part and part.strip()
     )
     if is_hindi:
@@ -634,74 +787,161 @@ def _shape_english_pronunciation(text: str, accent: str) -> str:
     return shaped
 
 
-def _get_or_load_tts_model(model_name: str) -> TTS:
-    model_key = (model_name or "").strip()
+def _get_or_load_neutts_model(backbone_repo: str) -> NeuTTS:
+    model_key = (backbone_repo or "").strip()
     if not model_key:
-        raise RuntimeError("No Coqui model hint was provided for fallback synthesis.")
-    model = _fallback_tts_models.get(model_key)
+        raise RuntimeError("No NeuTTS backbone repo was provided.")
+    model = _tts_models.get(model_key)
     if model is not None:
         return model
-    log.info("Loading fallback TTS model %s …", model_key)
-    model = TTS(model_key)
-    try:
-        model = model.to(_device)
-    except Exception:
-        log.info("Fallback model %s stays on its default device", model_key)
-    _fallback_tts_models[model_key] = model
+    log.info("Loading NeuTTS model %s …", model_key)
+    model = NeuTTS(
+        backbone_repo=model_key,
+        backbone_device=_device,
+        codec_repo=_DEFAULT_NEUTTS_CODEC,
+        codec_device=_device,
+    )
+    _tts_models[model_key] = model
     return model
 
 
-def _synthesise_chunks_with_xtts(
+def _resolve_neutts_backbone(
+    *,
+    language_hint: str,
+    tts_language_code: str,
+    detected_lang: str,
+    is_hindi: bool,
+) -> str | None:
+    if is_hindi:
+        return None
+
+    explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
+    explicit_prefix = explicit_tts_code.split("-", 1)[0] if explicit_tts_code else ""
+    normalized_hint = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
+
+    candidates = [explicit_prefix, normalized_hint, detected_lang]
+
+    for value in candidates:
+        if value in {"en", "english", "american", "british"}:
+            return "neuphonic/neutts-air"
+        if value in {"es", "spanish", "espanol"}:
+            return "neuphonic/neutts-nano-spanish"
+        if value in {"de", "german", "deutsch"}:
+            return "neuphonic/neutts-nano-german"
+        if value in {"fr", "french", "francais"}:
+            return "neuphonic/neutts-nano-french"
+
+    return None
+
+
+def _get_or_load_reference_asr_pipeline():
+    global _reference_asr_pipeline
+    if _reference_asr_pipeline is not None:
+        return _reference_asr_pipeline
+
+    from transformers import pipeline
+
+    device_index = 0 if torch.cuda.is_available() else -1
+    log.info(
+        "Loading reference transcription model %s on device %s …",
+        _DEFAULT_REFERENCE_ASR_MODEL,
+        "gpu" if device_index >= 0 else "cpu",
+    )
+    _reference_asr_pipeline = pipeline(
+        "automatic-speech-recognition",
+        model=_DEFAULT_REFERENCE_ASR_MODEL,
+        device=device_index,
+    )
+    return _reference_asr_pipeline
+
+
+def _guess_reference_language(backbone_repo: str) -> str | None:
+    language_code = BACKBONE_LANGUAGE_MAP.get(backbone_repo, "")
+    if not language_code:
+        return None
+    return language_code.split("-", 1)[0]
+
+
+def _transcribe_reference_audio(ref_wav: str, backbone_repo: str) -> str:
+    try:
+        asr = _get_or_load_reference_asr_pipeline()
+        language = _guess_reference_language(backbone_repo)
+        generate_kwargs = {"task": "transcribe"}
+        if language:
+            generate_kwargs["language"] = language
+        result = asr(ref_wav, generate_kwargs=generate_kwargs)
+        if isinstance(result, dict):
+            transcript = (result.get("text") or "").strip()
+            if transcript:
+                return transcript
+    except Exception as exc:
+        log.warning("Reference transcription failed: %s", exc)
+    return ""
+
+
+def _resolve_reference_transcript(
+    *,
+    params: CloneRequestParams,
+    ref_wav: str,
+    backbone_repo: str,
+) -> str:
+    explicit = (params.reference_transcript or "").strip()
+    if explicit:
+        return explicit
+
+    transcript = _transcribe_reference_audio(ref_wav, backbone_repo)
+    if transcript:
+        log.info("Reference audio transcribed locally for NeuTTS prompting")
+        return transcript
+
+    log.warning(
+        "No reference transcript available; NeuTTS will infer from audio only. "
+        "Voice similarity may be weaker."
+    )
+    return ""
+
+
+def _write_generated_wav(path: str, wav) -> None:
+    import numpy as np
+    import soundfile as sf
+
+    audio = np.asarray(wav, dtype=np.float32).squeeze()
+    if audio.ndim != 1:
+        raise RuntimeError("NeuTTS returned unexpected audio dimensions.")
+    audio = np.nan_to_num(audio)
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak > 1.0:
+        audio = audio / peak
+    sf.write(path, audio, 24000, subtype="PCM_16")
+
+
+def _synthesise_chunks_with_neutts(
     *,
     chunks: list[str],
     speaker_wav: str,
-    xtts_language: str,
+    backbone_repo: str,
+    reference_transcript: str,
     accent: str,
     tmp_dir: str,
     request_id: str,
 ) -> list[str]:
-    if _tts is None:
-        raise RuntimeError("XTTS model is not loaded yet.")
+    model = _get_or_load_neutts_model(backbone_repo)
+    ref_codes = model.encode_reference(speaker_wav)
+    model_language = _guess_reference_language(backbone_repo)
 
     chunk_wavs: list[str] = []
     for i, chunk in enumerate(chunks):
         _raise_if_clone_cancelled(request_id)
         spoken_chunk = (
             _shape_english_pronunciation(chunk, accent=accent)
-            if xtts_language == "en"
+            if model_language == "en"
             else chunk
         )
-        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_raw.wav")
-        _tts.tts_to_file(
-            text=spoken_chunk,
-            speaker_wav=speaker_wav,
-            language=xtts_language,
-            file_path=out_chunk,
-        )
+        wav = model.infer(spoken_chunk, ref_codes, reference_transcript)
+        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
+        _write_generated_wav(out_chunk, wav)
         _raise_if_clone_cancelled(request_id)
-        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
-        _normalize_generated_wav(out_chunk, normalized_chunk)
-        chunk_wavs.append(normalized_chunk)
-    return chunk_wavs
-
-
-def _synthesise_chunks_with_coqui_model(
-    *,
-    chunks: list[str],
-    model_name: str,
-    tmp_dir: str,
-    request_id: str,
-) -> list[str]:
-    model = _get_or_load_tts_model(model_name)
-    chunk_wavs: list[str] = []
-    for i, chunk in enumerate(chunks):
-        _raise_if_clone_cancelled(request_id)
-        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_fallback_raw.wav")
-        model.tts_to_file(text=chunk, file_path=out_chunk)
-        _raise_if_clone_cancelled(request_id)
-        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_fallback.wav")
-        _normalize_generated_wav(out_chunk, normalized_chunk)
-        chunk_wavs.append(normalized_chunk)
+        chunk_wavs.append(out_chunk)
     return chunk_wavs
 
 
@@ -713,23 +953,24 @@ def _synthesise_chunks_with_espeak(
     request_id: str,
 ) -> list[str]:
     voice = (espeak_voice or "").strip() or "en-gb"
+    espeak_command = shutil.which("espeak-ng") or shutil.which("espeak")
     chunk_wavs: list[str] = []
     for i, chunk in enumerate(chunks):
         _raise_if_clone_cancelled(request_id)
         raw_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak_raw.wav")
-        cmd = ["espeak-ng", "-v", voice, "-w", raw_chunk, chunk]
+        cmd = [espeak_command or "espeak-ng", "-v", voice, "-w", raw_chunk, chunk]
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
                            stderr=subprocess.PIPE, text=True)
         except FileNotFoundError as exc:
             raise RuntimeError(
-                "espeak-ng not found. Install it:\n"
-                "  macOS: brew install espeak-ng\n"
+                "eSpeak was not found. Install it:\n"
+                "  macOS: brew install espeak\n"
                 "  Ubuntu: sudo apt install espeak-ng"
             ) from exc
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or "").strip()
-            raise RuntimeError(f"espeak-ng synthesis failed: {detail or 'unknown error'}") from exc
+            raise RuntimeError(f"eSpeak synthesis failed: {detail or 'unknown error'}") from exc
         normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak.wav")
         _normalize_generated_wav(raw_chunk, normalized_chunk)
         _raise_if_clone_cancelled(request_id)
@@ -742,62 +983,140 @@ async def cancel_clone(request_id: str = Form(...)) -> dict:
     trimmed = (request_id or "").strip()
     if not trimmed:
         raise HTTPException(400, "request_id is required.")
-
     was_active = _cancel_clone_request(trimmed)
     return {"status": "ok", "request_id": trimmed, "was_active": was_active}
 
 
-# ── Option B: extract instrumental from reference song & mix ────────────────────
+# ── Background music extraction ────────────────────────────────────────────────
 
 def _download_youtube_audio(video_id: str, out_path: str, tmp_dir: str) -> bool:
-    if not video_id or not video_id.strip():
+    """Download best audio from YouTube using yt-dlp and convert to WAV."""
+    video_id = (video_id or "").strip()
+    if not video_id:
         return False
-    url = f"https://www.youtube.com/watch?v={video_id.strip()}"
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
     template = os.path.join(tmp_dir, "yt_audio.%(ext)s")
     cmd = [
         sys.executable, "-m", "yt_dlp",
-        "-x", "--audio-format", "best",
+        "-f", "bestaudio/best",
         "-o", template,
-        "--no-playlist", "--no-warnings", "--geo-bypass", url,
+        "--no-playlist",
+        "--no-warnings",
+        "--geo-bypass",
+        url,
     ]
+    log.info("Downloading YouTube audio for video_id=%s", video_id)
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180, cwd=tmp_dir)
-        import glob
-        for f in glob.glob(os.path.join(tmp_dir, "yt_audio.*")):
-            if os.path.isfile(f):
-                if f.lower().endswith(".wav"):
-                    shutil.move(f, out_path)
-                else:
-                    _run_ffmpeg_wav_convert(f, out_path, sample_rate=44100, channels=1)
-                return True
+        result = subprocess.run(
+            cmd, check=True, capture_output=True, text=True,
+            timeout=180, cwd=tmp_dir,
+        )
+        log.debug("yt-dlp stdout: %s", result.stdout[-300:] if result.stdout else "")
+    except FileNotFoundError:
+        log.warning("yt-dlp not found. Install with: pip install yt-dlp")
         return False
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        log.warning("yt-dlp download failed for %s: %s", video_id, e)
+    except subprocess.CalledProcessError as e:
+        log.warning("yt-dlp failed for %s: %s", video_id, (e.stderr or "")[-300:])
+        return False
+    except subprocess.TimeoutExpired:
+        log.warning("yt-dlp timed out for video_id=%s", video_id)
+        return False
+
+    import glob
+    downloaded = [
+        f for f in glob.glob(os.path.join(tmp_dir, "yt_audio.*"))
+        if os.path.isfile(f)
+    ]
+    if not downloaded:
+        log.warning("yt-dlp ran but produced no output file for video_id=%s", video_id)
+        return False
+
+    try:
+        _run_ffmpeg_wav_convert(downloaded[0], out_path, sample_rate=44100, channels=2)
+        log.info("YouTube audio downloaded and converted: %s", out_path)
+        return True
+    except Exception as e:
+        log.warning("ffmpeg conversion of yt audio failed: %s", e)
         return False
 
 
 def _separate_instrumental(audio_path: str, out_dir: str) -> str | None:
+    """
+    Run Demucs vocal separation and return the path to no_vocals.wav.
+    Tries htdemucs_ft first, then htdemucs, then mdx_extra as fallback.
+    Walks the full output tree to find the stem regardless of version-specific
+    subdirectory structure.
+    """
     demucs_out = os.path.join(out_dir, "demucs_out")
-    cmd = [
-        sys.executable, "-m", "demucs",
-        "-n", "htdemucs", "--two-stems", "vocals",
-        "-o", demucs_out, audio_path,
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600, cwd=out_dir)
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        log.warning("Demucs separation failed: %s", e)
-        return None
+    os.makedirs(demucs_out, exist_ok=True)
+    missing_torchcodec = False
 
-    base = os.path.splitext(os.path.basename(audio_path))[0]
-    for model_dir in ["htdemucs", "htdemucs_ft"]:
-        track_dir = os.path.join(demucs_out, model_dir, base)
-        no_vocals = os.path.join(track_dir, "no_vocals.wav")
-        if os.path.isfile(no_vocals):
-            return no_vocals
-    for root, _, files in os.walk(demucs_out):
-        if "no_vocals.wav" in files:
-            return os.path.join(root, "no_vocals.wav")
+    for model_name in ["htdemucs_ft", "htdemucs", "mdx_extra"]:
+        log.info("Trying Demucs model: %s", model_name)
+        cmd = [
+            sys.executable, "-m", "demucs",
+            "-n", model_name,
+            "--two-stems", "vocals",
+            "-o", demucs_out,
+            audio_path,
+        ]
+        try:
+            result = subprocess.run(
+                cmd, check=True, capture_output=True,
+                text=True, timeout=900, cwd=out_dir,
+            )
+            log.info(
+                "Demucs %s finished. stdout tail: %s",
+                model_name,
+                (result.stdout or "")[-300:],
+            )
+        except FileNotFoundError:
+            log.warning("demucs not found. Install with: pip install demucs")
+            return None
+        except subprocess.CalledProcessError as e:
+            stderr_tail = (e.stderr or "")[-400:]
+            log.warning(
+                "Demucs %s failed (exit %d): %s",
+                model_name, e.returncode,
+                stderr_tail,
+            )
+            if "TorchCodec is required" in stderr_tail:
+                missing_torchcodec = True
+                log.error(
+                    "Demucs requires torchcodec for audio export. Install it with: "
+                    "python -m pip install -r requirements.txt"
+                )
+                break
+            continue
+        except subprocess.TimeoutExpired:
+            log.warning("Demucs %s timed out", model_name)
+            continue
+
+        # Walk the full output tree — demucs versions differ in subdir depth
+        for root, _, files in os.walk(demucs_out):
+            if "no_vocals.wav" in files:
+                found = os.path.join(root, "no_vocals.wav")
+                log.info("Instrumental stem found: %s", found)
+                return found
+
+        log.warning(
+            "Demucs %s ran but no_vocals.wav not found. Tree: %s",
+            model_name,
+            [(r, f) for r, _, f in os.walk(demucs_out)],
+        )
+
+    if missing_torchcodec:
+        log.error(
+            "Background music extraction aborted because torchcodec is missing. "
+            "Demucs output tree: %s",
+            [(r, f) for r, _, f in os.walk(demucs_out)],
+        )
+    else:
+        log.error(
+            "All Demucs models failed. Full output tree: %s",
+            [(r, f) for r, _, f in os.walk(demucs_out)],
+        )
     return None
 
 
@@ -809,58 +1128,13 @@ def _get_wav_duration_seconds(path: str) -> float:
         return frames / float(rate) if rate else 0.0
 
 
-def _mix_vocal_with_instrumental(
-    vocal_path: str,
-    instrumental_path: str,
-    out_path: str,
-    vocal_gain: float = 0.64,
-    instrumental_gain: float = 1.18,
-) -> None:
-    duration = _get_wav_duration_seconds(vocal_path)
-    if duration <= 0:
-        shutil.copy(vocal_path, out_path)
-        return
-
-    vocal_44 = out_path + ".vocal_44.wav"
-    _run_ffmpeg_wav_convert(vocal_path, vocal_44, sample_rate=44100, channels=1)
-
-    inst_44 = out_path + ".inst_44.wav"
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", instrumental_path,
-        "-t", str(duration),
-        "-ar", "44100",
-        "-ac", "1",
-        "-c:a", "pcm_s16le",
-        inst_44,
-        "-loglevel", "error",
-    ]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
-
-    mix = (
-        f"[0:a]volume={vocal_gain}[v];"
-        f"[1:a]volume={instrumental_gain}[i];"
-        "[v][i]amix=inputs=2:duration=first:dropout_transition=0"
-    )
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", vocal_44,
-        "-i", inst_44,
-        "-filter_complex", mix,
-        "-ac", "1",
-        "-c:a", "pcm_s16le",
-        out_path,
-        "-loglevel", "error",
-    ]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
-    for p in [vocal_44, inst_44]:
-        try:
-            os.remove(p)
-        except OSError:
-            pass
+# ── NOTE: _mix_vocal_with_instrumental is intentionally removed. ───────────────
+# The backend now always returns voice-only WAV + instrumental as a separate
+# streamable artifact URL. This gives the Flutter client full independent
+# volume control over vocals and background music via two separate AudioPlayers.
 
 
-# ── Main endpoint ──────────────────────────────────────────────────────────────
+# ── Main clone endpoint ────────────────────────────────────────────────────────
 
 @app.post("/clone")
 def clone_voice(
@@ -878,6 +1152,7 @@ def clone_voice(
     reference_track_title: str = Form(""),
     reference_artist_name: str = Form(""),
     reference_lyric_snippet: str = Form(""),
+    reference_transcript: str = Form(""),
     reference_video_id: str = Form(""),
 ) -> FileResponse:
     if not lyrics.strip():
@@ -897,27 +1172,39 @@ def clone_voice(
         reference_track_title=reference_track_title,
         reference_artist_name=reference_artist_name,
         reference_lyric_snippet=reference_lyric_snippet,
+        reference_transcript=reference_transcript,
         reference_video_id=reference_video_id,
     )
     _mark_clone_request_active(params.request_id)
 
+    log.info(
+        "Clone request received: request_id=%s language=%s is_hindi=%s "
+        "mood=%s genre=%s reference=%s/%s video_id=%s",
+        params.request_id or "(none)",
+        params.language or "-",
+        params.is_hindi,
+        params.mood or "-",
+        params.genre or "-",
+        params.reference_track_title or "-",
+        params.reference_artist_name or "-",
+        params.reference_video_id or "(none)",
+    )
+
     tmp_dir = tempfile.mkdtemp(prefix="mongobox_")
     try:
-        # 1) Save upload
+        # 1) Save uploaded voice sample
         suffix = Path(voice_sample.filename or "voice_sample").suffix or ".bin"
         src_path = os.path.join(tmp_dir, f"voice_sample{suffix}")
         with open(src_path, "wb") as fh:
             shutil.copyfileobj(voice_sample.file, fh)
         log.info("Received voice sample: %s (%d bytes)", suffix, os.path.getsize(src_path))
 
-        # 2) Convert to XTTS reference WAV
+        # 2) Convert to normalised reference WAV
         ref_wav = os.path.join(tmp_dir, "reference.wav")
         _convert_to_ref_wav(src_path, ref_wav)
         _raise_if_clone_cancelled(params.request_id)
 
-        # 3) ── KEY FIX: Convert Hinglish → Devanagari BEFORE stripping tags ──
-        #    We do this on the raw lyrics so section tags are still present as
-        #    context, then strip them afterwards.
+        # 3) Transliterate Hinglish → Devanagari (before stripping tags)
         working_lyrics = params.lyrics
         if params.is_hindi:
             log.info("is_hindi=True — transliterating Hinglish → Devanagari")
@@ -938,16 +1225,13 @@ def clone_voice(
             tts_language_code=params.tts_language_code,
             is_hindi=params.is_hindi,
         )
-        # After transliteration the text will contain Devanagari — confirm lang
         if params.is_hindi and detected_lang != "hi":
-            log.warning("Language resolved to %s despite is_hindi=True — overriding to 'hi'", detected_lang)
+            log.warning(
+                "Language resolved to %s despite is_hindi=True — overriding to 'hi'",
+                detected_lang,
+            )
             detected_lang = "hi"
 
-        pronunciation_profile = _resolve_pronunciation_profile(
-            params.language, params.genre,
-            params.reference_track_title, params.reference_artist_name,
-            params.reference_lyric_snippet,
-        )
         accent = _resolve_accent_hint(
             params.accent_hint, params.language, params.genre,
             params.reference_track_title, params.reference_artist_name,
@@ -955,101 +1239,145 @@ def clone_voice(
             is_hindi=params.is_hindi,
         )
         log.info(
-            "Clone request: chunks=%d lang=%s accent=%s is_hindi=%s mood=%s genre=%s reference=%s/%s",
-            len(chunks), detected_lang, accent, params.is_hindi,
-            params.mood or "-", params.genre or "-",
-            params.reference_track_title or "-", params.reference_artist_name or "-",
+            "Pipeline: chunks=%d lang=%s accent=%s",
+            len(chunks), detected_lang, accent,
         )
 
-        # 4) Synthesis
+        # 4) Synthesis (NeuTTS → eSpeak fallback)
         chunk_wavs: list[str]
-        synthesis_engine = "xtts_v2"
-        try:
-            chunk_wavs = _synthesise_chunks_with_xtts(
-                chunks=chunks,
-                speaker_wav=ref_wav,
-                xtts_language=detected_lang,
-                accent=accent,
-                tmp_dir=tmp_dir,
-                request_id=params.request_id,
-            )
-        except Exception as xtts_exc:
-            log.warning("XTTS synthesis failed (%s); attempting fallbacks", xtts_exc)
-            fallback_model = (params.coqui_model_hint or "").strip()
-            can_try_fallback_model = fallback_model and "xtts_v2" not in fallback_model.lower()
-
-            if can_try_fallback_model:
-                try:
-                    chunk_wavs = _synthesise_chunks_with_coqui_model(
-                        chunks=chunks,
-                        model_name=fallback_model,
-                        tmp_dir=tmp_dir,
-                        request_id=params.request_id,
-                    )
-                    synthesis_engine = fallback_model
-                except Exception as fallback_exc:
-                    log.warning("Fallback Coqui model failed (%s); trying eSpeak-NG", fallback_exc)
-                    espeak_fallback_voice = (params.espeak_voice or "").strip() or ("hi" if params.is_hindi else "en-gb")
-                    chunk_wavs = _synthesise_chunks_with_espeak(
-                        chunks=chunks,
-                        espeak_voice=espeak_fallback_voice,
-                        tmp_dir=tmp_dir,
-                        request_id=params.request_id,
-                    )
-                    synthesis_engine = f"espeak:{espeak_fallback_voice}"
-            else:
-                espeak_fallback_voice = (params.espeak_voice or "").strip() or ("hi" if params.is_hindi else "en-gb")
+        synthesis_engine = "neutts"
+        backbone_repo = _resolve_neutts_backbone(
+            language_hint=params.language,
+            tts_language_code=params.tts_language_code,
+            detected_lang=detected_lang,
+            is_hindi=params.is_hindi,
+        )
+        if backbone_repo is not None:
+            try:
+                reference_transcript_text = _resolve_reference_transcript(
+                    params=params,
+                    ref_wav=ref_wav,
+                    backbone_repo=backbone_repo,
+                )
+                chunk_wavs = _synthesise_chunks_with_neutts(
+                    chunks=[chunk.text for chunk in chunks],
+                    speaker_wav=ref_wav,
+                    backbone_repo=backbone_repo,
+                    reference_transcript=reference_transcript_text,
+                    accent=accent,
+                    tmp_dir=tmp_dir,
+                    request_id=params.request_id,
+                )
+                synthesis_engine = backbone_repo
+            except Exception as neutts_exc:
+                log.warning("NeuTTS failed (%s); falling back to eSpeak", neutts_exc)
+                espeak_fallback_voice = (params.espeak_voice or "").strip() or (
+                    "hi" if params.is_hindi else "en-gb"
+                )
                 chunk_wavs = _synthesise_chunks_with_espeak(
-                    chunks=chunks,
+                    chunks=[chunk.text for chunk in chunks],
                     espeak_voice=espeak_fallback_voice,
                     tmp_dir=tmp_dir,
                     request_id=params.request_id,
                 )
                 synthesis_engine = f"espeak:{espeak_fallback_voice}"
+        else:
+            log.warning(
+                "No NeuTTS backbone for lang=%s, falling back to eSpeak", detected_lang
+            )
+            espeak_fallback_voice = (params.espeak_voice or "").strip() or (
+                "hi" if params.is_hindi else "en-gb"
+            )
+            chunk_wavs = _synthesise_chunks_with_espeak(
+                chunks=[chunk.text for chunk in chunks],
+                espeak_voice=espeak_fallback_voice,
+                tmp_dir=tmp_dir,
+                request_id=params.request_id,
+            )
+            synthesis_engine = f"espeak:{espeak_fallback_voice}"
 
-        # 5) Merge
+        # 5) Merge chunks
         _raise_if_clone_cancelled(params.request_id)
         final_wav = os.path.join(tmp_dir, "cloned_voice.wav")
         if len(chunk_wavs) == 1:
             shutil.copy(chunk_wavs[0], final_wav)
         else:
-            _merge_wav_chunks(chunk_wavs, final_wav)
+            _merge_wav_chunks(
+                chunk_wavs,
+                final_wav,
+                pause_ms_by_chunk=[chunk.pause_ms for chunk in chunks],
+            )
+        log.info(
+            "Voice synthesis complete: engine=%s bytes=%d",
+            synthesis_engine, os.path.getsize(final_wav),
+        )
 
-        mix_status = "voice_only"
-        mix_label = ""
+        # 6) Background music extraction — always return as separate stream.
+        #    We never bake the mix into the vocal WAV so the Flutter client
+        #    can give the user independent volume control over both tracks.
+        music_url = ""
+        music_label = ""
 
-        # 5b) Optional: extract instrumental & mix
-        video_id = (params.reference_video_id or "").strip()
+        video_id = params.reference_video_id
         if video_id:
+            log.info("Background music pipeline starting for video_id=%s", video_id)
             _raise_if_clone_cancelled(params.request_id)
+
             yt_wav = os.path.join(tmp_dir, "yt_reference.wav")
-            if _download_youtube_audio(video_id, yt_wav, tmp_dir):
+            downloaded = _download_youtube_audio(video_id, yt_wav, tmp_dir)
+
+            if downloaded:
                 _raise_if_clone_cancelled(params.request_id)
+                log.info("Starting Demucs vocal separation…")
                 inst_path = _separate_instrumental(yt_wav, tmp_dir)
+
                 if inst_path:
                     _raise_if_clone_cancelled(params.request_id)
-                    mixed_wav = os.path.join(tmp_dir, "cloned_mixed.wav")
-                    _mix_vocal_with_instrumental(final_wav, inst_path, mixed_wav)
-                    final_wav = mixed_wav
-                    mix_status = "mixed"
-                    mix_label = "Original instrumental mixed into preview"
-                    log.info("Mixed cloned voice with extracted instrumental")
+                    artifact_url = _persist_request_artifact(
+                        inst_path,
+                        params.request_id,
+                        "instrumental.wav",
+                    )
+                    if artifact_url:
+                        music_url = artifact_url
+                        music_label = "Original instrumental - adjust volume below"
+                        log.info("Background instrumental prepared as separate stream ✓")
+                    else:
+                        log.warning(
+                            "Instrumental extracted but could not be persisted — returning voice-only"
+                        )
                 else:
-                    log.warning("Demucs separation failed; returning voice-only")
+                    log.warning(
+                        "Demucs separation produced no output — returning voice-only"
+                    )
             else:
-                log.warning("YouTube download failed; returning voice-only")
+                log.warning(
+                    "YouTube download failed for video_id=%s — returning voice-only",
+                    video_id,
+                )
+        else:
+            log.info("No reference_video_id provided — skipping background music pipeline")
+
+        # mix_status is always "voice_only" now — the Flutter client handles
+        # mixing in real-time using two independent AudioPlayer instances.
+        mix_status = "voice_only"
 
         log.info(
-            "Pipeline complete: audio_bytes=%d synthesis_engine=%s",
-            os.path.getsize(final_wav), synthesis_engine,
+            "Request complete: mix_status=%s has_music=%s audio_bytes=%d engine=%s",
+            mix_status,
+            bool(music_url),
+            os.path.getsize(final_wav),
+            synthesis_engine,
         )
 
         return FileResponse(
             final_wav,
             media_type="audio/wav",
             headers={
-                "X-MongoBox-Mix-Status": mix_status,
-                "X-MongoBox-Mix-Label": mix_label,
+                "X-MongoBox-Mix-Status": _header_safe(mix_status),
+                "X-MongoBox-Mix-Label": _header_safe(""),
+                "X-MongoBox-Music-Url": _header_safe(music_url),
+                "X-MongoBox-Music-Label": _header_safe(music_label),
             },
             background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
         )
@@ -1070,7 +1398,7 @@ def clone_voice(
             pass
 
 
-# ── BPM & Health endpoints (unchanged) ────────────────────────────────────────
+# ── BPM & Health endpoints ─────────────────────────────────────────────────────
 
 def _detect_bpm(audio_path: str) -> float | None:
     try:
@@ -1118,9 +1446,13 @@ def get_bpm(video_id: str = "") -> dict:
 def health() -> dict:
     return {
         "status": "ok",
-        "model_loaded": _tts is not None,
+        "model_loaded": bool(_tts_models),
         "device": _device,
         "cuda": torch.cuda.is_available(),
+        "engine": "neutts",
+        "loaded_backbones": sorted(_tts_models.keys()),
+        "default_backbone": _PRIMARY_BACKBONE_REPO,
+        "reference_asr_model": _DEFAULT_REFERENCE_ASR_MODEL,
         "hindi_transliteration": _indic_trans is not None,
     }
 

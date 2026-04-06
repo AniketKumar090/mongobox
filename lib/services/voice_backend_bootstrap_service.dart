@@ -46,8 +46,7 @@ class VoiceBackendBootstrapService {
     if (!_canAutoStart(uri)) {
       return VoiceBackendBootstrapResult(
         isHealthy: false,
-        message:
-            'Voice backend is offline. Start it with: cd voice-backend && python start.py',
+        message: _manualStartMessage(),
       );
     }
 
@@ -66,8 +65,7 @@ class VoiceBackendBootstrapService {
       if (startScript == null) {
         return VoiceBackendBootstrapResult(
           isHealthy: false,
-          message:
-              'Voice backend is offline and the local start script could not be found.',
+          message: _missingBackendFilesMessage(),
         );
       }
     }
@@ -76,8 +74,7 @@ class VoiceBackendBootstrapService {
     if (!didStart) {
       return VoiceBackendBootstrapResult(
         isHealthy: false,
-        message:
-            'Voice backend is offline. Start it with: cd voice-backend && python start.py',
+        message: _startupFailureMessage(),
       );
     }
 
@@ -118,10 +115,39 @@ class VoiceBackendBootstrapService {
     return VoiceBackendBootstrapResult(
       isHealthy: false,
       didStart: initial.didStart,
-      message:
-          initial.didStart
-              ? 'Voice backend is still starting in the background…'
-              : initial.message,
+      message: initial.didStart ? _startupTimeoutMessage() : initial.message,
+    );
+  }
+
+  static Future<VoiceBackendBootstrapResult> waitForBackendReady({
+    Duration startupTimeout = const Duration(seconds: 20),
+    Duration pollInterval = const Duration(milliseconds: 500),
+  }) async {
+    final backendUrl = await EnvConfig.resolveVoiceBackendUrl();
+    final uri = Uri.tryParse(backendUrl);
+    if (!_canAutoStart(uri) || startupTimeout <= Duration.zero) {
+      return VoiceBackendBootstrapResult(
+        isHealthy: false,
+        message: _manualStartMessage(),
+      );
+    }
+
+    final deadline = DateTime.now().add(startupTimeout);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(pollInterval);
+      if (await _isBackendHealthy(backendUrl)) {
+        return const VoiceBackendBootstrapResult(
+          isHealthy: true,
+          didStart: true,
+          message: 'Voice backend is ready.',
+        );
+      }
+    }
+
+    return VoiceBackendBootstrapResult(
+      isHealthy: false,
+      didStart: true,
+      message: _startupTimeoutMessage(),
     );
   }
 
@@ -253,5 +279,86 @@ class VoiceBackendBootstrapService {
     if (python.existsSync()) return python.path;
 
     return 'python3';
+  }
+
+  static String _manualStartMessage() {
+    final startScript = _findBackendStartScript();
+    if (startScript == null) {
+      return _missingBackendFilesMessage();
+    }
+    return _desktopSetupChecklist(startScript.parent);
+  }
+
+  static String _startupFailureMessage() {
+    final startScript = _findBackendStartScript();
+    if (startScript == null) {
+      return _missingBackendFilesMessage();
+    }
+    return 'Local voice engine could not start automatically.\n\n'
+        '${_desktopSetupChecklist(startScript.parent)}';
+  }
+
+  static String _startupTimeoutMessage() {
+    final startScript = _findBackendStartScript();
+    final setupHint =
+        startScript == null
+            ? _missingBackendFilesMessage()
+            : _desktopSetupChecklist(startScript.parent);
+    return 'Local voice engine is taking longer than expected to warm up.\n'
+        'First run can take a while because the voice model downloads and loads locally.\n\n'
+        '$setupHint';
+  }
+
+  static String _missingBackendFilesMessage() {
+    return 'Local voice engine files were not found in this app build.\n'
+        'Expected to find `voice-backend/start.py` next to the app.';
+  }
+
+  static String _desktopSetupChecklist(Directory backendDir) {
+    if (Platform.isIOS) {
+      return 'Start the local voice engine on your computer and keep the app open.';
+    }
+
+    final hasVenv = _hasVirtualEnv(backendDir);
+    final ffmpegInstalled = _commandExists('ffmpeg');
+    final activateCommand =
+        Platform.isWindows
+            ? r'.venv\Scripts\activate'
+            : 'source .venv/bin/activate';
+
+    final lines = <String>[
+      'To finish local voice setup:',
+      '1. `cd voice-backend`',
+      if (!hasVenv) '2. `python -m venv .venv`',
+      '3. `$activateCommand`',
+      '4. `pip install -r requirements.txt`',
+      '5. `python start.py`',
+      if (!ffmpegInstalled) '6. Install `ffmpeg` and retry.',
+    ];
+
+    return lines.join('\n');
+  }
+
+  static bool _hasVirtualEnv(Directory backendDir) {
+    if (Platform.isWindows) {
+      return File(
+        '${backendDir.path}\\.venv\\Scripts\\python.exe',
+      ).existsSync();
+    }
+
+    return File('${backendDir.path}/.venv/bin/python').existsSync() ||
+        File('${backendDir.path}/.venv/bin/python3').existsSync();
+  }
+
+  static bool _commandExists(String executable) {
+    try {
+      return executable.trim().isNotEmpty &&
+          Process.runSync(Platform.isWindows ? 'where' : 'which', [
+                executable,
+              ]).exitCode ==
+              0;
+    } catch (_) {
+      return false;
+    }
   }
 }

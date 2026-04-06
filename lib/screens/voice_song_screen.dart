@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
@@ -13,12 +14,13 @@ import '../constants/colors.dart';
 import '../services/saved_voice_song_service.dart';
 import '../services/audio_session_service.dart';
 import '../services/background_music_service.dart';
+import '../services/voice_backend_bootstrap_service.dart';
 import '../services/voice_clone_service.dart';
 import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
 import 'saved_voice_songs_screen.dart';
 
-// ─── PALETTE — mirrors VoiceSampleScreen's _HP ────────────────────────────────
+// ─── PALETTE ──────────────────────────────────────────────────────────────────
 class _P {
   static SongCreationPalette get _p => SongCreationPalette.current;
 
@@ -84,8 +86,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   String? _clonePath;
   String? _musicSourceUrl;
   String? _musicSourceLabel;
-  Map<String, String>? _musicSourceHeaders;
-  bool _mixIncluded = false;
+  List<({String url, String label, Map<String, String>? headers})>
+  _musicCandidates = const [];
 
   _CloneStep _step = _CloneStep.cloning;
   bool _isPlaying = false;
@@ -95,25 +97,26 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   bool _isLeavingScreen = false;
   String? _activeCloneRequestId;
   String? _errorMessage;
+  String _statusTitle = 'Preparing local voice engine…';
+  String _statusSubtitle = 'Checking your on-device voice engine.';
   StreamSubscription<PlayerState>? _voiceStateSub;
 
+  // ── Mix controls ─────────────────────────────────────────────────────────
+  // All three sliders are fully independent. Voice and music volumes can each
+  // be set from 0% (muted) to 100%. Speed applies to both players together.
   double _voiceSpeed = 1.0;
-  double _voiceVolume = 0.5;
-  double _musicVolume = 1.5;
+  double _voiceVolume = 1.0;
+  double _musicVolume = 1.0;
 
-  double get _maxVoiceCap => _musicVolume > 1.0 ? 1.0 : _musicVolume;
   bool get _isHindiDominant =>
       widget.dominantLanguage.trim().toLowerCase().contains('hindi');
+
   String get _cloneLyrics =>
       _isHindiDominant
           ? ((widget.hinglishLyrics?.trim().isNotEmpty ?? false)
               ? widget.hinglishLyrics!
               : widget.hindiLyrics)
           : widget.englishLyrics;
-
-  void _reconcileVoiceCap() {
-    if (_voiceVolume > _maxVoiceCap) _voiceVolume = _maxVoiceCap;
-  }
 
   @override
   void initState() {
@@ -139,11 +142,20 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       _step = _CloneStep.cloning;
       _clonePath = null;
       _musicSourceUrl = null;
+      _musicSourceLabel = null;
+      _musicCandidates = const [];
       _errorMessage = null;
       _isPlaying = false;
+      _statusTitle = 'Preparing local voice engine…';
+      _statusSubtitle = 'Checking your on-device voice engine.';
     });
     final language = widget.dominantLanguage;
     try {
+      await _ensureLocalVoiceEngineReady(language);
+      _setProgressStatus(
+        title: 'Cloning in $language…',
+        subtitle: 'Applying your saved voice to the lyrics locally.',
+      );
       final file = await _cloneService.cloneVoice(
         voiceSamplePath: widget.voiceSamplePath,
         lyrics: _cloneLyrics,
@@ -170,34 +182,90 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     }
   }
 
-  Future<void> _finalise(VoiceCloneResult result) async {
-    final language = widget.dominantLanguage;
-    String? musicUrl;
-    String? musicLabel;
-    Map<String, String>? musicHeaders;
+  Future<void> _ensureLocalVoiceEngineReady(String language) async {
+    _setProgressStatus(
+      title: 'Preparing local voice engine…',
+      subtitle: 'Checking your on-device voice model and runtime.',
+    );
 
-    if (result.mixIncluded) {
-      musicLabel =
-          result.mixLabel ?? 'Original instrumental mixed into preview';
-    } else {
-      final bgTrack = await _bgMusicService.findTrack(
-        mood: widget.mood,
-        genre: widget.genre,
-        language: language,
-        referenceTrackTitle: widget.referenceSong?.trackName ?? '',
-        referenceArtistName: widget.referenceSong?.artistName ?? '',
+    final initial = await VoiceBackendBootstrapService.ensureBackendReady();
+    if (initial.isHealthy) {
+      _setProgressStatus(
+        title: 'Local voice engine ready',
+        subtitle: 'Generating your $language voice locally.',
       );
-      musicUrl = bgTrack?.sourceUrl;
-      musicLabel = bgTrack?.label;
-      musicHeaders = bgTrack?.headers;
+      return;
     }
+
+    if (!initial.didStart) {
+      throw Exception(initial.message ?? 'Local voice engine is not ready.');
+    }
+
+    _setProgressStatus(
+      title: 'Starting local voice engine…',
+      subtitle:
+          initial.message ??
+          'Launching the local model in the background. First run can take a minute.',
+    );
+
+    final ready = await VoiceBackendBootstrapService.waitForBackendReady(
+      startupTimeout: const Duration(seconds: 45),
+    );
+    if (!ready.isHealthy) {
+      throw Exception(
+        ready.message ??
+            'Local voice engine did not become ready in time. Please try again.',
+      );
+    }
+
+    _setProgressStatus(
+      title: 'Local voice engine ready',
+      subtitle: 'Generating your $language voice locally.',
+    );
+  }
+
+  void _setProgressStatus({required String title, required String subtitle}) {
     if (!mounted) return;
     setState(() {
+      _statusTitle = title;
+      _statusSubtitle = subtitle;
+    });
+  }
+
+  Future<void> _finalise(VoiceCloneResult result) async {
+    final language = widget.dominantLanguage;
+
+    // Build candidates list — backend always returns voice-only WAV now, so
+    // mixIncluded will always be false. We keep the check for safety but the
+    // instrumental URL from the backend header takes priority.
+    final musicCandidates =
+        <({String url, String label, Map<String, String>? headers})>[];
+
+    // 1) Prefer the instrumental URL returned by the backend (Demucs-separated)
+    if (result.backgroundMusicUrl?.isNotEmpty == true) {
+      musicCandidates.add((
+        url: result.backgroundMusicUrl!,
+        label: result.backgroundMusicLabel ??
+            'Original instrumental — adjust volume below',
+        headers: null,
+      ));
+    }
+
+    // 2) Fall back to searched streaming instrumental if backend provided none
+    if (musicCandidates.isEmpty) {
+      musicCandidates.addAll(await _buildMusicCandidates(language));
+    }
+
+    if (!mounted) return;
+
+    setState(() {
       _clonePath = result.file.path;
-      _musicSourceUrl = musicUrl;
-      _musicSourceLabel = musicLabel;
-      _musicSourceHeaders = musicHeaders;
-      _mixIncluded = result.mixIncluded;
+      // Always treat as separate streams — no baked-in mix any more.
+      _musicCandidates = musicCandidates;
+      _musicSourceUrl =
+          musicCandidates.isNotEmpty ? musicCandidates.first.url : null;
+      _musicSourceLabel =
+          musicCandidates.isNotEmpty ? musicCandidates.first.label : null;
       _step = _CloneStep.ready;
     });
 
@@ -215,6 +283,67 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         _showSnack('Could not save automatically. Please try again.');
       }
     }
+  }
+
+  Future<List<({String url, String label, Map<String, String>? headers})>>
+  _buildMusicCandidates(String language) async {
+    final candidates =
+        <({String url, String label, Map<String, String>? headers})>[];
+    final seen = <String>{};
+
+    void addCandidate(String url, String label, Map<String, String>? headers) {
+      final trimmed = url.trim();
+      if (trimmed.isEmpty || !seen.add(trimmed)) return;
+      candidates.add((url: trimmed, label: label, headers: headers));
+    }
+
+    final bgTrack = await _bgMusicService.findTrack(
+      mood: widget.mood,
+      genre: widget.genre,
+      language: language,
+      referenceTrackTitle: widget.referenceSong?.trackName ?? '',
+      referenceArtistName: widget.referenceSong?.artistName ?? '',
+    );
+    if (bgTrack != null) {
+      addCandidate(bgTrack.sourceUrl, bgTrack.label, bgTrack.headers);
+    }
+    return candidates;
+  }
+
+  Future<bool> _prepareMusicPlaybackCandidates() async {
+    if (_musicCandidates.isEmpty) return false;
+
+    for (final candidate in _musicCandidates) {
+      try {
+        await _musicPlayer.stop();
+        await _musicPlayer.setAudioSource(
+          AudioSource.uri(Uri.parse(candidate.url), headers: candidate.headers),
+        );
+        await _musicPlayer.setSpeed(_voiceSpeed);
+        await _musicPlayer.setVolume(_musicVolume);
+        await _musicPlayer.setLoopMode(LoopMode.all);
+        await _musicPlayer.seek(Duration.zero);
+
+        if (mounted) {
+          setState(() {
+            _musicSourceUrl = candidate.url;
+            _musicSourceLabel = candidate.label;
+          });
+        }
+        return true;
+      } catch (e) {
+        debugPrint('Music candidate failed (${candidate.label}): $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _musicSourceUrl = null;
+        _musicSourceLabel = null;
+        _musicCandidates = const [];
+      });
+    }
+    return false;
   }
 
   // ── Playback ──────────────────────────────────────────────────────────────
@@ -236,34 +365,13 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       await _voicePlayer.stop();
       await _voicePlayer.setFilePath(absPath);
       await _voicePlayer.setSpeed(_voiceSpeed);
-      _reconcileVoiceCap();
       await _voicePlayer.setVolume(_voiceVolume);
       await _voicePlayer.seek(Duration.zero);
-      var canPlayMusic = _musicSourceUrl != null;
-      if (canPlayMusic) {
-        try {
-          await _musicPlayer.stop();
-          await _musicPlayer.setAudioSource(
-            AudioSource.uri(
-              Uri.parse(_musicSourceUrl!),
-              headers: _musicSourceHeaders,
-            ),
-          );
-          await _musicPlayer.setSpeed(_voiceSpeed);
-          await _musicPlayer.setVolume(_musicVolume);
-          await _musicPlayer.setLoopMode(LoopMode.all);
-          await _musicPlayer.seek(Duration.zero);
-        } catch (_) {
-          canPlayMusic = false;
-          if (mounted) {
-            setState(() {
-              _musicSourceUrl = null;
-              _musicSourceLabel = null;
-              _musicSourceHeaders = null;
-            });
-          }
-        }
-      }
+
+      // Always attempt to load the separate music stream — the backend no
+      // longer bakes mixes, so this is the only way music plays.
+      final canPlayMusic = await _prepareMusicPlaybackCandidates();
+
       await _voiceStateSub?.cancel();
       _voiceStateSub = _voicePlayer.playerStateStream.listen((s) {
         if (s.processingState == ProcessingState.completed && mounted) {
@@ -271,6 +379,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
           setState(() => _isPlaying = false);
         }
       });
+
       setState(() => _isPlaying = true);
       await Future.wait([
         _voicePlayer.play(),
@@ -328,6 +437,12 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
           '${safeName.isEmpty ? 'song' : safeName}_${lang}_$timestamp.wav';
       final dest = File('${libraryDir.path}/$fileName');
       await File(sourcePath).copy(dest.path);
+      final persistedBackgroundPath = await _persistBackgroundMusicIfNeeded(
+        libraryDir: libraryDir,
+        safeName: safeName.isEmpty ? 'song' : safeName,
+        language: lang,
+        timestamp: timestamp,
+      );
       final savedSong = SavedVoiceSong(
         id: '$safeName-$timestamp',
         title: widget.songTitle,
@@ -338,9 +453,10 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         genre: widget.genre,
         createdAtIso: DateTime.now().toIso8601String(),
         hasBackgroundMusic:
+            persistedBackgroundPath != null ||
             _musicSourceUrl != null ||
             ((widget.referenceSong?.videoId ?? '').isNotEmpty),
-        backgroundMusicUrl: _musicSourceUrl ?? '',
+        backgroundMusicUrl: persistedBackgroundPath ?? _musicSourceUrl ?? '',
         backgroundMusicLabel: _musicSourceLabel ?? '',
       );
       await _savedSongsService.saveSong(savedSong);
@@ -370,6 +486,42 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     }
   }
 
+  Future<String?> _persistBackgroundMusicIfNeeded({
+    required Directory libraryDir,
+    required String safeName,
+    required String language,
+    required int timestamp,
+  }) async {
+    final sourceUrl = _musicSourceUrl?.trim() ?? '';
+    if (sourceUrl.isEmpty || sourceUrl.startsWith('file://')) {
+      return null;
+    }
+    if (!sourceUrl.startsWith('http://') && !sourceUrl.startsWith('https://')) {
+      final file = File(sourceUrl);
+      if (await file.exists()) return file.path;
+      return null;
+    }
+
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(Uri.parse(sourceUrl));
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        return null;
+      }
+      final bgFile = File(
+        '${libraryDir.path}/${safeName}_${language}_${timestamp}_instrumental.wav',
+      );
+      final bytes = await consolidateHttpClientResponseBytes(response);
+      await bgFile.writeAsBytes(bytes, flush: true);
+      return bgFile.path;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> _returnToLyricHome() async {
     if (!mounted || _isLeavingScreen) return;
     _isLeavingScreen = true;
@@ -395,7 +547,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       if (action == _PendingCloneExitAction.saveWhenReady) {
         setState(() => _returnHomeWhenReady = true);
         _showSnack(
-          'We’ll save the song and return to Lyric Home when it is ready.',
+          "We'll save the song and return to Lyric Home when it is ready.",
         );
         return;
       }
@@ -495,7 +647,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     );
   }
 
-  // ── Snackbar (matches _HP style) ──────────────────────────────────────────
+  // ── Snackbar ──────────────────────────────────────────────────────────────
   void _showSnack(String msg, {_SnackAction? action}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -596,7 +748,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Song info pill
                       _SongInfoPill(
                         songTitle: widget.songTitle,
                         mood: widget.mood,
@@ -606,61 +757,57 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                       ),
                       const SizedBox(height: 16),
 
-                      // Step status
                       _StatusCard(
                         step: _step,
                         language: widget.dominantLanguage,
                         errorMessage: _errorMessage,
+                        progressTitle: _statusTitle,
+                        progressSubtitle: _statusSubtitle,
                         onRetry: _startCloning,
                       ),
 
-                      // Ready state content
                       if (_step == _CloneStep.ready) ...[
                         const SizedBox(height: 16),
 
-                        // ── Big play button ──────────────────────────────
                         _PlayButton(
                           isPlaying: _isPlaying,
-                          hasBgMusic: _mixIncluded || _musicSourceUrl != null,
+                          hasBgMusic: _musicSourceUrl != null,
                           onPressed: _play,
                         ),
                         const SizedBox(height: 10),
 
-                        // ── Music badge ──────────────────────────────────
                         _MusicBadge(
                           label: _musicSourceLabel,
-                          hasMusic: _mixIncluded || _musicSourceUrl != null,
+                          hasMusic: _musicSourceUrl != null,
                         ),
                         const SizedBox(height: 12),
 
-                        // ── Mix controls ─────────────────────────────────
+                        // ── Mix card — all three sliders, fully independent ──
                         _MixCard(
                           voiceSpeed: _voiceSpeed,
                           voiceVolume: _voiceVolume,
                           musicVolume: _musicVolume,
-                          maxVoiceCap: _maxVoiceCap,
+                          // Show music slider whenever a separate stream exists.
+                          showMusicSlider: _musicSourceUrl != null,
                           onSpeedChanged: (v) async {
                             setState(() => _voiceSpeed = v);
                             await _voicePlayer.setSpeed(v);
                             await _musicPlayer.setSpeed(v);
                           },
                           onVoiceVolumeChanged: (v) async {
-                            final c = v.clamp(0.4, _maxVoiceCap);
+                            // Fully independent — no cap tied to music volume.
+                            final c = v.clamp(0.0, 1.0);
                             setState(() => _voiceVolume = c);
                             await _voicePlayer.setVolume(c);
                           },
                           onMusicVolumeChanged: (v) async {
-                            setState(() {
-                              _musicVolume = v;
-                              _reconcileVoiceCap();
-                            });
-                            await _musicPlayer.setVolume(v);
-                            await _voicePlayer.setVolume(_voiceVolume);
+                            final c = v.clamp(0.0, 2.0);
+                            setState(() => _musicVolume = c);
+                            await _musicPlayer.setVolume(c);
                           },
                         ),
                         const SizedBox(height: 12),
 
-                        // ── Share / Save ─────────────────────────────────
                         Row(
                           children: [
                             Expanded(
@@ -685,7 +832,6 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
                         ),
                         const SizedBox(height: 12),
 
-                        // ── Lyrics collapsible ────────────────────────────
                         _LyricsCard(
                           lyrics: _cloneLyrics,
                           language: widget.dominantLanguage,
@@ -793,15 +939,11 @@ class _TopBar extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 10),
-        // Song pill row - full width, aligned with left edge
         Row(
           children: [
             Expanded(
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: _P.chip,
                   borderRadius: BorderRadius.circular(10),
@@ -833,10 +975,7 @@ class _TopBar extends StatelessWidget {
             GestureDetector(
               onTap: onLibrary,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: _P.chip,
                   borderRadius: BorderRadius.circular(10),
@@ -845,12 +984,8 @@ class _TopBar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.library_music_rounded,
-                      size: 12,
-                      color: _P.grey2,
-                    ),
-                    SizedBox(width: 5),
+                    Icon(Icons.library_music_rounded, size: 12, color: _P.grey2),
+                    const SizedBox(width: 5),
                     Text(
                       'Saved',
                       style: TextStyle(
@@ -976,11 +1111,15 @@ class _StatusCard extends StatelessWidget {
     required this.step,
     required this.language,
     required this.errorMessage,
+    required this.progressTitle,
+    required this.progressSubtitle,
     required this.onRetry,
   });
   final _CloneStep step;
   final String language;
   final String? errorMessage;
+  final String progressTitle;
+  final String progressSubtitle;
   final VoidCallback onRetry;
 
   @override
@@ -989,8 +1128,8 @@ class _StatusCard extends StatelessWidget {
       _CloneStep.cloning => _StatusRow(
         icon: null,
         isLoading: true,
-        title: 'Cloning in $language…',
-        subtitle: 'Applying your voice model to the lyrics.',
+        title: progressTitle,
+        subtitle: progressSubtitle,
         isSuccess: false,
         isError: false,
       ),
@@ -1039,23 +1178,11 @@ class _StatusRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg =
-        isSuccess
-            ? _P.greenSoft
-            : isError
-            ? _P.redSoft
-            : _P.card;
+        isSuccess ? _P.greenSoft : isError ? _P.redSoft : _P.card;
     final border =
-        isSuccess
-            ? _P.greenBorder
-            : isError
-            ? _P.redBorder
-            : _P.border;
+        isSuccess ? _P.greenBorder : isError ? _P.redBorder : _P.border;
     final iconBg =
-        isSuccess
-            ? AppColors.accentStrong
-            : isError
-            ? _P.red
-            : _P.grey3;
+        isSuccess ? AppColors.accentStrong : isError ? _P.red : _P.grey3;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -1071,11 +1198,10 @@ class _StatusRow extends StatelessWidget {
             height: 36,
             child:
                 isLoading
-                    ? Padding(
+                    ? const Padding(
                       padding: EdgeInsets.all(6),
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        color: _P.black,
                       ),
                     )
                     : Container(
@@ -1143,7 +1269,7 @@ class _ErrorCard extends StatelessWidget {
           Row(
             children: [
               Icon(Icons.error_outline_rounded, size: 15, color: _P.red),
-              SizedBox(width: 7),
+              const SizedBox(width: 7),
               Text(
                 'Voice clone failed',
                 style: TextStyle(
@@ -1192,7 +1318,7 @@ class _ErrorCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PLAY BUTTON  (big, black, green-bordered when playing)
+// PLAY BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
 class _PlayButton extends StatelessWidget {
   const _PlayButton({
@@ -1324,22 +1450,22 @@ class _MixCard extends StatelessWidget {
     required this.voiceSpeed,
     required this.voiceVolume,
     required this.musicVolume,
-    required this.maxVoiceCap,
+    required this.showMusicSlider,
     required this.onSpeedChanged,
     required this.onVoiceVolumeChanged,
     required this.onMusicVolumeChanged,
   });
-  final double voiceSpeed, voiceVolume, musicVolume, maxVoiceCap;
-  final ValueChanged<double> onSpeedChanged,
-      onVoiceVolumeChanged,
-      onMusicVolumeChanged;
+
+  final double voiceSpeed;
+  final double voiceVolume;
+  final double musicVolume;
+  final bool showMusicSlider;
+  final ValueChanged<double> onSpeedChanged;
+  final ValueChanged<double> onVoiceVolumeChanged;
+  final ValueChanged<double> onMusicVolumeChanged;
 
   @override
   Widget build(BuildContext context) {
-    final voiceSliderMax = math.max(0.401, math.min(1.0, maxVoiceCap));
-    final voiceSliderVal = voiceVolume.clamp(0.4, voiceSliderMax);
-    final voiceRange = voiceSliderMax - 0.4;
-
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1353,7 +1479,7 @@ class _MixCard extends StatelessWidget {
           Row(
             children: [
               Icon(Icons.tune_rounded, size: 14, color: _P.grey3),
-              SizedBox(width: 6),
+              const SizedBox(width: 6),
               Text(
                 'Mix & Speed',
                 style: TextStyle(
@@ -1366,6 +1492,8 @@ class _MixCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+
+          // Speed — 1.0x to 1.5x
           _SliderRow(
             label: 'Speed',
             valueLabel: '${voiceSpeed.toStringAsFixed(2)}x',
@@ -1377,30 +1505,33 @@ class _MixCard extends StatelessWidget {
             onChanged: onSpeedChanged,
           ),
           const SizedBox(height: 4),
+
+          // Vocals — 0% to 100%, fully independent
           _SliderRow(
             label: 'Vocals',
             valueLabel: '${(100 * voiceVolume).round()}%',
-            value: voiceSliderVal,
-            min: 0.4,
-            max: voiceSliderMax,
-            divisions:
-                voiceRange < 0.02
-                    ? null
-                    : math.max(1, (voiceRange / 0.1).round()),
+            value: voiceVolume.clamp(0.0, 1.0),
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
             activeColor: _P.black,
             onChanged: onVoiceVolumeChanged,
           ),
-          const SizedBox(height: 4),
-          _SliderRow(
-            label: 'Music',
-            valueLabel: '${(100 * musicVolume).round()}%',
-            value: musicVolume,
-            min: 0.4,
-            max: 2.0,
-            divisions: 16,
-            activeColor: _P.black,
-            onChanged: onMusicVolumeChanged,
-          ),
+
+          // Music — 0% to 200%, only shown when a separate stream is loaded
+          if (showMusicSlider) ...[
+            const SizedBox(height: 4),
+            _SliderRow(
+              label: 'Music',
+              valueLabel: '${(100 * musicVolume).round()}%',
+              value: musicVolume.clamp(0.0, 2.0),
+              min: 0.0,
+              max: 2.0,
+              divisions: 20,
+              activeColor: _P.black,
+              onChanged: onMusicVolumeChanged,
+            ),
+          ],
         ],
       ),
     );
@@ -1479,7 +1610,7 @@ class _SliderRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OUTLINE BUTTON (matches VoiceSampleScreen)
+// OUTLINE BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
 class _OutlineButton extends StatelessWidget {
   const _OutlineButton({
@@ -1527,7 +1658,7 @@ class _OutlineButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LYRICS CARD (collapsible — identical pattern to VoiceSampleScreen)
+// LYRICS CARD
 // ─────────────────────────────────────────────────────────────────────────────
 class _LyricsCard extends StatelessWidget {
   const _LyricsCard({

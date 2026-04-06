@@ -28,9 +28,13 @@ Color get _partyStatusBg =>
     _partyIsDark ? const Color(0xFF1B2128) : const Color(0xFF1A1A1A);
 Color get _partyAccent => AppColors.accent;
 Color get _partyAccentBg =>
-    _partyIsDark ? AppColors.accentSoftDark : const Color(0x1F7C5CFF);
+    _partyIsDark
+        ? AppColors.accentSoftDark
+        : AppColors.accentLight.withValues(alpha: 0.18);
 Color get _partyAccentBorder =>
-    _partyIsDark ? AppColors.accentBorderDark : const Color(0x477C5CFF);
+    _partyIsDark
+        ? AppColors.accentBorderDark
+        : AppColors.accentLight.withValues(alpha: 0.32);
 Color get _partyAccentText =>
     _partyIsDark ? AppColors.accentTextDark : AppColors.accentStrong;
 Color get _partyText =>

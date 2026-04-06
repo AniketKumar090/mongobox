@@ -12,13 +12,13 @@ class PixelColors {
   static const bg = Color(0xFF0D0D1A); // deep navy — main background
   static const card = Color(0xFF12122A); // slightly lighter — card surface
   static const card2 = Color(0xFF1C1C3A); // elevated card / input fills
-  static const green = AppColors.accent; // primary accent
-  static const greenDim = AppColors.accentStrong; // pressed accent
+  static const green = AppColors.accentDark; // primary accent
+  static const greenDim = AppColors.accentStrongDark; // pressed accent
   static const yellow = Color(0xFFFFE600); // tip / warning accent
   static const red = Color(0xFFFF3D5A); // error / recording accent
   static const blue = Color(0xFF4DA6FF); // karaoke / info accent
-  static const purple = AppColors.accent; // header card / reference accent
-  static const purpleDim = AppColors.accentStrong; // accent shadow
+  static const purple = AppColors.accentDark; // header card / reference accent
+  static const purpleDim = AppColors.accentStrongDark; // accent shadow
   static const muted = Color(0xFF8E8EBA); // inactive text / borders
   static const textPrimary = Color(0xFFE8E8FF); // near-white body text
   static const textSecondary = Color(0xFFC2C2E8); // secondary labels

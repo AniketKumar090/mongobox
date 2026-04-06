@@ -5,21 +5,14 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 
-# ── Voice cloning (Coqui XTTS-v2) ─────────────────────────────────────────────
-TTS==0.22.0
-transformers==4.41.2
+# ── Voice cloning (NeuTTS) ────────────────────────────────────────────────────
+neutts==1.2.1
 
-# ── Deep learning runtime ─────────────────────────────────────────────────────
-torch==2.3.0
-torchaudio==2.3.0
-
-# ── Audio utils (TTS 0.22 requires numpy >= 1.24.3 on Python 3.11) ────────────
-numpy>=1.24.3,<2.0
-scipy>=1.9.0,<1.12
+# ── Audio utils ────────────────────────────────────────────────────────────────
+librosa==0.11.0
+soundfile==0.13.1
 
 # ── Option B: extract instrumental from reference song ─────────────────────────
 yt-dlp>=2024.1.0
 demucs>=4.0.0
-
-# ── BPM detection for karaoke sync ────────────────────────────────────────────
-librosa>=0.10.0
+torchcodec>=0.8.0
