@@ -7,6 +7,11 @@ PODS:
   - CwlCatchException (2.2.1):
     - CwlCatchExceptionSupport (~> 2.2.1)
   - CwlCatchExceptionSupport (2.2.1)
+  - ffmpeg_kit_min_gpl (6.0.3-LTS):
+    - ffmpeg_kit_min_gpl/min-gpl-lts (= 6.0.3-LTS)
+    - Flutter
+  - ffmpeg_kit_min_gpl/min-gpl-lts (6.0.3-LTS):
+    - Flutter
   - Firebase/CoreOnly (11.15.0):
     - FirebaseCore (~> 11.15.0)
   - Firebase/Database (11.15.0):
@@ -89,6 +94,7 @@ PODS:
 DEPENDENCIES:
   - audio_service (from `.symlinks/plugins/audio_service/darwin`)
   - audio_session (from `.symlinks/plugins/audio_session/ios`)
+  - ffmpeg_kit_min_gpl (from `.symlinks/plugins/ffmpeg_kit_min_gpl/ios`)
   - firebase_core (from `.symlinks/plugins/firebase_core/ios`)
   - firebase_database (from `.symlinks/plugins/firebase_database/ios`)
   - Flutter (from `Flutter`)
@@ -125,6 +131,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/audio_service/darwin"
   audio_session:
     :path: ".symlinks/plugins/audio_session/ios"
+  ffmpeg_kit_min_gpl:
+    :path: ".symlinks/plugins/ffmpeg_kit_min_gpl/ios"
   firebase_core:
     :path: ".symlinks/plugins/firebase_core/ios"
   firebase_database:
@@ -163,6 +171,7 @@ SPEC CHECKSUMS:
   audio_session: 9bb7f6c970f21241b19f5a3658097ae459681ba0
   CwlCatchException: 7acc161b299a6de7f0a46a6ed741eae2c8b4d75a
   CwlCatchExceptionSupport: 54ccab8d8c78907b57f99717fb19d4cc3bce02dc
+  ffmpeg_kit_min_gpl: beac0e239178b83d2702a2abfe5d486c2e23f3c6
   Firebase: d99ac19b909cd2c548339c2241ecd0d1599ab02e
   firebase_core: 995454a784ff288be5689b796deb9e9fa3601818
   firebase_database: 849f8848dc65e1aadf53252b9f5044806eeec8b8

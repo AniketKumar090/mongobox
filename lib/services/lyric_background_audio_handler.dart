@@ -27,11 +27,13 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
   LyricBackgroundAudioHandler() {
     _bindPlayerListeners();
     _bindPositionTracking();
+    _bindDurationTracking();
   }
 
   AudioPlayer _player = AudioPlayer();
   bool _loopEnabled = false;
   StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlaybackState>? _playbackEventSubscription;
   Duration _trackedPosition = Duration.zero;
   bool _hasLoadedSource = false;
@@ -63,6 +65,22 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
     _playbackEventSubscription = _player.playbackEventStream
         .map(_transformEvent)
         .listen(playbackState.add, onError: (_) {}, cancelOnError: false);
+  }
+
+  void _bindDurationTracking() {
+    _durationSubscription?.cancel();
+    _durationSubscription = _player.durationStream.listen(
+      (duration) {
+        final current = mediaItem.value;
+        if (current == null || duration == null || duration <= Duration.zero) {
+          return;
+        }
+        if (current.duration == duration) return;
+        mediaItem.add(current.copyWith(duration: duration));
+      },
+      onError: (_) {},
+      cancelOnError: false,
+    );
   }
 
   PlaybackState _transformEvent(PlaybackEvent event) {
@@ -158,6 +176,13 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
           ),
         );
         _hasLoadedSource = true;
+
+        if (mediaItem != null &&
+            duration != null &&
+            duration > Duration.zero &&
+            this.mediaItem.value?.duration != duration) {
+          this.mediaItem.add(mediaItem.copyWith(duration: duration));
+        }
 
         if (initialPosition != null && initialPosition > Duration.zero) {
           final safeTarget =
@@ -263,6 +288,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
     _hasLoadedSource = false;
     _bindPlayerListeners();
     _bindPositionTracking();
+    _bindDurationTracking();
     try {
       await _player.setLoopMode(_loopEnabled ? LoopMode.one : LoopMode.off);
     } catch (_) {}
