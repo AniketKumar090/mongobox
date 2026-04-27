@@ -15,6 +15,7 @@ import '../services/local_suggestions_service.dart';
 import '../services/youtube_quota_monitor.dart';
 import '../services/lightweight_search_service.dart';
 import '../services/tts_service.dart';
+import '../services/lyric_background_audio_handler.dart';
 import '../services/lyric_audio_registry.dart';
 import '../services/lyric_audio_playback.dart';
 import '../services/youtube_audio_stream_service.dart';
@@ -38,7 +39,8 @@ class LyricHomeScreen extends StatefulWidget {
   State<LyricHomeScreen> createState() => _LyricHomeScreenState();
 }
 
-class _LyricHomeScreenState extends State<LyricHomeScreen> {
+class _LyricHomeScreenState extends State<LyricHomeScreen>
+    with WidgetsBindingObserver {
   final _lyricController = TextEditingController();
   final _playbackService = PlaybackServiceMobile();
   final _quotaMonitor = YouTubeQuotaMonitor();
@@ -60,6 +62,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   double _volumeSystemCap = 1.0;
   StreamSubscription<dynamic>? _volumeSubscription;
   Timer? _speechRestartTimer;
+  Timer? _backgroundWidgetRefreshTimer;
 
   // ── Completion listener ───────────────────────────────────────────────────
   StreamSubscription<PlayerState>? _playerStateSubscription;
@@ -78,12 +81,90 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_initVolumeController());
     _loadSuggestions();
     _initTts();
     _bindPlayerCompletionListener();
     // Re-sync UI with any playback that survived a hot-restart.
     _recoverPlaybackState();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+        break;
+      case AppLifecycleState.detached:
+        _backgroundWidgetRefreshTimer?.cancel();
+        break;
+    }
+  }
+
+  MediaItem? _currentBackgroundMediaItem() {
+    if (_nowPlaying != null) {
+      final duration = _audio.player.duration;
+      return MediaItem(
+        id: _nowPlaying!.videoId,
+        title: _nowPlaying!.trackName,
+        artist: _nowPlaying!.artistName,
+        artUri: Uri.parse(
+          'https://img.youtube.com/vi/${_nowPlaying!.videoId}/0.jpg',
+        ),
+        duration: duration,
+      );
+    }
+
+    final player = _audio.player;
+    final sequence = player.sequence;
+    final index = player.currentIndex ?? 0;
+    if (sequence != null && index >= 0 && index < sequence.length) {
+      final tag = sequence[index].tag;
+      if (tag is MediaItem) {
+        final duration = player.duration;
+        if (duration != null &&
+            duration > Duration.zero &&
+            tag.duration != duration) {
+          return tag.copyWith(duration: duration);
+        }
+        return tag;
+      }
+    }
+
+    final audio = _audio;
+    if (audio is LyricBackgroundAudioHandler) {
+      return audio.mediaItem.value;
+    }
+    return null;
+  }
+
+  void _refreshBackgroundPlaybackWidget({bool scheduleFollowUp = false}) {
+    _backgroundWidgetRefreshTimer?.cancel();
+    final player = _audio.player;
+    if (_nowPlaying == null && player.processingState == ProcessingState.idle) {
+      return;
+    }
+    final audio = _audio;
+    if (audio is LyricBackgroundAudioHandler) {
+      audio.reassertSystemState(preferredItem: _currentBackgroundMediaItem());
+      if (scheduleFollowUp) {
+        _backgroundWidgetRefreshTimer = Timer(
+          const Duration(milliseconds: 250),
+          () {
+            if (!mounted) return;
+            audio.reassertSystemState(
+              preferredItem: _currentBackgroundMediaItem(),
+            );
+          },
+        );
+      }
+    }
   }
 
   void _recoverPlaybackState() {
@@ -118,6 +199,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         matchedLyricLine: null,
       );
     });
+    _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
   }
 
   // ── Bind a listener that reacts when the track finishes naturally ──────────
@@ -129,6 +211,10 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         // When the player reaches the end of the track (not looping),
         // clear the loading/starting flags so the UI is responsive again.
         if (state.processingState == ProcessingState.completed) {
+          if (_isLooping) {
+            setState(() => _isStartingStreamPlayback = false);
+            return;
+          }
           unawaited(_audio.player.pause());
           setState(() {
             _isStartingStreamPlayback = false;
@@ -214,11 +300,13 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _volumeSubscription?.cancel();
     _volumeSubscription = null;
     _playerStateSubscription?.cancel();
     _playerStateSubscription = null;
     _speechRestartTimer?.cancel();
+    _backgroundWidgetRefreshTimer?.cancel();
     _lyricController.dispose();
     unawaited(_speech.cancel());
     unawaited(_audio.stop());
@@ -272,6 +360,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         ),
       );
       _applyStreamPlayerVolume();
+      _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
     } catch (e, st) {
       debugPrint('[LyricPlay] Stream playback failed: $e\n$st');
       if (mounted) {
@@ -789,6 +878,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
 
     if (isEffectivelyPlaying) {
       await p.pause();
+      _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
     } else {
       // If the track finished, replay from the true beginning instead of the
       // lyric-match preroll that is only meant for the initial search result.
@@ -796,6 +886,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen> {
         await p.seek(Duration.zero);
       }
       await p.play();
+      _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
     }
   }
 

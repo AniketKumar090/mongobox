@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../constants/colors.dart';
 import 'join_via_link_screen.dart';
 import '../services/youtube_mobile_service.dart';
@@ -69,6 +70,12 @@ class JoinPartyScreen extends StatefulWidget {
 class _JoinPartyScreenState extends State<JoinPartyScreen> {
   static const Duration _partyHeartbeatGrace = Duration(seconds: 35);
   static const Duration _initialStatusGrace = Duration(seconds: 12);
+  static const Duration _guestPlaybackSyncInterval = Duration(
+    milliseconds: 50,
+  );
+  static const int _guestSeekDeadbandMs = 1200;
+  static const int _guestLoadLeadMs = 0;
+  static const int _maxPlaybackDriftMs = 60000;
   final _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   final YoutubeMobileService _youtube = YoutubeMobileService();
@@ -76,14 +83,23 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
   late SharedQueueService _queueService;
   late String _effectivePartyId;
   StreamSubscription<PartyLiveStatus>? _partyStatusSubscription;
+  StreamSubscription<PartyPlaybackState>? _playbackSubscription;
+  StreamSubscription<int>? _serverTimeOffsetSubscription;
   Timer? _partyStatusTimer;
+  YoutubePlayerController? _guestPlayerController;
+  Timer? _guestPlaybackRetryTimer;
+  Timer? _guestPlaybackSyncTimer;
   List<Map<String, dynamic>> _results = [];
   bool _searching = false;
   final Set<String> _addedIds = {};
   PartyLiveStatus _partyStatus = const PartyLiveStatus();
+  PartyPlaybackState _latestPlaybackState = const PartyPlaybackState();
   bool _partyStatusLoaded = false;
   bool _partyEndedNoticeShown = false;
   bool _hasSeenPartyLive = false;
+  bool _remoteWantsPlaying = false;
+  String _guestSongId = '';
+  int _serverTimeOffsetMs = 0;
 
   @override
   void initState() {
@@ -97,6 +113,11 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
     debugPrint('👥 ========================================');
 
     _queueService = SharedQueueService(partyId: _effectivePartyId);
+    _serverTimeOffsetSubscription = _queueService.streamServerTimeOffset().listen(
+      (offsetMs) {
+        _serverTimeOffsetMs = offsetMs;
+      },
+    );
     _partyStatusSubscription = _queueService.streamPartyStatus().listen((
       status,
     ) {
@@ -122,15 +143,131 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
       _handlePartyEnded();
       setState(() {});
     });
+
+    _playbackSubscription = _queueService.streamPlaybackState().listen(
+      _applyRemotePlaybackState,
+    );
   }
 
   @override
   void dispose() {
+    _serverTimeOffsetSubscription?.cancel();
     _partyStatusSubscription?.cancel();
+    _playbackSubscription?.cancel();
     _partyStatusTimer?.cancel();
+    _guestPlaybackRetryTimer?.cancel();
+    _guestPlaybackSyncTimer?.cancel();
+    _guestPlayerController?.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  int get _serverNowMs =>
+      DateTime.now().millisecondsSinceEpoch + _serverTimeOffsetMs;
+
+  DateTime get _serverNow =>
+      DateTime.fromMillisecondsSinceEpoch(_serverNowMs);
+
+  void _applyRemotePlaybackState(PartyPlaybackState state) {
+    _latestPlaybackState = state;
+    final songId = state.songId.trim();
+    if (songId.isEmpty) {
+      _guestSongId = '';
+      _remoteWantsPlaying = false;
+      _guestPlayerController?.pause();
+      _guestPlaybackRetryTimer?.cancel();
+      _guestPlaybackSyncTimer?.cancel();
+      return;
+    }
+
+    _reconcileGuestPlaybackState();
+    _ensureGuestPlaybackSyncLoop();
+  }
+
+  void _ensureGuestPlaybackSyncLoop() {
+    if (_guestPlaybackSyncTimer?.isActive == true) return;
+    _guestPlaybackSyncTimer = Timer.periodic(_guestPlaybackSyncInterval, (_) {
+      if (!mounted || !_latestPlaybackState.hasTrack) {
+        _guestPlaybackSyncTimer?.cancel();
+        return;
+      }
+      _reconcileGuestPlaybackState();
+    });
+  }
+
+  int _targetPositionMs(PartyPlaybackState state) {
+    var targetMs = state.positionMs;
+    final updatedAt = state.updatedAt;
+    if (state.isPlaying && updatedAt != null) {
+      final driftMs =
+          (_serverNowMs - updatedAt.millisecondsSinceEpoch)
+              .clamp(0, _maxPlaybackDriftMs)
+              .toInt();
+      targetMs += driftMs;
+    }
+    return targetMs;
+  }
+
+  void _reconcileGuestPlaybackState({bool forceTrackLoad = false}) {
+    final state = _latestPlaybackState;
+    final songId = state.songId.trim();
+    if (songId.isEmpty) return;
+
+    final targetMs = _targetPositionMs(state);
+    final loadStartAt = (targetMs + _guestLoadLeadMs).clamp(0, 1 << 31).toInt() ~/
+        1000;
+    var controller = _guestPlayerController;
+    if (controller == null) {
+      _guestSongId = songId;
+      controller = YoutubePlayerController(
+        initialVideoId: songId,
+        flags: YoutubePlayerFlags(
+          autoPlay: false,
+          mute: false,
+          startAt: loadStartAt,
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _guestPlayerController = controller);
+    } else if (forceTrackLoad || _guestSongId != songId) {
+      _guestSongId = songId;
+      controller.load(songId, startAt: loadStartAt);
+    }
+
+    final currentMs = controller.value.position.inMilliseconds;
+    if ((targetMs - currentMs).abs() > _guestSeekDeadbandMs) {
+      final safeTargetMs = targetMs.clamp(0, 1 << 31).toInt();
+      controller.seekTo(Duration(milliseconds: safeTargetMs));
+    }
+
+    _remoteWantsPlaying = state.isPlaying;
+    if (state.isPlaying) {
+      controller.play();
+      _ensureGuestPlaybackRetry();
+    } else {
+      _guestPlaybackRetryTimer?.cancel();
+      controller.pause();
+    }
+  }
+
+  void _ensureGuestPlaybackRetry() {
+    _guestPlaybackRetryTimer?.cancel();
+    _guestPlaybackRetryTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_remoteWantsPlaying) {
+        _guestPlaybackRetryTimer?.cancel();
+        return;
+      }
+      final controller = _guestPlayerController;
+      if (controller == null) return;
+      final value = controller.value;
+      final alreadyPlaying =
+          value.isPlaying ||
+          value.playerState == PlayerState.playing ||
+          value.playerState == PlayerState.buffering;
+      if (alreadyPlaying) return;
+      controller.play();
+    });
   }
 
   bool get _isPartyLive {
@@ -139,7 +276,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
     final lastSeenAt = _partyStatus.hostLastSeenAt;
     final heartbeatIsFresh =
         lastSeenAt != null &&
-        DateTime.now().difference(lastSeenAt) <= _partyHeartbeatGrace;
+        _serverNow.difference(lastSeenAt) <= _partyHeartbeatGrace;
 
     if (_partyStatus.endedAt != null) {
       return false;
@@ -282,10 +419,17 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _partyBg,
-      body: SafeArea(
-        child: LayoutBuilder(
+    return GestureDetector(
+      onTap: () {
+        if (_remoteWantsPlaying) {
+          _guestPlayerController?.play();
+        }
+      },
+      behavior: HitTestBehavior.translucent,
+      child: Scaffold(
+        backgroundColor: _partyBg,
+        body: SafeArea(
+          child: LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 640;
             final horizontalPadding = compact ? 16.0 : 28.0;
@@ -307,6 +451,8 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
                       _buildHeaderCard(context, compact),
                       const SizedBox(height: 10),
                       _buildStatusBar(),
+                      if (_guestPlayerController != null)
+                        _buildSyncedAudioBridge(),
                       const SizedBox(height: 10),
                       _buildSearchCard(),
                       const SizedBox(height: 10),
@@ -319,6 +465,7 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               ),
             );
           },
+          ),
         ),
       ),
     );
@@ -500,7 +647,49 @@ class _JoinPartyScreenState extends State<JoinPartyScreen> {
               ],
             ),
           ),
+          if (isLive && _remoteWantsPlaying) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: Text(
+                'Tap screen for audio',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildSyncedAudioBridge() {
+    final controller = _guestPlayerController;
+    if (controller == null) {
+      return const SizedBox.shrink();
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        height: 0.01,
+        child: YoutubePlayer(
+          controller: controller,
+          showVideoProgressIndicator: false,
+          onReady: () {
+            _reconcileGuestPlaybackState();
+            _ensureGuestPlaybackRetry();
+            _ensureGuestPlaybackSyncLoop();
+          },
+        ),
       ),
     );
   }

@@ -17,6 +17,12 @@ class SharedQueueService {
   late final DatabaseReference _metaRef = FirebaseDatabase.instanceFor(
     app: Firebase.app("MongoBox"),
   ).ref('parties/$_partyId/meta');
+  late final DatabaseReference _playbackRef = FirebaseDatabase.instanceFor(
+    app: Firebase.app("MongoBox"),
+  ).ref('parties/$_partyId/playback');
+  late final DatabaseReference _serverTimeOffsetRef = FirebaseDatabase.instanceFor(
+    app: Firebase.app("MongoBox"),
+  ).ref('.info/serverTimeOffset');
 
   /// Private constructor
   SharedQueueService._internal({required String partyId}) : _partyId = partyId {
@@ -150,6 +156,32 @@ class SharedQueueService {
     });
   }
 
+  Stream<PartyPlaybackState> streamPlaybackState() {
+    return _playbackRef.onValue.map((event) {
+      final data = event.snapshot.value;
+      if (data is Map<dynamic, dynamic>) {
+        return PartyPlaybackState.fromJson(data);
+      }
+      return const PartyPlaybackState();
+    });
+  }
+
+  Stream<int> streamServerTimeOffset() {
+    return _serverTimeOffsetRef.onValue.map((event) {
+      final raw = event.snapshot.value;
+      return (raw as num?)?.toInt() ?? 0;
+    });
+  }
+
+  Future<PartyPlaybackState> fetchPlaybackState() async {
+    final snapshot = await _playbackRef.get();
+    final data = snapshot.value;
+    if (data is Map<dynamic, dynamic>) {
+      return PartyPlaybackState.fromJson(data);
+    }
+    return const PartyPlaybackState();
+  }
+
   Future<PartyLiveStatus> fetchPartyStatus() async {
     final snapshot = await _metaRef.get();
     final data = snapshot.value;
@@ -203,9 +235,7 @@ class SharedQueueService {
     try {
       await _metaRef.onDisconnect().cancel();
     } catch (e) {
-      print(
-        '⚠️ Error cancelling onDisconnect handler for party $_partyId: $e',
-      );
+      print('⚠️ Error cancelling onDisconnect handler for party $_partyId: $e');
     }
 
     try {
@@ -215,6 +245,31 @@ class SharedQueueService {
       });
     } catch (e) {
       print('❌ Error stopping hosting session for party $_partyId: $e');
+    }
+  }
+
+  Future<void> publishPlaybackState({
+    required String songId,
+    required bool isPlaying,
+    required int positionMs,
+  }) async {
+    try {
+      await _playbackRef.set({
+        'songId': songId,
+        'isPlaying': isPlaying,
+        'positionMs': positionMs,
+        'updatedAt': ServerValue.timestamp,
+      });
+    } catch (e) {
+      print('❌ Error publishing playback state for party $_partyId: $e');
+    }
+  }
+
+  Future<void> clearPlaybackState() async {
+    try {
+      await _playbackRef.remove();
+    } catch (e) {
+      print('❌ Error clearing playback state for party $_partyId: $e');
     }
   }
 
@@ -517,6 +572,31 @@ class PartyLiveStatus {
       startedAt: _parsePartyTimestamp(json['startedAt']),
       hostLastSeenAt: _parsePartyTimestamp(json['hostLastSeenAt']),
       endedAt: _parsePartyTimestamp(json['endedAt']),
+    );
+  }
+}
+
+class PartyPlaybackState {
+  const PartyPlaybackState({
+    this.songId = '',
+    this.isPlaying = false,
+    this.positionMs = 0,
+    this.updatedAt,
+  });
+
+  final String songId;
+  final bool isPlaying;
+  final int positionMs;
+  final DateTime? updatedAt;
+
+  bool get hasTrack => songId.trim().isNotEmpty;
+
+  factory PartyPlaybackState.fromJson(Map<dynamic, dynamic> json) {
+    return PartyPlaybackState(
+      songId: json['songId']?.toString() ?? '',
+      isPlaying: json['isPlaying'] == true,
+      positionMs: (json['positionMs'] as num?)?.toInt() ?? 0,
+      updatedAt: _parsePartyTimestamp(json['updatedAt']),
     );
   }
 }

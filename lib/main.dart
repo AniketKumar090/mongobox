@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
-import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'screens/web/home_screen_web.dart'
     if (dart.library.io) 'screens/home_screen_stub.dart'
     as jukebox;
@@ -11,14 +9,7 @@ import 'firebase_options.dart';
 import 'constants/colors.dart';
 import 'services/env_config.dart';
 import 'services/audio_session_service.dart';
-import 'services/lyric_audio_registry.dart';
-import 'services/lyric_background_audio_handler.dart';
 import 'theme/app_theme_controller.dart';
-
-bool get _isIosOrAndroid =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.android);
 
 class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
   const _InstantPageTransitionsBuilder();
@@ -115,25 +106,6 @@ ThemeData _buildAppTheme(Brightness brightness) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  if (_isIosOrAndroid) {
-    try {
-      final handler = await AudioService.init(
-        builder: () => LyricBackgroundAudioHandler(),
-        config: const AudioServiceConfig(
-          androidNotificationChannelId: 'com.mongobox.audio',
-          androidNotificationChannelName: 'LyricQsk Playback',
-          androidNotificationOngoing: true,
-          androidStopForegroundOnPause: true,
-        ),
-      );
-      LyricAudioRegistry.register(handler);
-    } catch (e, st) {
-      debugPrint(
-        'AudioService init failed (fallback to plain player): $e\n$st',
-      );
-    }
-  }
 
   // Load environment variables from .env file (best effort)
   try {

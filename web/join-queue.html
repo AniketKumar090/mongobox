@@ -414,6 +414,29 @@
       line-height: 1.35;
       padding-top: 6px;
     }
+
+    .sync-audio-btn {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      z-index: 1000;
+      height: 44px;
+      padding: 0 16px;
+      border: none;
+      border-radius: 22px;
+      background: #171717;
+      color: #fff;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+    }
+    .sync-audio-btn.visible { display: inline-flex; }
   </style>
 </head>
 <body>
@@ -478,10 +501,15 @@
 
 <!-- Toast -->
 <div class="toast-wrap" id="toast-wrap"></div>
+<button id="sync-audio-btn" class="sync-audio-btn" onclick="resumeSyncedAudio()">
+  ▶ Tap to enable synced audio
+</button>
+<div id="sync-audio-player" style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;"></div>
 
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
 <script>
   const urlParams = new URLSearchParams(window.location.search);
   const partyId = urlParams.get('partyId') || 'default_party';
@@ -503,6 +531,177 @@
 
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
+  let ytPlayer = null;
+  let ytReady = false;
+  let currentSyncedSongId = '';
+  let latestPlaybackState = null;
+  let remoteWantsPlaying = false;
+  let lastPlaybackUpdateMs = 0;
+  let lastPlayAttemptMs = 0;
+  let serverTimeOffsetMs = 0;
+
+  const PLAYBACK_SYNC_INTERVAL_MS = 50;
+  const SEEK_DEADBAND_SEC = 1.2;
+  const SEEK_EXECUTION_LAG_SEC = 0.3;
+  const LOAD_START_LEAD_SEC = 0.0;
+  const MAX_PLAYBACK_DRIFT_MS = 60000;
+  const PLAYBACK_RETRY_COOLDOWN_MS = 3000;
+  const STALE_PLAYBACK_AFTER_MS = 25000;
+
+  db.ref('/.info/serverTimeOffset').on('value', (snap) => {
+    serverTimeOffsetMs = Number(snap.val() || 0);
+  });
+
+  const syncAudioBtn = document.getElementById('sync-audio-btn');
+
+  function showSyncAudioButton(show) {
+    if (show) {
+      syncAudioBtn.classList.add('visible');
+    } else {
+      syncAudioBtn.classList.remove('visible');
+    }
+  }
+
+  function ensureSyncPlayer() {
+    if (!ytReady || ytPlayer) return;
+    ytPlayer = new YT.Player('sync-audio-player', {
+      height: '1',
+      width: '1',
+      videoId: '',
+      playerVars: {
+        autoplay: 1,
+        controls: 0,
+        rel: 0,
+        fs: 0,
+        modestbranding: 1,
+      },
+      events: {
+        onReady: () => {
+          // Player is ready for real-time sync state.
+        },
+      },
+    });
+  }
+
+  window.onYouTubeIframeAPIReady = function() {
+    ytReady = true;
+    ensureSyncPlayer();
+  };
+
+  function computeTargetPosSec(playback) {
+    if (!playback) return 0;
+    const basePosSec = Number(playback.positionMs || 0) / 1000;
+    const updatedAt = Number(playback.updatedAt || 0);
+    const serverNowMs = Date.now() + serverTimeOffsetMs;
+    if (!playback.isPlaying || updatedAt <= 0) {
+      return basePosSec;
+    }
+    const driftMs = Math.max(0, Math.min(MAX_PLAYBACK_DRIFT_MS, serverNowMs - updatedAt));
+    return basePosSec + (driftMs / 1000);
+  }
+
+  function reconcilePlaybackState(forceLoad = false) {
+    const playback = latestPlaybackState;
+    if (!playback || !playback.songId) {
+      remoteWantsPlaying = false;
+      showSyncAudioButton(false);
+      if (ytPlayer && ytPlayer.pauseVideo) {
+        ytPlayer.pauseVideo();
+      }
+      return;
+    }
+
+    ensureSyncPlayer();
+    if (!ytPlayer || !ytPlayer.loadVideoById) return;
+
+    const songId = String(playback.songId || '').trim();
+    if (!songId) return;
+
+    const targetPosSec = computeTargetPosSec(playback);
+    const loadStartSec = Math.max(0, targetPosSec + LOAD_START_LEAD_SEC);
+
+    if (forceLoad || currentSyncedSongId !== songId) {
+      currentSyncedSongId = songId;
+      ytPlayer.loadVideoById(songId, loadStartSec);
+    }
+    const serverNowMs = Date.now() + serverTimeOffsetMs;
+    const updatedAt = Number(playback.updatedAt || 0);
+
+    if (updatedAt > 0) {
+      lastPlaybackUpdateMs = updatedAt;
+    } else {
+      lastPlaybackUpdateMs = serverNowMs;
+    }
+
+    try {
+      const currentSec = Number(ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0);
+      const adjustedTargetSec = targetPosSec + SEEK_EXECUTION_LAG_SEC;
+      if (Math.abs(adjustedTargetSec - currentSec) > SEEK_DEADBAND_SEC) {
+        ytPlayer.seekTo(adjustedTargetSec, true);
+      }
+    } catch (_) {}
+
+    const wasRemoteWantsPlaying = remoteWantsPlaying;
+    remoteWantsPlaying = playback.isPlaying === true;
+    if (remoteWantsPlaying) {
+      const shouldPlayImmediately = !wasRemoteWantsPlaying;
+      const state = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+      if (state !== 1 && state !== 3) {
+        if (
+          shouldPlayImmediately ||
+          serverNowMs - lastPlayAttemptMs >= PLAYBACK_RETRY_COOLDOWN_MS
+        ) {
+          lastPlayAttemptMs = serverNowMs;
+          ytPlayer.playVideo();
+        }
+      }
+      window.setTimeout(() => {
+        try {
+          const state = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+          // 1=playing, 3=buffering; anything else might indicate autoplay blocked
+          showSyncAudioButton(!(state === 1 || state === 3));
+        } catch (_) {
+          showSyncAudioButton(true);
+        }
+      }, 900);
+    } else {
+      showSyncAudioButton(false);
+      ytPlayer.pauseVideo();
+    }
+  }
+
+  function applyPlaybackState(playback) {
+    latestPlaybackState = playback || null;
+    if (!latestPlaybackState || !latestPlaybackState.songId) {
+      reconcilePlaybackState(false);
+      return;
+    }
+    const songId = String(latestPlaybackState.songId || '').trim();
+    reconcilePlaybackState(currentSyncedSongId !== songId);
+  }
+
+  window.resumeSyncedAudio = function() {
+    if (!ytPlayer || !remoteWantsPlaying) return;
+    lastPlayAttemptMs = Date.now() + serverTimeOffsetMs;
+    ytPlayer.playVideo();
+    showSyncAudioButton(false);
+  };
+
+  function watchPlaybackSync() {
+    db.ref(`parties/${partyId}/playback`).on('value', (snap) => {
+      applyPlaybackState(snap.val());
+    });
+
+    window.setInterval(() => {
+      if (!latestPlaybackState || !latestPlaybackState.songId) return;
+      const serverNowMs = Date.now() + serverTimeOffsetMs;
+      // If no host update for too long, do not force.
+      if (remoteWantsPlaying && serverNowMs - lastPlaybackUpdateMs > STALE_PLAYBACK_AFTER_MS) {
+        return;
+      }
+      reconcilePlaybackState(false);
+    }, PLAYBACK_SYNC_INTERVAL_MS);
+  }
 
   // ── Trending songs (curated popular tracks) ───────────────────────────────
   const TRENDING = [
@@ -640,6 +839,7 @@
   window.addEventListener('load', () => {
     buildTrendingChips();
     document.getElementById('query').focus();
+    watchPlaybackSync();
   });
 </script>
 </body>

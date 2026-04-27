@@ -52,6 +52,9 @@ class HostPartyScreen extends StatefulWidget {
 
 class _HostPartyScreenState extends State<HostPartyScreen>
     with TickerProviderStateMixin {
+  static const Duration _playbackPublishInterval = Duration(milliseconds: 50);
+  static const int _playbackPublishLeadMs = 10;
+
   late SharedQueueService _queueService;
   late String _partyId;
   List<Song> queue = [];
@@ -62,9 +65,13 @@ class _HostPartyScreenState extends State<HostPartyScreen>
   bool _searching = false;
   StreamSubscription<List<Song>>? _queueSubscription;
   Timer? _hostHeartbeatTimer;
+  Timer? _playbackSyncTimer;
   bool _isReordering = false;
   bool _hostSessionOpen = false;
   bool _isEndingParty = false;
+  String _activeSongId = '';
+  bool _playbackStateCleared = true;
+  bool? _lastObservedHostIsPlaying;
 
   @override
   void initState() {
@@ -83,18 +90,30 @@ class _HostPartyScreenState extends State<HostPartyScreen>
 
   void _startHostSession() {
     _hostSessionOpen = true;
+    _lastObservedHostIsPlaying = null;
     unawaited(_queueService.startHostingSession());
+    _playbackStateCleared = true;
+    unawaited(_queueService.clearPlaybackState());
     _hostHeartbeatTimer?.cancel();
     _hostHeartbeatTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (!_hostSessionOpen) return;
       unawaited(_queueService.pulseHostingSession());
+    });
+    _playbackSyncTimer?.cancel();
+    _playbackSyncTimer = Timer.periodic(_playbackPublishInterval, (_) {
+      unawaited(_publishPlaybackSnapshot());
     });
   }
 
   Future<void> _closeHostSession() async {
     if (!_hostSessionOpen) return;
     _hostSessionOpen = false;
+    _activeSongId = '';
+    _playbackStateCleared = true;
+    _lastObservedHostIsPlaying = null;
     _hostHeartbeatTimer?.cancel();
+    _playbackSyncTimer?.cancel();
+    await _queueService.clearPlaybackState();
     await _queueService.stopHostingSession();
   }
 
@@ -109,7 +128,12 @@ class _HostPartyScreenState extends State<HostPartyScreen>
 
   void _playFirstIfNeeded() {
     if (queue.isEmpty) {
+      _playerController?.removeListener(_handleHostPlayerChanged);
       _playerController?.dispose();
+      _activeSongId = '';
+      _playbackStateCleared = true;
+      _lastObservedHostIsPlaying = null;
+      unawaited(_queueService.clearPlaybackState());
       if (mounted) {
         setState(() => _playerController = null);
       } else {
@@ -118,41 +142,47 @@ class _HostPartyScreenState extends State<HostPartyScreen>
       return;
     }
     final first = queue.first;
-    if (_playerController?.metadata.videoId == first.id) return;
+    if (_activeSongId == first.id) return;
     _setActiveTrack(first, autoPlay: true);
   }
 
   void _setActiveTrack(Song song, {required bool autoPlay}) {
     final controller = _playerController;
     if (controller == null) {
+      _activeSongId = song.id;
       final nextController = YoutubePlayerController(
         initialVideoId: song.id,
         flags: YoutubePlayerFlags(autoPlay: autoPlay, mute: false),
       );
+      nextController.addListener(_handleHostPlayerChanged);
       if (mounted) {
         setState(() => _playerController = nextController);
       } else {
         _playerController = nextController;
       }
+      unawaited(_publishPlaybackSnapshot(forceSongId: song.id));
       return;
     }
 
-    if (controller.metadata.videoId == song.id) {
+    if (_activeSongId == song.id) {
       if (autoPlay) {
         controller.play();
       } else {
         controller.pause();
       }
       if (mounted) setState(() {});
+      unawaited(_publishPlaybackSnapshot(forceSongId: song.id));
       return;
     }
 
+    _activeSongId = song.id;
     if (autoPlay) {
       controller.load(song.id);
     } else {
       controller.cue(song.id);
     }
     if (mounted) setState(() {});
+    unawaited(_publishPlaybackSnapshot(forceSongId: song.id));
   }
 
   Future<void> _togglePlayback() async {
@@ -168,6 +198,52 @@ class _HostPartyScreenState extends State<HostPartyScreen>
       controller.play();
     }
     if (mounted) setState(() {});
+    await _publishPlaybackSnapshot();
+  }
+
+  void _handleHostPlayerChanged() {
+    final controller = _playerController;
+    if (controller == null || !_hostSessionOpen) return;
+    final value = controller.value;
+    final playerState = value.playerState;
+    final isPlaying =
+        value.isPlaying ||
+        playerState == PlayerState.playing ||
+        playerState == PlayerState.buffering;
+    if (_lastObservedHostIsPlaying == isPlaying) return;
+    _lastObservedHostIsPlaying = isPlaying;
+    unawaited(_publishPlaybackSnapshot());
+  }
+
+  Future<void> _publishPlaybackSnapshot({String? forceSongId}) async {
+    if (!_hostSessionOpen) return;
+    final controller = _playerController;
+    final activeSongId = forceSongId ?? _activeSongId;
+    if (activeSongId.trim().isEmpty) {
+      if (_playbackStateCleared) return;
+      _playbackStateCleared = true;
+      await _queueService.clearPlaybackState();
+      return;
+    }
+
+    final value = controller?.value;
+    final playerState = value?.playerState;
+    final isPlaying =
+        value?.isPlaying == true ||
+        playerState == PlayerState.playing ||
+        playerState == PlayerState.buffering;
+    final rawPositionMs = value?.position.inMilliseconds ?? 0;
+    final positionMs =
+        rawPositionMs + (isPlaying ? _playbackPublishLeadMs : 0);
+
+    _playbackStateCleared = false;
+    _lastObservedHostIsPlaying = isPlaying;
+
+    await _queueService.publishPlaybackState(
+      songId: activeSongId,
+      isPlaying: isPlaying,
+      positionMs: positionMs,
+    );
   }
 
   Future<void> _searchSongs() async {
@@ -306,8 +382,12 @@ class _HostPartyScreenState extends State<HostPartyScreen>
         queue = queue.sublist(1);
       }
     } else {
+      _playerController?.removeListener(_handleHostPlayerChanged);
       _playerController?.pause();
       _playerController?.dispose();
+      _activeSongId = '';
+      _playbackStateCleared = true;
+      _lastObservedHostIsPlaying = null;
       if (mounted) {
         setState(() {
           _playerController = null;
@@ -320,6 +400,7 @@ class _HostPartyScreenState extends State<HostPartyScreen>
     }
 
     await _queueService.remove(currentSong.key);
+    await _publishPlaybackSnapshot();
   }
 
   Future<void> _removeSong(Song song) async {
@@ -357,7 +438,12 @@ class _HostPartyScreenState extends State<HostPartyScreen>
       isDangerous: true,
     );
     if (!confirmed) return;
+    _activeSongId = '';
+    _playbackStateCleared = true;
+    _lastObservedHostIsPlaying = null;
     await _queueService.clear();
+    await _queueService.clearPlaybackState();
+    _playerController?.removeListener(_handleHostPlayerChanged);
     _playerController?.dispose();
     if (mounted) setState(() => _playerController = null);
   }
@@ -431,6 +517,8 @@ class _HostPartyScreenState extends State<HostPartyScreen>
   void dispose() {
     _queueSubscription?.cancel();
     _hostHeartbeatTimer?.cancel();
+    _playbackSyncTimer?.cancel();
+    _playerController?.removeListener(_handleHostPlayerChanged);
     if (_hostSessionOpen) {
       _hostSessionOpen = false;
       unawaited(_queueService.stopHostingSession());

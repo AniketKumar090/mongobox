@@ -77,6 +77,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
         }
         if (current.duration == duration) return;
         mediaItem.add(current.copyWith(duration: duration));
+        refreshSystemState();
       },
       onError: (_) {},
       cancelOnError: false,
@@ -84,6 +85,11 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
   }
 
   PlaybackState _transformEvent(PlaybackEvent event) {
+    final playerProcessingState =
+        _loopEnabled && _player.processingState == ProcessingState.completed
+            ? ProcessingState.ready
+            : _player.processingState;
+
     return PlaybackState(
       controls: [
         MediaControl.rewind,
@@ -104,13 +110,51 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
             ProcessingState.buffering: AudioProcessingState.buffering,
             ProcessingState.ready: AudioProcessingState.ready,
             ProcessingState.completed: AudioProcessingState.completed,
-          }[_player.processingState]!,
+          }[playerProcessingState]!,
       playing: _player.playing,
       updatePosition: _player.position,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
       queueIndex: event.currentIndex,
     );
+  }
+
+  void refreshSystemState() {
+    final current = mediaItem.value;
+    final duration = _player.duration;
+    if (current != null &&
+        duration != null &&
+        duration > Duration.zero &&
+        current.duration != duration) {
+      mediaItem.add(current.copyWith(duration: duration));
+    }
+    playbackState.add(_transformEvent(_player.playbackEvent));
+  }
+
+  void reassertSystemState({MediaItem? preferredItem}) {
+    final duration = _player.duration;
+    MediaItem? itemToPublish = preferredItem;
+    if (itemToPublish != null &&
+        duration != null &&
+        duration > Duration.zero &&
+        itemToPublish.duration != duration) {
+      itemToPublish = itemToPublish.copyWith(duration: duration);
+    }
+
+    if (itemToPublish != null) {
+      final current = mediaItem.value;
+      final isSameItem =
+          current?.id == itemToPublish.id &&
+          current?.title == itemToPublish.title &&
+          current?.artist == itemToPublish.artist &&
+          current?.artUri == itemToPublish.artUri &&
+          current?.duration == itemToPublish.duration;
+      if (!isSameItem) {
+        mediaItem.add(itemToPublish);
+      }
+    }
+
+    refreshSystemState();
   }
 
   Duration _capturePosition(AudioPlayer p) {
@@ -182,6 +226,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
             duration > Duration.zero &&
             this.mediaItem.value?.duration != duration) {
           this.mediaItem.add(mediaItem.copyWith(duration: duration));
+          refreshSystemState();
         }
 
         if (initialPosition != null && initialPosition > Duration.zero) {
