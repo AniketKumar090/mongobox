@@ -37,6 +37,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
   StreamSubscription<PlaybackState>? _playbackEventSubscription;
   Duration _trackedPosition = Duration.zero;
   bool _hasLoadedSource = false;
+  int _systemStateRevision = 0;
 
   @override
   AudioPlayer get player => _player;
@@ -84,11 +85,15 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
     );
   }
 
-  PlaybackState _transformEvent(PlaybackEvent event) {
+  PlaybackState _transformEvent(PlaybackEvent event, {int? revision}) {
     final playerProcessingState =
         _loopEnabled && _player.processingState == ProcessingState.completed
             ? ProcessingState.ready
             : _player.processingState;
+    final resolvedRevision = revision ?? _systemStateRevision;
+    final updateTime = DateTime.fromMillisecondsSinceEpoch(
+      DateTime.now().millisecondsSinceEpoch + resolvedRevision,
+    );
 
     return PlaybackState(
       controls: [
@@ -113,6 +118,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
           }[playerProcessingState]!,
       playing: _player.playing,
       updatePosition: _player.position,
+      updateTime: updateTime,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
       queueIndex: event.currentIndex,
@@ -120,6 +126,7 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
   }
 
   void refreshSystemState() {
+    final revision = ++_systemStateRevision;
     final current = mediaItem.value;
     final duration = _player.duration;
     if (current != null &&
@@ -128,12 +135,15 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
         current.duration != duration) {
       mediaItem.add(current.copyWith(duration: duration));
     }
-    playbackState.add(_transformEvent(_player.playbackEvent));
+    playbackState.add(
+      _transformEvent(_player.playbackEvent, revision: revision),
+    );
   }
 
   void reassertSystemState({MediaItem? preferredItem}) {
+    final revision = ++_systemStateRevision;
     final duration = _player.duration;
-    MediaItem? itemToPublish = preferredItem;
+    MediaItem? itemToPublish = preferredItem ?? mediaItem.value;
     if (itemToPublish != null &&
         duration != null &&
         duration > Duration.zero &&
@@ -142,19 +152,32 @@ class LyricBackgroundAudioHandler extends BaseAudioHandler
     }
 
     if (itemToPublish != null) {
-      final current = mediaItem.value;
-      final isSameItem =
-          current?.id == itemToPublish.id &&
-          current?.title == itemToPublish.title &&
-          current?.artist == itemToPublish.artist &&
-          current?.artUri == itemToPublish.artUri &&
-          current?.duration == itemToPublish.duration;
-      if (!isSameItem) {
-        mediaItem.add(itemToPublish);
-      }
+      // Force a real stream transition so the platform re-attaches lock-screen
+      // / notification controls even when the same track is still active.
+      mediaItem.add(null);
+      mediaItem.add(itemToPublish);
     }
 
-    refreshSystemState();
+    playbackState.add(
+      _transformEvent(_player.playbackEvent, revision: revision),
+    );
+  }
+
+  void clearSystemState() {
+    mediaItem.add(null);
+    playbackState.add(
+      PlaybackState(
+        controls: const [],
+        systemActions: const {},
+        androidCompactActionIndices: const [],
+        processingState: AudioProcessingState.idle,
+        playing: false,
+        updatePosition: _player.position,
+        bufferedPosition: Duration.zero,
+        speed: _player.speed,
+        queueIndex: null,
+      ),
+    );
   }
 
   Duration _capturePosition(AudioPlayer p) {

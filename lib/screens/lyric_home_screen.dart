@@ -18,6 +18,7 @@ import '../services/tts_service.dart';
 import '../services/lyric_background_audio_handler.dart';
 import '../services/lyric_audio_registry.dart';
 import '../services/lyric_audio_playback.dart';
+import '../services/stream_waveform_service.dart';
 import '../services/youtube_audio_stream_service.dart';
 import '../services/audio_session_service.dart';
 import '../theme/app_theme_controller.dart';
@@ -31,6 +32,10 @@ import '../screens/generate_song_screen.dart';
 // How many seconds before the matched lyric line playback should begin.
 // ─────────────────────────────────────────────────────────────────────────────
 const int _kPreRollSeconds = 8;
+const int _kTurntableScrubMsPerRevolution = 12000;
+const int _kWaveformBarCount = 84;
+const Duration _kBackgroundWidgetRefreshDelay = Duration(milliseconds: 320);
+const int _kBackgroundWidgetRefreshBursts = 3;
 
 class LyricHomeScreen extends StatefulWidget {
   const LyricHomeScreen({super.key});
@@ -63,6 +68,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   StreamSubscription<dynamic>? _volumeSubscription;
   Timer? _speechRestartTimer;
   Timer? _backgroundWidgetRefreshTimer;
+  Timer? _turntableSeekTimer;
 
   // ── Completion listener ───────────────────────────────────────────────────
   StreamSubscription<PlayerState>? _playerStateSubscription;
@@ -75,6 +81,14 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   List<RecentTrack> _recentTracks = [];
   final SpeechToText _speech = SpeechToText();
   final TtsService _tts = TtsService();
+  List<double> _waveformBars = StreamWaveformService.instance.placeholderBars(
+    barCount: _kWaveformBarCount,
+  );
+  String? _waveformTrackId;
+  bool _isWaveformLoading = false;
+  Duration? _turntablePositionOverride;
+  bool _isTurntableScratching = false;
+  bool _resumePlaybackAfterTurntableScratch = false;
 
   LyricAudioPlayback get _audio => LyricAudioRegistry.instance;
   bool get _isMicActive => _keepMicAlive || _isListening;
@@ -94,15 +108,22 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
-        _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+        _recoverPlaybackState();
+        _refreshBackgroundPlaybackWidget(
+          scheduleFollowUp: true,
+          followUpBursts: _kBackgroundWidgetRefreshBursts,
+        );
         break;
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
-        _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+        _refreshBackgroundPlaybackWidget(
+          scheduleFollowUp: true,
+          followUpBursts: _kBackgroundWidgetRefreshBursts,
+        );
         break;
       case AppLifecycleState.detached:
-        _backgroundWidgetRefreshTimer?.cancel();
+        _cancelBackgroundWidgetRefresh();
         break;
     }
   }
@@ -139,29 +160,75 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
 
     final audio = _audio;
     if (audio is LyricBackgroundAudioHandler) {
-      return audio.mediaItem.value;
+      final item = audio.mediaItem.value;
+      if (item != null) {
+        final duration = player.duration;
+        if (duration != null &&
+            duration > Duration.zero &&
+            item.duration != duration) {
+          return item.copyWith(duration: duration);
+        }
+      }
+      return item;
     }
     return null;
   }
 
-  void _refreshBackgroundPlaybackWidget({bool scheduleFollowUp = false}) {
+  void _clearBackgroundPlaybackWidget() {
+    _cancelBackgroundWidgetRefresh();
+    final audio = _audio;
+    if (audio is LyricBackgroundAudioHandler) {
+      audio.clearSystemState();
+    }
+  }
+
+  void _cancelBackgroundWidgetRefresh() {
     _backgroundWidgetRefreshTimer?.cancel();
+    _backgroundWidgetRefreshTimer = null;
+  }
+
+  void _scheduleBackgroundWidgetRefresh(
+    LyricBackgroundAudioHandler audio, {
+    required int remainingBursts,
+  }) {
+    if (remainingBursts <= 0) return;
+
+    _backgroundWidgetRefreshTimer = Timer(_kBackgroundWidgetRefreshDelay, () {
+      if (!mounted || _isTurntableScratching) return;
+      audio.reassertSystemState(preferredItem: _currentBackgroundMediaItem());
+      _scheduleBackgroundWidgetRefresh(
+        audio,
+        remainingBursts: remainingBursts - 1,
+      );
+    });
+  }
+
+  void _refreshBackgroundPlaybackWidget({
+    bool scheduleFollowUp = false,
+    int followUpBursts = 1,
+  }) {
+    if (_isTurntableScratching) {
+      _clearBackgroundPlaybackWidget();
+      return;
+    }
+    _cancelBackgroundWidgetRefresh();
     final player = _audio.player;
-    if (_nowPlaying == null && player.processingState == ProcessingState.idle) {
+    final handlerHasItem =
+        (_audio is LyricBackgroundAudioHandler)
+            ? (_audio as LyricBackgroundAudioHandler).mediaItem.value != null
+            : false;
+    if (_nowPlaying == null &&
+        player.processingState == ProcessingState.idle &&
+        !handlerHasItem) {
       return;
     }
     final audio = _audio;
     if (audio is LyricBackgroundAudioHandler) {
       audio.reassertSystemState(preferredItem: _currentBackgroundMediaItem());
       if (scheduleFollowUp) {
-        _backgroundWidgetRefreshTimer = Timer(
-          const Duration(milliseconds: 250),
-          () {
-            if (!mounted) return;
-            audio.reassertSystemState(
-              preferredItem: _currentBackgroundMediaItem(),
-            );
-          },
+        _scheduleBackgroundWidgetRefresh(
+          audio,
+          remainingBursts: followUpBursts,
         );
       }
     }
@@ -170,28 +237,32 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
   void _recoverPlaybackState() {
     final player = _audio.player;
 
-    // Nothing to recover if the player is idle or finished.
     if (player.processingState == ProcessingState.idle ||
         player.processingState == ProcessingState.completed) {
       return;
     }
 
-    // just_audio stores the MediaItem we passed as the AudioSource tag.
     final sequence = player.sequence;
     final index = player.currentIndex ?? 0;
-    if (sequence == null || sequence.isEmpty) return;
+    MediaItem? tag;
+    if (sequence != null && sequence.isNotEmpty && index < sequence.length) {
+      final currentTag = sequence[index].tag;
+      if (currentTag is MediaItem) {
+        tag = currentTag;
+      }
+    }
 
-    final tag = sequence[index].tag;
-    if (tag is! MediaItem) return;
+    if (tag == null && _audio is LyricBackgroundAudioHandler) {
+      tag = (_audio as LyricBackgroundAudioHandler).mediaItem.value;
+    }
 
-    final videoId = tag.id;
-    if (videoId.isEmpty) return;
+    if (tag == null || tag.id.isEmpty) return;
 
-    debugPrint('[LyricHome] Recovering playback state for "$videoId"');
+    debugPrint('[LyricHome] Recovering playback state for "${tag.id}"');
 
     setState(() {
       _nowPlaying = PlaybackResult(
-        videoId: videoId,
+        videoId: tag!.id,
         startTimeSeconds: 0,
         trackName: tag.title,
         artistName: tag.artist ?? '',
@@ -306,7 +377,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     _playerStateSubscription?.cancel();
     _playerStateSubscription = null;
     _speechRestartTimer?.cancel();
-    _backgroundWidgetRefreshTimer?.cancel();
+    _cancelBackgroundWidgetRefresh();
+    _turntableSeekTimer?.cancel();
     _lyricController.dispose();
     unawaited(_speech.cancel());
     unawaited(_audio.stop());
@@ -325,6 +397,36 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     return result.startTimeSeconds;
   }
 
+  Future<void> _loadWaveformForTrack(
+    PlaybackResult result,
+    List<BackgroundStreamSource> sources,
+  ) async {
+    final trackId = result.videoId;
+    if (mounted) {
+      setState(() {
+        _waveformTrackId = trackId;
+        _isWaveformLoading = true;
+        _waveformBars = StreamWaveformService.instance.placeholderBars(
+          seed: '$trackId:${result.trackName}:${result.artistName}',
+          barCount: _kWaveformBarCount,
+        );
+      });
+    }
+
+    final bars = await StreamWaveformService.instance.loadWaveform(
+      trackId: trackId,
+      sources: sources,
+      fallbackSeed: '$trackId:${result.trackName}:${result.artistName}',
+      barCount: _kWaveformBarCount,
+    );
+
+    if (!mounted || _waveformTrackId != trackId) return;
+    setState(() {
+      _waveformBars = bars;
+      _isWaveformLoading = false;
+    });
+  }
+
   Future<void> _playResult(PlaybackResult result, {String? searchQuery}) async {
     // Stop any currently playing track first.
     if (_audio.isPlaying) {
@@ -336,9 +438,6 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       _isStartingStreamPlayback = true;
     });
 
-    // Re-bind the completion listener to the (possibly recycled) player.
-    _bindPlayerCompletionListener();
-
     final startSeconds = _resolvePlaybackStart(result);
     final startPosition = Duration(seconds: startSeconds);
 
@@ -346,6 +445,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
       await _audio.setLoopEnabled(_isLooping);
       final streamSources = await YouTubeAudioStreamService.instance
           .getPlayableAudioSources(result.videoId);
+      unawaited(_loadWaveformForTrack(result, streamSources));
       await AppAudioSessionService.activatePlayback();
       await _audio.playSources(
         streamSources,
@@ -359,6 +459,7 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
           ),
         ),
       );
+      _bindPlayerCompletionListener();
       _applyStreamPlayerVolume();
       _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
     } catch (e, st) {
@@ -372,7 +473,11 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
             ),
           ),
         );
-        setState(() => _nowPlaying = null);
+        setState(() {
+          _nowPlaying = null;
+          _waveformTrackId = null;
+          _isWaveformLoading = false;
+        });
       }
       return;
     } finally {
@@ -932,6 +1037,110 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
     );
   }
 
+  Duration _clampPlayerPosition(Duration target) {
+    final total = _audio.player.duration;
+    if (total != null && total > Duration.zero) {
+      return Duration(
+        milliseconds: target.inMilliseconds.clamp(0, total.inMilliseconds),
+      );
+    }
+    return target.isNegative ? Duration.zero : target;
+  }
+
+  void _startTurntableScratch() {
+    if (_nowPlaying == null || _isLoading || _isStartingStreamPlayback) return;
+    if (_isTurntableScratching) return;
+
+    _turntableSeekTimer?.cancel();
+    _turntableSeekTimer = null;
+
+    final player = _audio.player;
+    final currentPosition = _clampPlayerPosition(_audio.position);
+    final wasPlaying =
+        _audio.isPlaying &&
+        player.processingState != ProcessingState.completed &&
+        !_isStartingStreamPlayback;
+
+    setState(() {
+      _isTurntableScratching = true;
+      _resumePlaybackAfterTurntableScratch = wasPlaying;
+      _turntablePositionOverride = currentPosition;
+    });
+    _clearBackgroundPlaybackWidget();
+    try {
+      _audio.player.setVolume(0);
+    } catch (_) {}
+
+    if (wasPlaying) {
+      unawaited(
+        player
+            .pause()
+            .then((_) {
+              if (!mounted) return;
+              _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+            })
+            .catchError((_) {}),
+      );
+    }
+  }
+
+  void _updateTurntableScratch(double angleDelta) {
+    if (!_isTurntableScratching) return;
+
+    final deltaMilliseconds =
+        ((angleDelta / (math.pi * 2)) * _kTurntableScrubMsPerRevolution)
+            .round();
+    if (deltaMilliseconds == 0) return;
+
+    final currentPosition = _turntablePositionOverride ?? _audio.position;
+    final nextPosition = _clampPlayerPosition(
+      currentPosition + Duration(milliseconds: deltaMilliseconds),
+    );
+    if (nextPosition == currentPosition) return;
+
+    setState(() => _turntablePositionOverride = nextPosition);
+    _clearBackgroundPlaybackWidget();
+  }
+
+  void _endTurntableScratch() {
+    if (!_isTurntableScratching) return;
+    unawaited(_finishTurntableScratch());
+  }
+
+  Future<void> _finishTurntableScratch() async {
+    final finalPosition = _clampPlayerPosition(
+      _turntablePositionOverride ?? _audio.position,
+    );
+    final shouldResume =
+        _resumePlaybackAfterTurntableScratch &&
+        _nowPlaying != null &&
+        !_isStartingStreamPlayback;
+
+    _turntableSeekTimer?.cancel();
+    _turntableSeekTimer = null;
+
+    if (mounted) {
+      setState(() {
+        _isTurntableScratching = false;
+        _resumePlaybackAfterTurntableScratch = false;
+        _turntablePositionOverride = null;
+      });
+    }
+
+    try {
+      await _audio.player.seek(finalPosition);
+    } catch (_) {}
+    _applyStreamPlayerVolume();
+    if (shouldResume) {
+      try {
+        await _audio.player.play();
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    _refreshBackgroundPlaybackWidget(scheduleFollowUp: true);
+  }
+
   String _formatClockLabel(int seconds) {
     final safe = seconds < 0 ? 0 : seconds;
     final minutes = safe ~/ 60;
@@ -1040,6 +1249,8 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                             audio: _audio,
                             nowPlaying: _nowPlaying,
                             savedCount: _recentLines.length,
+                            waveformBars: _waveformBars,
+                            isWaveformLoading: _isWaveformLoading,
                             // Pass the combined loading flag to the player card.
                             // The play button shows a spinner only during the
                             // search phase (_isLoading), NOT during stream
@@ -1047,11 +1258,16 @@ class _LyricHomeScreenState extends State<LyricHomeScreen>
                             isLoading: _isLoading,
                             isStreamStarting: _isStartingStreamPlayback,
                             isLooping: _isLooping,
+                            isPlatterScratching: _isTurntableScratching,
+                            positionOverride: _turntablePositionOverride,
                             onToggleLoop: _toggleLooping,
                             onSeekBackward: () => _seekRelative(-10),
                             onPlayPause: _togglePrimaryPlayback,
                             onSeekForward: () => _seekRelative(10),
                             onSeekToFraction: _seekToFraction,
+                            onPlatterScratchStart: _startTurntableScratch,
+                            onPlatterScratchUpdate: _updateTurntableScratch,
+                            onPlatterScratchEnd: _endTurntableScratch,
                           ),
                         ),
                       ],
@@ -1617,60 +1833,41 @@ class _TurntablePlayerCard extends StatefulWidget {
     required this.audio,
     required this.nowPlaying,
     required this.savedCount,
+    required this.waveformBars,
+    required this.isWaveformLoading,
     required this.isLoading,
     required this.isStreamStarting,
     required this.isLooping,
+    required this.isPlatterScratching,
+    required this.positionOverride,
     required this.onToggleLoop,
     required this.onSeekBackward,
     required this.onPlayPause,
     required this.onSeekForward,
     required this.onSeekToFraction,
+    required this.onPlatterScratchStart,
+    required this.onPlatterScratchUpdate,
+    required this.onPlatterScratchEnd,
   });
 
   final LyricAudioPlayback audio;
   final PlaybackResult? nowPlaying;
   final int savedCount;
+  final List<double> waveformBars;
+  final bool isWaveformLoading;
   final bool isLoading;
   final bool isStreamStarting; // separate flag: stream URL being fetched/loaded
   final bool isLooping;
+  final bool isPlatterScratching;
+  final Duration? positionOverride;
   final VoidCallback onToggleLoop;
   final VoidCallback onSeekBackward;
   final VoidCallback onPlayPause;
   final VoidCallback onSeekForward;
   final ValueChanged<double> onSeekToFraction;
-
-  static const List<double> _waveformHeights = [
-    10,
-    14,
-    18,
-    24,
-    16,
-    12,
-    20,
-    28,
-    18,
-    12,
-    26,
-    14,
-    22,
-    32,
-    16,
-    12,
-    18,
-    26,
-    30,
-    16,
-    12,
-    18,
-    22,
-    26,
-    18,
-    14,
-    16,
-    20,
-    14,
-    12,
-  ];
+  final VoidCallback onPlatterScratchStart;
+  final ValueChanged<double> onPlatterScratchUpdate;
+  final VoidCallback onPlatterScratchEnd;
 
   @override
   State<_TurntablePlayerCard> createState() => _TurntablePlayerCardState();
@@ -1678,7 +1875,22 @@ class _TurntablePlayerCard extends StatefulWidget {
 
 class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
     with SingleTickerProviderStateMixin {
+  static const double _kPlatterHapticStep = math.pi / 18;
+  static const Duration _kWaveformSeekThrottle = Duration(milliseconds: 70);
+  static const Duration _kWaveformPreviewReleaseDelay = Duration(
+    milliseconds: 140,
+  );
+
   late final AnimationController _spinFrameController;
+  double? _activeDragAngle;
+  double? _dragRotationAngle;
+  double _platterHapticAngle = 0;
+  bool _isDraggingPlatter = false;
+  double? _waveformScrubFraction;
+  Duration? _waveformScrubPosition;
+  double? _pendingWaveformSeekFraction;
+  Timer? _waveformSeekThrottleTimer;
+  Timer? _waveformPreviewReleaseTimer;
 
   @override
   void initState() {
@@ -1691,13 +1903,183 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
 
   @override
   void dispose() {
+    _waveformSeekThrottleTimer?.cancel();
+    _waveformPreviewReleaseTimer?.cancel();
     _spinFrameController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TurntablePlayerCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isPlatterScratching && !widget.isPlatterScratching) {
+      setState(() {});
+    }
+    if (oldWidget.nowPlaying?.videoId != widget.nowPlaying?.videoId) {
+      _waveformSeekThrottleTimer?.cancel();
+      _waveformPreviewReleaseTimer?.cancel();
+      _pendingWaveformSeekFraction = null;
+      _waveformScrubFraction = null;
+      _waveformScrubPosition = null;
+    }
   }
 
   double _rotationAngleFor(Duration position, Duration duration) {
     if (duration.inMilliseconds == 0) return 0.0;
     return (position.inMilliseconds / 12000) * math.pi * 2;
+  }
+
+  double _angleForLocalPosition(Offset localPosition, Size size) {
+    final center = size.center(Offset.zero);
+    final delta = localPosition - center;
+    return math.atan2(delta.dy, delta.dx);
+  }
+
+  bool _isDragOnVinylSurface(Offset localPosition, Size size) {
+    final center = size.center(Offset.zero);
+    final distance = (localPosition - center).distance;
+    final radius = size.shortestSide / 2;
+    return distance >= radius * 0.24 && distance <= radius * 1.02;
+  }
+
+  double _normalizeAngleDelta(double delta) {
+    if (delta > math.pi) return delta - (math.pi * 2);
+    if (delta < -math.pi) return delta + (math.pi * 2);
+    return delta;
+  }
+
+  void _handlePlatterPanStart(
+    DragStartDetails details,
+    Size size,
+    double baseRotationAngle,
+  ) {
+    if (widget.nowPlaying == null ||
+        widget.isLoading ||
+        widget.isStreamStarting) {
+      return;
+    }
+    if (!_isDragOnVinylSurface(details.localPosition, size)) return;
+
+    _isDraggingPlatter = true;
+    _activeDragAngle = _angleForLocalPosition(details.localPosition, size);
+    _dragRotationAngle = baseRotationAngle;
+    _platterHapticAngle = 0;
+    setState(() {});
+    widget.onPlatterScratchStart();
+  }
+
+  void _handlePlatterPanUpdate(DragUpdateDetails details, Size size) {
+    if (!_isDraggingPlatter || _activeDragAngle == null) return;
+
+    final nextAngle = _angleForLocalPosition(details.localPosition, size);
+    final angleDelta = _normalizeAngleDelta(nextAngle - _activeDragAngle!);
+    _activeDragAngle = nextAngle;
+    if (angleDelta.abs() < 0.002) return;
+
+    _dragRotationAngle = (_dragRotationAngle ?? 0) + angleDelta;
+    _platterHapticAngle += angleDelta.abs();
+    if (_platterHapticAngle >= _kPlatterHapticStep) {
+      _platterHapticAngle %= _kPlatterHapticStep;
+      unawaited(HapticFeedback.selectionClick());
+    }
+    setState(() {});
+    widget.onPlatterScratchUpdate(angleDelta);
+  }
+
+  void _handlePlatterPanEnd() {
+    if (!_isDraggingPlatter) return;
+
+    _isDraggingPlatter = false;
+    _activeDragAngle = null;
+    _dragRotationAngle = null;
+    _platterHapticAngle = 0;
+    setState(() {});
+    widget.onPlatterScratchEnd();
+  }
+
+  Duration _waveformPositionForFraction(double fraction, Duration duration) {
+    if (duration <= Duration.zero) return Duration.zero;
+    final clampedFraction = fraction.clamp(0.0, 1.0).toDouble();
+    return Duration(
+      milliseconds: (duration.inMilliseconds * clampedFraction).round(),
+    );
+  }
+
+  void _queueWaveformSeek(double fraction, {bool immediate = false}) {
+    _pendingWaveformSeekFraction = fraction.clamp(0.0, 1.0).toDouble();
+    if (immediate) {
+      _flushWaveformSeek();
+      return;
+    }
+    if (_waveformSeekThrottleTimer?.isActive ?? false) return;
+    _waveformSeekThrottleTimer = Timer(
+      _kWaveformSeekThrottle,
+      _flushWaveformSeek,
+    );
+  }
+
+  void _flushWaveformSeek() {
+    _waveformSeekThrottleTimer?.cancel();
+    _waveformSeekThrottleTimer = null;
+    final fraction = _pendingWaveformSeekFraction;
+    if (fraction == null) return;
+    _pendingWaveformSeekFraction = null;
+    widget.onSeekToFraction(fraction);
+  }
+
+  void _setWaveformPreview(double fraction, Duration duration) {
+    final clampedFraction = fraction.clamp(0.0, 1.0).toDouble();
+    _waveformPreviewReleaseTimer?.cancel();
+    if (_waveformScrubFraction == clampedFraction &&
+        _waveformScrubPosition ==
+            _waveformPositionForFraction(clampedFraction, duration)) {
+      return;
+    }
+    setState(() {
+      _waveformScrubFraction = clampedFraction;
+      _waveformScrubPosition = _waveformPositionForFraction(
+        clampedFraction,
+        duration,
+      );
+    });
+  }
+
+  void _handleWaveformTapSeek(double fraction, Duration duration) {
+    _setWaveformPreview(fraction, duration);
+    _queueWaveformSeek(fraction, immediate: true);
+    _releaseWaveformPreview();
+  }
+
+  void _handleWaveformScrubStart(double fraction, Duration duration) {
+    _setWaveformPreview(fraction, duration);
+    _queueWaveformSeek(fraction, immediate: true);
+  }
+
+  void _handleWaveformScrubUpdate(double fraction, Duration duration) {
+    _setWaveformPreview(fraction, duration);
+    _queueWaveformSeek(fraction);
+  }
+
+  void _releaseWaveformPreview() {
+    _waveformPreviewReleaseTimer?.cancel();
+    _waveformPreviewReleaseTimer = Timer(_kWaveformPreviewReleaseDelay, () {
+      if (!mounted) return;
+      setState(() {
+        _waveformScrubFraction = null;
+        _waveformScrubPosition = null;
+      });
+    });
+  }
+
+  void _handleWaveformScrubEnd() {
+    _flushWaveformSeek();
+    _releaseWaveformPreview();
+  }
+
+  double _clockLabelWidthFor(Duration duration) {
+    if (duration.inHours > 0) return 68;
+    if (duration.inMinutes >= 10) return 52;
+    return 44;
   }
 
   @override
@@ -1722,13 +2104,15 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
 
     Widget buildCard(bool isPlaying, Duration position, Duration duration) {
       final palette = LyricScreenPalette.of(context);
+      final isBackspinActive = widget.isPlatterScratching || _isDraggingPlatter;
+      final effectiveIsPlaying = isPlaying && !isBackspinActive;
+      final displayPosition = _waveformScrubPosition ?? position;
       final playbackProgress =
           duration.inMilliseconds <= 0
               ? baseProgress
-              : (position.inMilliseconds / duration.inMilliseconds).clamp(
-                0.0,
-                1.0,
-              );
+              : (displayPosition.inMilliseconds / duration.inMilliseconds)
+                  .clamp(0.0, 1.0);
+      final timeLabelWidth = _clockLabelWidthFor(duration);
       final cardColor =
           palette.isDark ? palette.surface : const Color(0xFFF5F3EF);
       final cardBorderColor =
@@ -1842,150 +2226,184 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                   final labelSize = vinylDiameter * 0.27;
                                   final labelFontSize = (vinylDiameter * 0.032)
                                       .clamp(8.0, 11.0);
-                                  return DecoratedBox(
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Color(0x33000000),
-                                          blurRadius: 18,
-                                          offset: Offset(0, 10),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        AnimatedBuilder(
-                                          animation: _spinFrameController,
-                                          builder: (context, child) {
-                                            final livePosition =
-                                                isPlaying
-                                                    ? widget.audio.position
-                                                    : position;
-                                            final liveRotationAngle =
-                                                _rotationAngleFor(
-                                                  livePosition,
-                                                  duration,
-                                                );
-                                            return Stack(
-                                              alignment: Alignment.center,
-                                              children: [
-                                                Transform.rotate(
-                                                  angle: liveRotationAngle,
-                                                  child: const CustomPaint(
-                                                    painter: _VinylPainter(),
-                                                    child: SizedBox.expand(),
-                                                  ),
+                                  return AnimatedScale(
+                                    scale: isBackspinActive ? 1.02 : 1.0,
+                                    duration: const Duration(milliseconds: 120),
+                                    curve: Curves.easeOut,
+                                    child: DecoratedBox(
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Color(0x33000000),
+                                            blurRadius: 18,
+                                            offset: Offset(0, 10),
+                                          ),
+                                        ],
+                                      ),
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onPanStart:
+                                            (details) => _handlePlatterPanStart(
+                                              details,
+                                              vinylConstraints.biggest,
+                                              _rotationAngleFor(
+                                                position,
+                                                duration,
+                                              ),
+                                            ),
+                                        onPanUpdate:
+                                            (details) =>
+                                                _handlePlatterPanUpdate(
+                                                  details,
+                                                  vinylConstraints.biggest,
                                                 ),
-                                                Transform.rotate(
-                                                  angle: liveRotationAngle,
-                                                  child: Container(
-                                                    width: labelSize,
-                                                    height: labelSize,
-                                                    decoration: BoxDecoration(
-                                                      shape: BoxShape.circle,
-                                                      gradient: LinearGradient(
-                                                        begin:
-                                                            Alignment.topCenter,
-                                                        end:
-                                                            Alignment
-                                                                .bottomCenter,
-                                                        colors: labelGradient,
+                                        onPanEnd: (_) => _handlePlatterPanEnd(),
+                                        onPanCancel: _handlePlatterPanEnd,
+                                        child: Stack(
+                                          alignment: Alignment.center,
+                                          children: [
+                                            AnimatedBuilder(
+                                              animation: _spinFrameController,
+                                              builder: (context, child) {
+                                                final livePosition =
+                                                    effectiveIsPlaying
+                                                        ? widget.audio.position
+                                                        : position;
+                                                final liveRotationAngle =
+                                                    _rotationAngleFor(
+                                                      livePosition,
+                                                      duration,
+                                                    );
+                                                final effectiveRotationAngle =
+                                                    _isDraggingPlatter
+                                                        ? (_dragRotationAngle ??
+                                                            liveRotationAngle)
+                                                        : liveRotationAngle;
+                                                return Stack(
+                                                  alignment: Alignment.center,
+                                                  children: [
+                                                    Transform.rotate(
+                                                      angle:
+                                                          effectiveRotationAngle,
+                                                      child: const CustomPaint(
+                                                        painter:
+                                                            _VinylPainter(),
+                                                        child:
+                                                            SizedBox.expand(),
                                                       ),
                                                     ),
-                                                    child: SizedBox(
-                                                      width: labelSize,
-                                                      height: labelSize,
-                                                      child: ClipOval(
-                                                        clipBehavior:
-                                                            Clip.antiAliasWithSaveLayer,
-                                                        child:
-                                                            widget.nowPlaying !=
-                                                                    null
-                                                                ? Transform.scale(
-                                                                  scale: 1.3,
-                                                                  child: Image.network(
-                                                                    'https://img.youtube.com/vi/${widget.nowPlaying!.videoId}/0.jpg',
-                                                                    width:
-                                                                        labelSize,
-                                                                    height:
-                                                                        labelSize,
-                                                                    fit:
-                                                                        BoxFit
-                                                                            .cover,
-                                                                    filterQuality:
-                                                                        FilterQuality
-                                                                            .high,
-                                                                    errorBuilder:
-                                                                        (
-                                                                          _,
-                                                                          __,
-                                                                          ___,
-                                                                        ) => Container(
-                                                                          color:
-                                                                              labelFallbackColor,
-                                                                          child: Center(
-                                                                            child: Text(
-                                                                              'LYRICQSK',
-                                                                              style: TextStyle(
-                                                                                fontFamily:
-                                                                                    'Inter',
-                                                                                fontSize:
-                                                                                    labelSize *
-                                                                                    0.12,
-                                                                                fontWeight:
-                                                                                    FontWeight.w700,
-                                                                                color:
-                                                                                    labelTextColor,
+                                                    Transform.rotate(
+                                                      angle:
+                                                          effectiveRotationAngle,
+                                                      child: Container(
+                                                        width: labelSize,
+                                                        height: labelSize,
+                                                        decoration: BoxDecoration(
+                                                          shape:
+                                                              BoxShape.circle,
+                                                          gradient: LinearGradient(
+                                                            begin:
+                                                                Alignment
+                                                                    .topCenter,
+                                                            end:
+                                                                Alignment
+                                                                    .bottomCenter,
+                                                            colors:
+                                                                labelGradient,
+                                                          ),
+                                                        ),
+                                                        child: SizedBox(
+                                                          width: labelSize,
+                                                          height: labelSize,
+                                                          child: ClipOval(
+                                                            clipBehavior:
+                                                                Clip.antiAliasWithSaveLayer,
+                                                            child:
+                                                                widget.nowPlaying !=
+                                                                        null
+                                                                    ? Transform.scale(
+                                                                      scale:
+                                                                          1.3,
+                                                                      child: Image.network(
+                                                                        'https://img.youtube.com/vi/${widget.nowPlaying!.videoId}/0.jpg',
+                                                                        width:
+                                                                            labelSize,
+                                                                        height:
+                                                                            labelSize,
+                                                                        fit:
+                                                                            BoxFit.cover,
+                                                                        filterQuality:
+                                                                            FilterQuality.high,
+                                                                        errorBuilder:
+                                                                            (
+                                                                              _,
+                                                                              __,
+                                                                              ___,
+                                                                            ) => Container(
+                                                                              color:
+                                                                                  labelFallbackColor,
+                                                                              child: Center(
+                                                                                child: Text(
+                                                                                  'LYRICQSK',
+                                                                                  style: TextStyle(
+                                                                                    fontFamily:
+                                                                                        'Inter',
+                                                                                    fontSize:
+                                                                                        labelSize *
+                                                                                        0.12,
+                                                                                    fontWeight:
+                                                                                        FontWeight.w700,
+                                                                                    color:
+                                                                                        labelTextColor,
+                                                                                  ),
+                                                                                ),
                                                                               ),
                                                                             ),
+                                                                      ),
+                                                                    )
+                                                                    : Transform.rotate(
+                                                                      angle:
+                                                                          math.pi,
+                                                                      child: Center(
+                                                                        child: Text(
+                                                                          artist.length >
+                                                                                  12
+                                                                              ? artist
+                                                                                  .substring(
+                                                                                    0,
+                                                                                    12,
+                                                                                  )
+                                                                                  .toUpperCase()
+                                                                              : artist.toUpperCase(),
+                                                                          textAlign:
+                                                                              TextAlign.center,
+                                                                          style: TextStyle(
+                                                                            fontFamily:
+                                                                                'Inter',
+                                                                            fontSize:
+                                                                                labelFontSize,
+                                                                            fontWeight:
+                                                                                FontWeight.w700,
+                                                                            color:
+                                                                                labelTextColor,
+                                                                            letterSpacing:
+                                                                                0.6,
                                                                           ),
                                                                         ),
-                                                                  ),
-                                                                )
-                                                                : Transform.rotate(
-                                                                  angle:
-                                                                      math.pi,
-                                                                  child: Center(
-                                                                    child: Text(
-                                                                      artist.length >
-                                                                              12
-                                                                          ? artist
-                                                                              .substring(
-                                                                                0,
-                                                                                12,
-                                                                              )
-                                                                              .toUpperCase()
-                                                                          : artist
-                                                                              .toUpperCase(),
-                                                                      textAlign:
-                                                                          TextAlign
-                                                                              .center,
-                                                                      style: TextStyle(
-                                                                        fontFamily:
-                                                                            'Inter',
-                                                                        fontSize:
-                                                                            labelFontSize,
-                                                                        fontWeight:
-                                                                            FontWeight.w700,
-                                                                        color:
-                                                                            labelTextColor,
-                                                                        letterSpacing:
-                                                                            0.6,
                                                                       ),
                                                                     ),
-                                                                  ),
-                                                                ),
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
-                                                  ),
-                                                ),
-                                              ],
-                                            );
-                                          },
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                          ],
                                         ),
-                                      ],
+                                      ),
                                     ),
                                   );
                                 },
@@ -2003,12 +2421,12 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                             height: 6,
                             decoration: BoxDecoration(
                               color:
-                                  isPlaying
+                                  effectiveIsPlaying
                                       ? const Color(0xFFFF2040)
                                       : const Color(0xFF661020),
                               shape: BoxShape.circle,
                               boxShadow:
-                                  isPlaying
+                                  effectiveIsPlaying
                                       ? const [
                                         BoxShadow(
                                           color: Color(0xCCFF2040),
@@ -2039,8 +2457,9 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                           right: 12,
                           top: 20,
                           child: _ToneArm(
-                            isPlaying: isPlaying,
+                            isPlaying: effectiveIsPlaying,
                             progress: playbackProgress,
+                            isBackspinActive: isBackspinActive,
                             onTap: buttonEnabled ? widget.onPlayPause : null,
                           ),
                         ),
@@ -2112,7 +2531,11 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        widget.isStreamStarting ? 'Loading…' : 'Now Playing',
+                        widget.isStreamStarting
+                            ? 'Loading…'
+                            : isBackspinActive
+                            ? 'Backspin'
+                            : 'Now Playing',
                         style: TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 11,
@@ -2140,36 +2563,66 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    Text(
-                      _formatClock(position),
-                      style: TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: clockFontSize,
-                        fontWeight: FontWeight.w700,
-                        color: clockColor,
-                        letterSpacing: 0.2,
+                    SizedBox(
+                      width: timeLabelWidth,
+                      child: Text(
+                        _formatClock(displayPosition),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: clockFontSize,
+                          fontWeight: FontWeight.w700,
+                          color: clockColor,
+                          letterSpacing: 0.2,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: _ScrubbableWaveform(
-                        heights: _TurntablePlayerCard._waveformHeights,
+                        amplitudes: widget.waveformBars,
                         progress: playbackProgress,
+                        isLoading: widget.isWaveformLoading,
+                        onTapSeek:
+                            widget.nowPlaying == null
+                                ? null
+                                : (fraction) =>
+                                    _handleWaveformTapSeek(fraction, duration),
+                        onSeekStart:
+                            widget.nowPlaying == null
+                                ? null
+                                : (fraction) => _handleWaveformScrubStart(
+                                  fraction,
+                                  duration,
+                                ),
                         onSeek:
                             widget.nowPlaying == null
                                 ? null
-                                : widget.onSeekToFraction,
+                                : (fraction) => _handleWaveformScrubUpdate(
+                                  fraction,
+                                  duration,
+                                ),
+                        onSeekEnd:
+                            widget.nowPlaying == null
+                                ? null
+                                : _handleWaveformScrubEnd,
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Text(
-                      _formatClock(duration),
-                      style: TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: clockFontSize,
-                        fontWeight: FontWeight.w700,
-                        color: clockColor,
-                        letterSpacing: 0.2,
+                    SizedBox(
+                      width: timeLabelWidth,
+                      child: Text(
+                        _formatClock(duration),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: clockFontSize,
+                          fontWeight: FontWeight.w700,
+                          color: clockColor,
+                          letterSpacing: 0.2,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                   ],
@@ -2231,7 +2684,7 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
                                   ],
                                 )
                                 : Icon(
-                                  isPlaying
+                                  effectiveIsPlaying
                                       ? Icons.pause_rounded
                                       : Icons.play_arrow,
                                   color: mainButtonIconColor,
@@ -2261,7 +2714,10 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
     return StreamBuilder<Duration>(
       stream: player.positionStream,
       builder: (context, positionSnap) {
-        final position = positionSnap.data ?? widget.audio.position;
+        final position =
+            widget.positionOverride ??
+            positionSnap.data ??
+            widget.audio.position;
         return StreamBuilder<PlayerState>(
           stream: player.playerStateStream,
           builder: (context, stateSnap) {
@@ -2269,7 +2725,9 @@ class _TurntablePlayerCardState extends State<_TurntablePlayerCard>
             final isCompleted =
                 state?.processingState == ProcessingState.completed;
             final playing =
-                (state?.playing ?? widget.audio.isPlaying) && !isCompleted;
+                (state?.playing ?? widget.audio.isPlaying) &&
+                !isCompleted &&
+                !widget.isPlatterScratching;
             final duration =
                 (player.duration != null && player.duration! > Duration.zero)
                     ? player.duration!
@@ -2662,7 +3120,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                                   ? const Color(0xFF2A2F35)
                                   : const Color(0xFF333333))
                               : (palette.isDark
-                                  ? palette.accent   // ← was 0xFFE7E1D8 (beige)
+                                  ? palette
+                                      .accent // ← was 0xFFE7E1D8 (beige)
                                   : palette.ink),
                       borderRadius: BorderRadius.circular(btnHeight / 2),
                     ),
@@ -2684,7 +3143,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                               Icons.play_arrow_rounded,
                               color:
                                   palette.isDark
-                                      ? AppColors.onAccent  // ← black on green
+                                      ? AppColors
+                                          .onAccent // ← black on green
                                       : palette.surface,
                               size: 20,
                             ),
@@ -2701,7 +3161,8 @@ class _SearchConsoleCardState extends State<_SearchConsoleCard> {
                                         ? palette.mutedText
                                         : const Color(0xFF888888))
                                     : (palette.isDark
-                                        ? AppColors.onAccent  // ← black on green
+                                        ? AppColors
+                                            .onAccent // ← black on green
                                         : palette.surface),
                           ),
                         ),
@@ -2887,10 +3348,12 @@ class _ToneArm extends StatelessWidget {
   const _ToneArm({
     required this.isPlaying,
     required this.progress,
+    required this.isBackspinActive,
     required this.onTap,
   });
   final bool isPlaying;
   final double progress;
+  final bool isBackspinActive;
   final VoidCallback? onTap;
 
   @override
@@ -2904,7 +3367,10 @@ class _ToneArm extends StatelessWidget {
         palette.isDark
             ? const [Color(0xFF4A535D), Color(0xFF2D343C)]
             : const [Color(0xFFF3F3F3), Color(0xFF9F9F9F)];
-    final angle = isPlaying ? (0.35 + (progress * 0.22)) : -0.05;
+    final angle =
+        isBackspinActive
+            ? 0.2 + (progress * 0.08)
+            : (isPlaying ? (0.35 + (progress * 0.22)) : -0.05);
     return SizedBox(
       width: 110,
       height: 190,
@@ -3039,17 +3505,33 @@ class _ToneArm extends StatelessWidget {
 
 class _ScrubbableWaveform extends StatelessWidget {
   const _ScrubbableWaveform({
-    required this.heights,
+    required this.amplitudes,
     required this.progress,
+    required this.isLoading,
+    required this.onTapSeek,
+    required this.onSeekStart,
     required this.onSeek,
+    required this.onSeekEnd,
   });
-  final List<double> heights;
+  final List<double> amplitudes;
   final double progress;
+  final bool isLoading;
+  final ValueChanged<double>? onTapSeek;
+  final ValueChanged<double>? onSeekStart;
   final ValueChanged<double>? onSeek;
+  final VoidCallback? onSeekEnd;
 
-  void _handleSeek(Offset localPosition, double width) {
-    if (onSeek == null || width <= 0) return;
-    onSeek!((localPosition.dx / width).clamp(0.0, 1.0));
+  void _handleSeek(
+    Offset localPosition,
+    double width,
+    ValueChanged<double>? cb,
+  ) {
+    if (cb == null || width <= 0) return;
+    cb((localPosition.dx / width).clamp(0.0, 1.0));
+  }
+
+  void _handleDragEnd() {
+    onSeekEnd?.call();
   }
 
   @override
@@ -3058,44 +3540,117 @@ class _ScrubbableWaveform extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
+        final activeColor =
+            palette.isDark ? palette.accent : const Color(0xFF141414);
+        final inactiveColor =
+            palette.isDark ? palette.outline : const Color(0xFFD6D6D6);
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTapDown: (d) => _handleSeek(d.localPosition, width),
-          onHorizontalDragStart: (d) => _handleSeek(d.localPosition, width),
-          onHorizontalDragUpdate: (d) => _handleSeek(d.localPosition, width),
+          onTapDown: (d) => _handleSeek(d.localPosition, width, onTapSeek),
+          onHorizontalDragStart:
+              (d) => _handleSeek(d.localPosition, width, onSeekStart),
+          onHorizontalDragUpdate:
+              (d) => _handleSeek(d.localPosition, width, onSeek),
+          onHorizontalDragEnd: (_) => _handleDragEnd(),
+          onHorizontalDragCancel: _handleDragEnd,
           child: SizedBox(
-            height: 32,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: List.generate(heights.length, (index) {
-                final barProgress = index / (heights.length - 1);
-                final isActive = barProgress <= progress;
-                return Expanded(
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: Container(
-                      width: 4,
-                      height: heights[index],
-                      decoration: BoxDecoration(
-                        color:
-                            isActive
-                                ? (palette.isDark
-                                    ? palette.accent
-                                    : const Color(0xFF141414))
-                                : (palette.isDark
-                                    ? palette.outline
-                                    : const Color(0xFFD6D6D6)),
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                    ),
-                  ),
-                );
-              }),
+            height: 36,
+            child: CustomPaint(
+              painter: _WaveformPainter(
+                amplitudes: amplitudes,
+                progress: progress,
+                activeColor: activeColor,
+                inactiveColor: inactiveColor,
+                showLoadingPulse: isLoading,
+              ),
             ),
           ),
         );
       },
     );
+  }
+}
+
+class _WaveformPainter extends CustomPainter {
+  _WaveformPainter({
+    required this.amplitudes,
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+    required this.showLoadingPulse,
+  });
+
+  final List<double> amplitudes;
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+  final bool showLoadingPulse;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+
+    final centerY = size.height / 2;
+    final safeBars = amplitudes.isEmpty ? const [0.3] : amplitudes;
+    final count = safeBars.length;
+    final gap = count >= 72 ? 1.2 : 1.8;
+    final rawBarWidth = (size.width - (gap * math.max(0, count - 1))) / count;
+    final barWidth = rawBarWidth.clamp(1.4, 4.0).toDouble();
+    final totalWidth = (barWidth * count) + (gap * math.max(0, count - 1));
+    final startX = (size.width - totalWidth) / 2;
+    final linePaint =
+        Paint()
+          ..color = inactiveColor.withValues(
+            alpha: showLoadingPulse ? 0.32 : 0.24,
+          )
+          ..style = PaintingStyle.fill;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, centerY - 0.6, size.width, 1.2),
+        const Radius.circular(999),
+      ),
+      linePaint,
+    );
+
+    final clampedProgress = progress.clamp(0.0, 1.0).toDouble();
+    for (var i = 0; i < count; i++) {
+      final ratio = count == 1 ? 1.0 : i / (count - 1);
+      final isActive = ratio <= clampedProgress;
+      final normalized = safeBars[i].clamp(0.0, 1.0).toDouble();
+      final minHeight = 3.2;
+      final maxHeight = size.height * (showLoadingPulse ? 0.78 : 0.92);
+      final barHeight = minHeight + ((maxHeight - minHeight) * normalized);
+      final left = startX + (i * (barWidth + gap));
+      final rect = Rect.fromCenter(
+        center: Offset(left + (barWidth / 2), centerY),
+        width: barWidth,
+        height: barHeight,
+      );
+      final color = isActive ? activeColor : inactiveColor;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(barWidth)),
+        Paint()..color = color,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _WaveformPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.activeColor != activeColor ||
+        oldDelegate.inactiveColor != inactiveColor ||
+        oldDelegate.showLoadingPulse != showLoadingPulse ||
+        oldDelegate.amplitudes.length != amplitudes.length ||
+        !_listsEqual(oldDelegate.amplitudes, amplitudes);
+  }
+
+  bool _listsEqual(List<double> a, List<double> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if ((a[i] - b[i]).abs() > 0.0001) return false;
+    }
+    return true;
   }
 }
 
