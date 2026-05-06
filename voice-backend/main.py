@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import logging
+import mimetypes
 import os
 from dataclasses import dataclass
 
@@ -17,11 +17,10 @@ import time
 import uuid
 from pathlib import Path
 
-import torch
+import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from neutts import BACKBONE_LANGUAGE_MAP, NeuTTS
 from starlette.background import BackgroundTask
 
 
@@ -42,29 +41,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── NeuTTS models (loaded on demand) ───────────────────────────────────────────
-_DEFAULT_NEUTTS_BACKBONE = os.environ.get(
-    "MONGOBOX_NEUTTS_DEFAULT_BACKBONE", "neuphonic/neutts-air"
-)
-_DEFAULT_NEUTTS_CODEC = os.environ.get(
-    "MONGOBOX_NEUTTS_CODEC_REPO", "neuphonic/neucodec"
-)
-_DEFAULT_REFERENCE_ASR_MODEL = os.environ.get(
-    "MONGOBOX_NEUTTS_REFERENCE_ASR_MODEL", "openai/whisper-tiny"
-)
+_VOICEBOX_API_URL = os.environ.get("VOICEBOX_API_URL", "http://127.0.0.1:17493").strip().rstrip("/")
+_VOICEBOX_CLIENT_ID = (os.environ.get("VOICEBOX_CLIENT_ID", "mongobox-backend") or "mongobox-backend").strip()
+_VOICEBOX_HEALTH_TTL_SECONDS = 5.0
 
-_PRIMARY_BACKBONE_REPO = _DEFAULT_NEUTTS_BACKBONE
-_tts_models: dict[str, NeuTTS] = {}
-_device: str = "cpu"
-_reference_asr_pipeline = None
 _cancelled_clone_request_ids: set[str] = set()
 _active_clone_request_ids: set[str] = set()
 _clone_request_lock = threading.Lock()
 _artifact_root = Path(tempfile.gettempdir()) / "mongobox_voice_artifacts"
 _artifact_ttl_seconds = 60 * 60 * 12
-
-# ── Indic transliteration (loaded lazily) ─────────────────────────────────────
-_indic_trans = None
+_voicebox_http = requests.Session()
+_voicebox_health_cache = {
+    "checked_at": 0.0,
+    "available": False,
+    "detail": "not checked",
+}
+_voicebox_health_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -74,16 +66,13 @@ class CloneRequestParams:
     mood: str
     genre: str
     language: str
-    accent_hint: str
     tts_language_code: str
-    espeak_voice: str
-    coqui_model_hint: str
-    is_hindi: bool
     reference_track_title: str
     reference_artist_name: str
     reference_lyric_snippet: str
     reference_transcript: str
     reference_video_id: str
+    voicebox_profile_id: str
 
 
 @dataclass(frozen=True)
@@ -94,171 +83,16 @@ class LyricChunk:
 
 @app.on_event("startup")
 def load_model() -> None:
-    global _device
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
-    log.info("Loading NeuTTS backbone %s on %s …", _PRIMARY_BACKBONE_REPO, _device)
-    _get_or_load_neutts_model(_PRIMARY_BACKBONE_REPO)
-    log.info("NeuTTS ready ✓")
-
-    global _indic_trans
-    try:
-        from indic_transliteration import sanscript
-        _indic_trans = sanscript
-        log.info("indic_transliteration loaded ✓ (Hinglish→Devanagari enabled)")
-    except ImportError:
+    available, detail = _voicebox_health_snapshot(force=True)
+    if not available:
         log.warning(
-            "indic_transliteration not installed — Hinglish will use phonetic respelling fallback.\n"
-            "  Install with: pip install indic-transliteration"
+            "Voicebox not reachable at startup (%s). "
+            "Requests will fail until Voicebox is running at %s",
+            detail,
+            _VOICEBOX_API_URL,
         )
-
-
-# ── Hinglish → Devanagari ──────────────────────────────────────────────────────
-
-_HINGLISH_WORD_MAP: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bmain\b", re.IGNORECASE), "मैं"),
-    (re.compile(r"\bmeri\b", re.IGNORECASE), "मेरी"),
-    (re.compile(r"\bmera\b", re.IGNORECASE), "मेरा"),
-    (re.compile(r"\btere\b", re.IGNORECASE), "तेरे"),
-    (re.compile(r"\bteri\b", re.IGNORECASE), "तेरी"),
-    (re.compile(r"\btujhe\b", re.IGNORECASE), "तुझे"),
-    (re.compile(r"\btum\b", re.IGNORECASE), "तुम"),
-    (re.compile(r"\bhum\b", re.IGNORECASE), "हम"),
-    (re.compile(r"\bwoh\b", re.IGNORECASE), "वो"),
-    (re.compile(r"\bkoi\b", re.IGNORECASE), "कोई"),
-    (re.compile(r"\bnahi\b", re.IGNORECASE), "नहीं"),
-    (re.compile(r"\bnahin\b", re.IGNORECASE), "नहीं"),
-    (re.compile(r"\bhai\b", re.IGNORECASE), "है"),
-    (re.compile(r"\bho\b", re.IGNORECASE), "हो"),
-    (re.compile(r"\bkar\b", re.IGNORECASE), "कर"),
-    (re.compile(r"\bab\b", re.IGNORECASE), "अब"),
-    (re.compile(r"\baaj\b", re.IGNORECASE), "आज"),
-    (re.compile(r"\bkal\b", re.IGNORECASE), "कल"),
-    (re.compile(r"\bek\b", re.IGNORECASE), "एक"),
-    (re.compile(r"\baur\b", re.IGNORECASE), "और"),
-    (re.compile(r"\bse\b", re.IGNORECASE), "से"),
-    (re.compile(r"\bke\b", re.IGNORECASE), "के"),
-    (re.compile(r"\bki\b", re.IGNORECASE), "की"),
-    (re.compile(r"\bka\b", re.IGNORECASE), "का"),
-    (re.compile(r"\bjo\b", re.IGNORECASE), "जो"),
-    (re.compile(r"\bdil\b", re.IGNORECASE), "दिल"),
-    (re.compile(r"\bjaan\b", re.IGNORECASE), "जान"),
-    (re.compile(r"\byaar\b", re.IGNORECASE), "यार"),
-    (re.compile(r"\bpyaar\b", re.IGNORECASE), "प्यार"),
-    (re.compile(r"\bishq\b", re.IGNORECASE), "इश्क़"),
-    (re.compile(r"\bmohabbat\b", re.IGNORECASE), "मोहब्बत"),
-    (re.compile(r"\bzindagi\b", re.IGNORECASE), "ज़िंदगी"),
-    (re.compile(r"\bsafar\b", re.IGNORECASE), "सफ़र"),
-    (re.compile(r"\byaad\b", re.IGNORECASE), "याद"),
-    (re.compile(r"\bkhuda\b", re.IGNORECASE), "ख़ुदा"),
-    (re.compile(r"\bjannat\b", re.IGNORECASE), "जन्नत"),
-    (re.compile(r"\bjunoon\b", re.IGNORECASE), "जुनून"),
-    (re.compile(r"\braat\b", re.IGNORECASE), "रात"),
-    (re.compile(r"\bbina\b", re.IGNORECASE), "बिना"),
-    (re.compile(r"\baankhon\b", re.IGNORECASE), "आँखों"),
-    (re.compile(r"\baankh\b", re.IGNORECASE), "आँख"),
-    (re.compile(r"\brooh\b", re.IGNORECASE), "रूह"),
-    (re.compile(r"\bnoor\b", re.IGNORECASE), "नूर"),
-    (re.compile(r"\bchaand\b", re.IGNORECASE), "चाँद"),
-    (re.compile(r"\bsuraj\b", re.IGNORECASE), "सूरज"),
-    (re.compile(r"\bpani\b", re.IGNORECASE), "पानी"),
-    (re.compile(r"\baag\b", re.IGNORECASE), "आग"),
-    (re.compile(r"\bhawa\b", re.IGNORECASE), "हवा"),
-    (re.compile(r"\bduniya\b", re.IGNORECASE), "दुनिया"),
-    (re.compile(r"\bkhwab\b", re.IGNORECASE), "ख़्वाब"),
-    (re.compile(r"\bsitara\b", re.IGNORECASE), "सितारा"),
-    (re.compile(r"\btaara\b", re.IGNORECASE), "तारा"),
-    (re.compile(r"\bsach\b", re.IGNORECASE), "सच"),
-    (re.compile(r"\bjhooth\b", re.IGNORECASE), "झूठ"),
-    (re.compile(r"\bwaqt\b", re.IGNORECASE), "वक़्त"),
-    (re.compile(r"\bdard\b", re.IGNORECASE), "दर्द"),
-    (re.compile(r"\bkhushi\b", re.IGNORECASE), "ख़ुशी"),
-    (re.compile(r"\bgham\b", re.IGNORECASE), "ग़म"),
-    (re.compile(r"\bsuno\b", re.IGNORECASE), "सुनो"),
-    (re.compile(r"\bdekho\b", re.IGNORECASE), "देखो"),
-    (re.compile(r"\bchalo\b", re.IGNORECASE), "चलो"),
-    (re.compile(r"\brona\b", re.IGNORECASE), "रोना"),
-    (re.compile(r"\bhona\b", re.IGNORECASE), "होना"),
-    (re.compile(r"\bjana\b", re.IGNORECASE), "जाना"),
-    (re.compile(r"\baana\b", re.IGNORECASE), "आना"),
-    (re.compile(r"\brehna\b", re.IGNORECASE), "रहना"),
-    (re.compile(r"\bsona\b", re.IGNORECASE), "सोना"),
-    (re.compile(r"\bkhona\b", re.IGNORECASE), "खोना"),
-    (re.compile(r"\bpana\b", re.IGNORECASE), "पाना"),
-    (re.compile(r"\bdil se\b", re.IGNORECASE), "दिल से"),
-    (re.compile(r"\bdil mein\b", re.IGNORECASE), "दिल में"),
-    (re.compile(r"\bmere liye\b", re.IGNORECASE), "मेरे लिए"),
-    (re.compile(r"\btere liye\b", re.IGNORECASE), "तेरे लिए"),
-    (re.compile(r"\bkab\b", re.IGNORECASE), "कब"),
-    (re.compile(r"\bkya\b", re.IGNORECASE), "क्या"),
-    (re.compile(r"\bkaise\b", re.IGNORECASE), "कैसे"),
-    (re.compile(r"\bkahan\b", re.IGNORECASE), "कहाँ"),
-    (re.compile(r"\bkyun\b", re.IGNORECASE), "क्यों"),
-    (re.compile(r"\bkuch\b", re.IGNORECASE), "कुछ"),
-    (re.compile(r"\bsab\b", re.IGNORECASE), "सब"),
-    (re.compile(r"\bsirf\b", re.IGNORECASE), "सिर्फ"),
-    (re.compile(r"\bphir\b", re.IGNORECASE), "फिर"),
-    (re.compile(r"\bbhi\b", re.IGNORECASE), "भी"),
-    (re.compile(r"\btoh\b", re.IGNORECASE), "तो"),
-    (re.compile(r"\bpar\b", re.IGNORECASE), "पर"),
-    (re.compile(r"\bpas\b", re.IGNORECASE), "पास"),
-    (re.compile(r"\baake\b", re.IGNORECASE), "आके"),
-    (re.compile(r"\bjaake\b", re.IGNORECASE), "जाके"),
-    (re.compile(r"\bhadh\b", re.IGNORECASE), "हद"),
-    (re.compile(r"\bzaroor\b", re.IGNORECASE), "ज़रूर"),
-    (re.compile(r"\bshayad\b", re.IGNORECASE), "शायद"),
-    (re.compile(r"\bkabhi\b", re.IGNORECASE), "कभी"),
-    (re.compile(r"\bsada\b", re.IGNORECASE), "सदा"),
-    (re.compile(r"\bhamesha\b", re.IGNORECASE), "हमेशा"),
-]
-
-
-def _transliterate_hinglish_line(line: str) -> str:
-    result = line
-    for pattern, devanagari in _HINGLISH_WORD_MAP:
-        result = pattern.sub(devanagari, result)
-
-    if _indic_trans is not None:
-        tokens = result.split()
-        converted: list[str] = []
-        for token in tokens:
-            clean = re.sub(r"[^a-zA-Z]", "", token)
-            if clean and token == clean:
-                try:
-                    deva = _indic_trans.transliterate(
-                        token,
-                        _indic_trans.ITRANS,
-                        _indic_trans.DEVANAGARI,
-                    )
-                    converted.append(deva)
-                except Exception:
-                    converted.append(token)
-            else:
-                converted.append(token)
-        result = " ".join(converted)
-
-    return result
-
-
-def _prepare_hindi_text(text: str) -> str:
-    lines = text.splitlines()
-    out: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            out.append(line)
-            continue
-        if re.match(r"^\[", stripped):
-            out.append(line)
-            continue
-        devanagari_count = sum(1 for ch in stripped if 0x0900 <= ord(ch) <= 0x097F)
-        total_alpha = sum(1 for ch in stripped if ch.isalpha())
-        if total_alpha > 0 and (devanagari_count / total_alpha) > 0.5:
-            out.append(line)
-        else:
-            out.append(_transliterate_hinglish_line(line))
-    converted = "\n".join(out)
-    log.debug("Hindi text after transliteration:\n%s", converted)
-    return converted
+    else:
+        log.info("Voicebox reachable at %s ✓", _VOICEBOX_API_URL)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -272,10 +106,6 @@ def _strip_section_tags(text: str) -> str:
     return "\n".join(lines)
 
 
-def _parse_bool_flag(value: str) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _parse_clone_request(
     *,
     request_id: str,
@@ -283,16 +113,13 @@ def _parse_clone_request(
     mood: str,
     genre: str,
     language: str,
-    accent_hint: str,
     tts_language_code: str,
-    espeak_voice: str,
-    coqui_model_hint: str,
-    is_hindi: str,
     reference_track_title: str,
     reference_artist_name: str,
     reference_lyric_snippet: str,
     reference_transcript: str,
     reference_video_id: str,
+    voicebox_profile_id: str,
 ) -> CloneRequestParams:
     return CloneRequestParams(
         request_id=(request_id or "").strip(),
@@ -300,16 +127,13 @@ def _parse_clone_request(
         mood=mood,
         genre=genre,
         language=language,
-        accent_hint=accent_hint,
         tts_language_code=tts_language_code,
-        espeak_voice=espeak_voice,
-        coqui_model_hint=coqui_model_hint,
-        is_hindi=_parse_bool_flag(is_hindi),
         reference_track_title=reference_track_title,
         reference_artist_name=reference_artist_name,
         reference_lyric_snippet=reference_lyric_snippet,
         reference_transcript=reference_transcript,
         reference_video_id=(reference_video_id or "").strip(),
+        voicebox_profile_id=(voicebox_profile_id or "").strip(),
     )
 
 
@@ -397,6 +221,499 @@ def _header_safe(value: str) -> str:
         .replace("…", "...")
     )
     return normalized.encode("latin-1", "ignore").decode("latin-1")
+
+
+_VOICEBOX_SUPPORTED_LANGS = {
+    "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it",
+    "he", "ar", "da", "el", "fi", "hi", "ms", "nl", "no", "pl",
+    "sv", "sw", "tr",
+}
+_VOICEBOX_QWEN_LANGS = {"zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"}
+
+
+def _voicebox_headers() -> dict[str, str]:
+    return {"X-Voicebox-Client-Id": _VOICEBOX_CLIENT_ID}
+
+
+def _voicebox_error_detail(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+            if isinstance(detail, list):
+                bits = []
+                for item in detail:
+                    if isinstance(item, dict):
+                        msg = str(item.get("msg") or "").strip()
+                        if msg:
+                            bits.append(msg)
+                if bits:
+                    return "; ".join(bits)
+            if detail:
+                return str(detail)
+            for key in ("error", "message", "status"):
+                value = payload.get(key)
+                if value:
+                    return str(value)
+    except ValueError:
+        pass
+    text = (response.text or "").strip()
+    return text or response.reason or "unknown error"
+
+
+def _voicebox_response(
+    method: str,
+    path: str,
+    *,
+    accepted_statuses: tuple[int, ...] = (200,),
+    timeout: float | tuple[float, float] = 30.0,
+    json_body: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+    stream: bool = False,
+) -> requests.Response:
+    url = path if path.startswith(("http://", "https://")) else f"{_VOICEBOX_API_URL}{path}"
+    try:
+        response = _voicebox_http.request(
+            method=method,
+            url=url,
+            headers=_voicebox_headers(),
+            json=json_body,
+            data=data,
+            files=files,
+            timeout=timeout,
+            stream=stream,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Could not reach Voicebox at {_VOICEBOX_API_URL}. "
+            "Start Voicebox or point VOICEBOX_API_URL at a reachable server."
+        ) from exc
+
+    if response.status_code not in accepted_statuses:
+        detail = _voicebox_error_detail(response)
+        response.close()
+        raise RuntimeError(
+            f"Voicebox {method.upper()} {path} failed "
+            f"({response.status_code}): {detail}"
+        )
+    return response
+
+
+def _voicebox_json(
+    method: str,
+    path: str,
+    *,
+    accepted_statuses: tuple[int, ...] = (200,),
+    timeout: float | tuple[float, float] = 30.0,
+    json_body: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+) -> dict | list:
+    response = _voicebox_response(
+        method,
+        path,
+        accepted_statuses=accepted_statuses,
+        timeout=timeout,
+        json_body=json_body,
+        data=data,
+        files=files,
+    )
+    try:
+        payload = response.json()
+    finally:
+        response.close()
+    if payload is None:
+        return {}
+    if not isinstance(payload, (dict, list)):
+        raise RuntimeError(f"Voicebox returned an unexpected payload for {path}.")
+    return payload
+
+
+def _voicebox_health_snapshot(force: bool = False) -> tuple[bool, str]:
+    if not _VOICEBOX_API_URL:
+        return False, "VOICEBOX_API_URL is empty."
+
+    with _voicebox_health_lock:
+        now = time.time()
+        if (
+            not force
+            and now - float(_voicebox_health_cache["checked_at"]) < _VOICEBOX_HEALTH_TTL_SECONDS
+        ):
+            return bool(_voicebox_health_cache["available"]), str(_voicebox_health_cache["detail"])
+
+        try:
+            response = _voicebox_response(
+                "GET",
+                "/health",
+                accepted_statuses=(200,),
+                timeout=(1.0, 2.0),
+            )
+            payload = response.json()
+            response.close()
+            available = isinstance(payload, dict) and payload.get("status") in {"ok", "healthy"}
+            detail = "ok" if available else "Voicebox health check returned a non-ok status."
+        except Exception as exc:
+            available = False
+            detail = str(exc)
+
+        _voicebox_health_cache["checked_at"] = now
+        _voicebox_health_cache["available"] = available
+        _voicebox_health_cache["detail"] = detail
+        return available, detail
+
+
+def _require_voicebox_available() -> None:
+    available, detail = _voicebox_health_snapshot(force=True)
+    if not available:
+        raise RuntimeError(detail)
+
+
+def _is_hindi_family_language_hint(language: str) -> bool:
+    normalized = re.sub(r"[^a-z]+", " ", (language or "").strip().lower()).strip()
+    return normalized in {
+        "hindi",
+        "hinglish",
+        "urdu",
+        "punjabi",
+        "bengali",
+        "tamil",
+        "telugu",
+        "marathi",
+        "gujarati",
+        "kannada",
+        "malayalam",
+    }
+
+
+def _coerce_voicebox_language(
+    *,
+    language_hint: str,
+    tts_language_code: str,
+    detected_lang: str,
+    is_hindi: bool,
+) -> str:
+    explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
+    explicit_prefix = explicit_tts_code.split("-", 1)[0] if explicit_tts_code else ""
+    if explicit_prefix in _VOICEBOX_SUPPORTED_LANGS:
+        return explicit_prefix
+
+    normalized = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
+    hint_map = {
+        "english": "en",
+        "american": "en",
+        "british": "en",
+        "hindi": "hi",
+        "hinglish": "hi",
+        "urdu": "ar",
+        "arabic": "ar",
+        "japanese": "ja",
+        "korean": "ko",
+        "german": "de",
+        "french": "fr",
+        "spanish": "es",
+        "italian": "it",
+        "portuguese": "pt",
+        "russian": "ru",
+        "swahili": "sw",
+        "swedish": "sv",
+        "turkish": "tr",
+        "malay": "ms",
+    }
+    mapped = hint_map.get(normalized)
+    if mapped in _VOICEBOX_SUPPORTED_LANGS:
+        return mapped
+
+    if detected_lang in _VOICEBOX_SUPPORTED_LANGS:
+        return detected_lang
+
+    return "hi" if is_hindi else "en"
+
+
+def _voicebox_engine_for_language(language_code: str) -> str:
+     return "chatterbox"
+
+
+def _voicebox_profile_name(profile_name: str = "") -> str:
+    cleaned = re.sub(r"\s+", " ", (profile_name or "").strip())
+    if cleaned:
+        return cleaned[:100]
+    return f"MongoBox Voice {uuid.uuid4().hex[:8]}"
+
+
+def _voicebox_get_profile(profile_id: str) -> dict | None:
+    trimmed = (profile_id or "").strip()
+    if not trimmed:
+        return None
+
+    response = _voicebox_response(
+        "GET",
+        f"/profiles/{trimmed}",
+        accepted_statuses=(200, 404),
+        timeout=(2.0, 6.0),
+    )
+    try:
+        if response.status_code == 404:
+            return None
+        payload = response.json()
+    finally:
+        response.close()
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _voicebox_transcribe_audio(sample_path: str, *, request_id: str = "") -> str:
+    _raise_if_clone_cancelled(request_id)
+    mime_type = mimetypes.guess_type(sample_path)[0] or "application/octet-stream"
+    with open(sample_path, "rb") as handle:
+        payload = _voicebox_json(
+            "POST",
+            "/transcribe",
+            files={"file": (Path(sample_path).name, handle, mime_type)},
+            timeout=(10.0, 300.0),
+        )
+    _raise_if_clone_cancelled(request_id)
+    if isinstance(payload, dict):
+        return str(payload.get("text") or "").strip()
+    return ""
+
+
+def _voicebox_create_profile(*, profile_name: str, language_code: str) -> dict:
+    base_name = _voicebox_profile_name(profile_name)
+    body = {
+        "name": base_name,
+        "description": "Created by MongoBox from a recorded voice sample.",
+        "language": language_code,
+        "default_engine": _voicebox_engine_for_language(language_code),
+    }
+    try:
+        payload = _voicebox_json(
+            "POST",
+            "/profiles",
+            json_body=body,
+            timeout=(4.0, 15.0),
+        )
+        if isinstance(payload, dict):
+            return payload
+    except Exception as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+
+    body["name"] = f"{base_name} {uuid.uuid4().hex[:6]}"
+    payload = _voicebox_json(
+        "POST",
+        "/profiles",
+        json_body=body,
+        timeout=(4.0, 15.0),
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Voicebox profile creation returned an unexpected payload.")
+    return payload
+def _ensure_voicebox_profile(
+    *,
+    sample_path: str,
+    preferred_profile_id: str,
+    profile_name: str,
+    language_code: str,
+    reference_text: str,
+    request_id: str,
+) -> dict:
+    _require_voicebox_available()
+    _raise_if_clone_cancelled(request_id)
+
+    # ── Convert to WAV if needed (.m4a from iPhone fails Voicebox /transcribe) ──
+    if not sample_path.lower().endswith(".wav"):
+        converted = sample_path + "_ref.wav"
+        _run_ffmpeg_wav_convert(sample_path, converted, sample_rate=22050, channels=1)
+        sample_path = converted
+        log.info("Converted voice sample to WAV for Voicebox: %s", converted)
+
+    transcript = (reference_text or "").strip()
+    if not transcript:
+        transcript = _voicebox_transcribe_audio(sample_path, request_id=request_id)
+    if not transcript:
+        transcript = "MongoBox recorded voice sample"
+    transcript = transcript[:1000].strip()
+
+    existing_profile = _voicebox_get_profile(preferred_profile_id)
+    if existing_profile is not None:
+        profile = existing_profile
+    else:
+        profile = _voicebox_create_profile(
+            profile_name=profile_name,
+            language_code=language_code,
+        )
+
+    profile_id = str(profile.get("id") or "").strip()
+    if not profile_id:
+        raise RuntimeError("Voicebox profile creation did not return a profile id.")
+
+    _raise_if_clone_cancelled(request_id)
+    mime_type = mimetypes.guess_type(sample_path)[0] or "application/octet-stream"
+    with open(sample_path, "rb") as handle:
+        _voicebox_json(
+            "POST",
+            f"/profiles/{profile_id}/samples",
+            data={"reference_text": transcript},
+            files={"file": (Path(sample_path).name, handle, mime_type)},
+            timeout=(10.0, 300.0),
+        )
+    _raise_if_clone_cancelled(request_id)
+
+    return {
+        "profile_id": profile_id,
+        "profile_name": str(profile.get("name") or _voicebox_profile_name(profile_name)),
+        "reference_text": transcript,
+        "language": language_code,
+        "engine": _voicebox_engine_for_language(language_code),
+    }
+
+
+def _group_chunks_for_voicebox(
+    chunks: list[LyricChunk],
+    *,
+    max_chars: int = 4500,
+) -> list[LyricChunk]:
+    grouped: list[LyricChunk] = []
+    buffer_lines: list[str] = []
+    buffer_chars = 0
+    buffer_pause_ms = 0
+
+    for chunk in chunks:
+        text = chunk.text.strip()
+        if not text:
+            continue
+
+        extra_chars = len(text) + (1 if buffer_lines else 0)
+        if buffer_lines and buffer_chars + extra_chars > max_chars:
+            grouped.append(LyricChunk("\n".join(buffer_lines), buffer_pause_ms))
+            buffer_lines = [text]
+            buffer_chars = len(text)
+        else:
+            buffer_lines.append(text)
+            buffer_chars += extra_chars
+        buffer_pause_ms = chunk.pause_ms
+
+    if buffer_lines:
+        grouped.append(LyricChunk("\n".join(buffer_lines), buffer_pause_ms))
+    return grouped
+
+
+def _voicebox_download_audio(
+    *,
+    generation_id: str,
+    out_path: str,
+    request_id: str,
+    timeout_seconds: float = 180.0,
+) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        _raise_if_clone_cancelled(request_id)
+        response = _voicebox_response(
+            "GET",
+            f"/audio/{generation_id}",
+            accepted_statuses=(200, 404),
+            timeout=(5.0, 60.0),
+            stream=True,
+        )
+        if response.status_code == 200:
+            try:
+                with open(out_path, "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 512):
+                        if chunk:
+                            _raise_if_clone_cancelled(request_id)
+                            handle.write(chunk)
+            finally:
+                response.close()
+
+            if os.path.getsize(out_path) <= 0:
+                raise RuntimeError("Voicebox returned an empty audio file.")
+            return
+
+        response.close()
+        time.sleep(0.75)
+
+    raise RuntimeError(
+        f"Voicebox generation {generation_id} did not become downloadable in time."
+    )
+
+
+def _synthesise_with_voicebox(
+    *,
+    chunks: list[LyricChunk],
+    sample_path: str,
+    preferred_profile_id: str,
+    language_code: str,
+    profile_name: str,
+    reference_text: str,
+    tmp_dir: str,
+    request_id: str,
+) -> tuple[list[str], list[int], str, dict]:
+    grouped_chunks = _group_chunks_for_voicebox(chunks)
+    if not grouped_chunks:
+        raise RuntimeError("No lyric chunks available for Voicebox synthesis.")
+
+    profile = _ensure_voicebox_profile(
+        sample_path=sample_path,
+        preferred_profile_id=preferred_profile_id,
+        profile_name=profile_name,
+        language_code=language_code,
+        reference_text=reference_text,
+        request_id=request_id,
+    )
+    engine = "chatterbox"
+
+    chunk_wavs: list[str] = []
+    pause_ms_by_chunk: list[int] = []
+    for index, chunk in enumerate(grouped_chunks):
+        _raise_if_clone_cancelled(request_id)
+        body = {
+            "profile_id": profile["profile_id"],
+            "text": chunk.text,
+            "language": language_code,
+            "engine": engine,
+            "max_chunk_chars": 1200,
+            "crossfade_ms": 80,
+            "normalize": True,
+        }
+        try:
+            generation = _voicebox_json(
+                "POST",
+                "/generate",
+                json_body=body,
+                timeout=(15.0, 900.0),
+            )
+        except RuntimeError as exc:
+            if "language" not in str(exc).lower():
+                raise
+            body.pop("language", None)
+            generation = _voicebox_json(
+                "POST",
+                "/generate",
+                json_body=body,
+                timeout=(15.0, 900.0),
+            )
+
+        if not isinstance(generation, dict):
+            raise RuntimeError("Voicebox generation returned an unexpected payload.")
+
+        generation_id = str(generation.get("id") or "").strip()
+        if not generation_id:
+            raise RuntimeError("Voicebox generation did not return an id.")
+
+        raw_chunk = os.path.join(tmp_dir, f"voicebox_raw_{index:03d}.wav")
+        normalized_chunk = os.path.join(tmp_dir, f"voicebox_chunk_{index:03d}.wav")
+        _voicebox_download_audio(
+            generation_id=generation_id,
+            out_path=raw_chunk,
+            request_id=request_id,
+        )
+        _normalize_generated_wav(raw_chunk, normalized_chunk)
+        chunk_wavs.append(normalized_chunk)
+        pause_ms_by_chunk.append(chunk.pause_ms)
+
+    synthesis_engine = f"voicebox:{engine}:{profile['profile_id']}"
+    return chunk_wavs, pause_ms_by_chunk, synthesis_engine, profile
 
 
 @app.get("/artifacts/{artifact_key}/{file_name:path}", include_in_schema=False)
@@ -549,10 +866,6 @@ def _run_ffmpeg_wav_convert(src: str, dst: str, sample_rate: int, channels: int 
         raise RuntimeError(f"ffmpeg conversion failed: {detail or 'unknown error'}") from exc
 
 
-def _convert_to_ref_wav(src: str, dst: str) -> None:
-    _run_ffmpeg_wav_convert(src, dst, sample_rate=22050, channels=1)
-
-
 def _normalize_generated_wav(src: str, dst: str) -> None:
     _run_ffmpeg_wav_convert(src, dst, sample_rate=24000, channels=1)
 
@@ -665,319 +978,6 @@ def _detect_language_code(text: str) -> str:
     return script_to_lang[best] if counts[best] >= 5 else "en"
 
 
-def _resolve_language_code(
-    language_hint: str,
-    text: str,
-    genre_hint: str = "",
-    reference_track_title: str = "",
-    reference_artist_name: str = "",
-    reference_lyric_snippet: str = "",
-    tts_language_code: str = "",
-    is_hindi: bool = False,
-) -> str:
-    explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
-    normalized = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
-    combined_reference_text = "\n".join(
-        part for part in [
-            text, reference_lyric_snippet, reference_track_title,
-            reference_artist_name, genre_hint,
-        ]
-        if part and part.strip()
-    )
-
-    supported_xtts_codes = {
-        "en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru",
-        "nl", "cs", "ar", "zh", "ja", "hu", "ko", "hi",
-    }
-
-    if explicit_tts_code:
-        prefix = explicit_tts_code.split("-", 1)[0]
-        explicit_map = {
-            "en": "en", "es": "es", "fr": "fr", "de": "de", "it": "it",
-            "pt": "pt", "pl": "pl", "tr": "tr", "ru": "ru", "nl": "nl",
-            "cs": "cs", "ar": "ar", "zh": "zh", "ja": "ja", "hu": "hu",
-            "ko": "ko", "hi": "hi",
-            "ur": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
-            "pa": "hi", "bn": "hi", "ta": "hi", "te": "hi",
-            "mr": "hi", "gu": "hi", "kn": "hi", "ml": "hi",
-        }
-        mapped = explicit_map.get(prefix)
-        if mapped in supported_xtts_codes:
-            return mapped
-
-    if is_hindi:
-        return "hi"
-
-    combined_lower = combined_reference_text.lower()
-    if normalized:
-        hint_map = {
-            "english": "en", "spanish": "es", "french": "fr", "german": "de",
-            "italian": "it", "portuguese": "pt", "polish": "pl", "turkish": "tr",
-            "russian": "ru", "dutch": "nl", "czech": "cs", "arabic": "ar",
-            "chinese": "zh", "japanese": "ja", "hungarian": "hu", "korean": "ko",
-            "hindi": "hi",
-            "urdu": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
-        }
-        if normalized in hint_map:
-            return hint_map[normalized]
-
-    south_asian_markers = {
-        "urdu": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
-        "hindi": "hi", "bollywood": "hi", "hinglish": "hi",
-        "ghazal": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
-        "qawwali": "ar" if re.search(r"[\u0600-\u06FF]", combined_reference_text) else "hi",
-    }
-    for token, lang_code in south_asian_markers.items():
-        if token in combined_lower:
-            return lang_code
-
-    return _detect_language_code(combined_reference_text)
-
-
-def _resolve_accent_hint(
-    accent_hint: str,
-    language_hint: str,
-    genre_hint: str,
-    reference_track_title: str,
-    reference_artist_name: str,
-    reference_lyric_snippet: str,
-    is_hindi: bool = False,
-) -> str:
-    normalized = re.sub(r"[^a-z]+", " ", (accent_hint or "").strip().lower()).strip()
-    if normalized in {"indian", "british", "american"}:
-        return normalized
-    if normalized in {"hindi", "urdu", "punjabi", "desi", "south asian"}:
-        return "indian"
-
-    combined = " ".join(
-        part.lower() for part in [
-            language_hint, genre_hint, reference_track_title,
-            reference_artist_name, reference_lyric_snippet,
-        ]
-        if part and part.strip()
-    )
-    if is_hindi:
-        return "indian"
-    if any(token in combined for token in ["urdu", "hindi", "bollywood", "ghazal", "qawwali", "desi", "hinglish"]):
-        return "indian"
-    return "indian"
-
-
-_INDIAN_EN_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bthis\b", re.IGNORECASE), "dis"),
-    (re.compile(r"\bthat\b", re.IGNORECASE), "dat"),
-    (re.compile(r"\bthese\b", re.IGNORECASE), "dese"),
-    (re.compile(r"\bthose\b", re.IGNORECASE), "dose"),
-    (re.compile(r"\bthink\b", re.IGNORECASE), "tink"),
-    (re.compile(r"\bthing\b", re.IGNORECASE), "ting"),
-    (re.compile(r"\bthree\b", re.IGNORECASE), "tree"),
-    (re.compile(r"\bthrough\b", re.IGNORECASE), "troo"),
-    (re.compile(r"\bwith\b", re.IGNORECASE), "wit"),
-    (re.compile(r"\bvery\b", re.IGNORECASE), "wery"),
-    (re.compile(r"\blove\b", re.IGNORECASE), "luv"),
-]
-
-
-def _shape_english_pronunciation(text: str, accent: str) -> str:
-    if accent != "indian":
-        return text
-    shaped = text
-    for pattern, replacement in _INDIAN_EN_REPLACEMENTS:
-        shaped = pattern.sub(replacement, shaped)
-    return shaped
-
-
-def _get_or_load_neutts_model(backbone_repo: str) -> NeuTTS:
-    model_key = (backbone_repo or "").strip()
-    if not model_key:
-        raise RuntimeError("No NeuTTS backbone repo was provided.")
-    model = _tts_models.get(model_key)
-    if model is not None:
-        return model
-    log.info("Loading NeuTTS model %s …", model_key)
-    model = NeuTTS(
-        backbone_repo=model_key,
-        backbone_device=_device,
-        codec_repo=_DEFAULT_NEUTTS_CODEC,
-        codec_device=_device,
-    )
-    _tts_models[model_key] = model
-    return model
-
-
-def _resolve_neutts_backbone(
-    *,
-    language_hint: str,
-    tts_language_code: str,
-    detected_lang: str,
-    is_hindi: bool,
-) -> str | None:
-    if is_hindi:
-        return None
-
-    explicit_tts_code = re.sub(r"[^a-z\-]+", "", (tts_language_code or "").strip().lower())
-    explicit_prefix = explicit_tts_code.split("-", 1)[0] if explicit_tts_code else ""
-    normalized_hint = re.sub(r"[^a-z]+", " ", (language_hint or "").strip().lower()).strip()
-
-    candidates = [explicit_prefix, normalized_hint, detected_lang]
-
-    for value in candidates:
-        if value in {"en", "english", "american", "british"}:
-            return "neuphonic/neutts-air"
-        if value in {"es", "spanish", "espanol"}:
-            return "neuphonic/neutts-nano-spanish"
-        if value in {"de", "german", "deutsch"}:
-            return "neuphonic/neutts-nano-german"
-        if value in {"fr", "french", "francais"}:
-            return "neuphonic/neutts-nano-french"
-
-    return None
-
-
-def _get_or_load_reference_asr_pipeline():
-    global _reference_asr_pipeline
-    if _reference_asr_pipeline is not None:
-        return _reference_asr_pipeline
-
-    from transformers import pipeline
-
-    device_index = 0 if torch.cuda.is_available() else -1
-    log.info(
-        "Loading reference transcription model %s on device %s …",
-        _DEFAULT_REFERENCE_ASR_MODEL,
-        "gpu" if device_index >= 0 else "cpu",
-    )
-    _reference_asr_pipeline = pipeline(
-        "automatic-speech-recognition",
-        model=_DEFAULT_REFERENCE_ASR_MODEL,
-        device=device_index,
-    )
-    return _reference_asr_pipeline
-
-
-def _guess_reference_language(backbone_repo: str) -> str | None:
-    language_code = BACKBONE_LANGUAGE_MAP.get(backbone_repo, "")
-    if not language_code:
-        return None
-    return language_code.split("-", 1)[0]
-
-
-def _transcribe_reference_audio(ref_wav: str, backbone_repo: str) -> str:
-    try:
-        asr = _get_or_load_reference_asr_pipeline()
-        language = _guess_reference_language(backbone_repo)
-        generate_kwargs = {"task": "transcribe"}
-        if language:
-            generate_kwargs["language"] = language
-        result = asr(ref_wav, generate_kwargs=generate_kwargs)
-        if isinstance(result, dict):
-            transcript = (result.get("text") or "").strip()
-            if transcript:
-                return transcript
-    except Exception as exc:
-        log.warning("Reference transcription failed: %s", exc)
-    return ""
-
-
-def _resolve_reference_transcript(
-    *,
-    params: CloneRequestParams,
-    ref_wav: str,
-    backbone_repo: str,
-) -> str:
-    explicit = (params.reference_transcript or "").strip()
-    if explicit:
-        return explicit
-
-    transcript = _transcribe_reference_audio(ref_wav, backbone_repo)
-    if transcript:
-        log.info("Reference audio transcribed locally for NeuTTS prompting")
-        return transcript
-
-    log.warning(
-        "No reference transcript available; NeuTTS will infer from audio only. "
-        "Voice similarity may be weaker."
-    )
-    return ""
-
-
-def _write_generated_wav(path: str, wav) -> None:
-    import numpy as np
-    import soundfile as sf
-
-    audio = np.asarray(wav, dtype=np.float32).squeeze()
-    if audio.ndim != 1:
-        raise RuntimeError("NeuTTS returned unexpected audio dimensions.")
-    audio = np.nan_to_num(audio)
-    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-    if peak > 1.0:
-        audio = audio / peak
-    sf.write(path, audio, 24000, subtype="PCM_16")
-
-
-def _synthesise_chunks_with_neutts(
-    *,
-    chunks: list[str],
-    speaker_wav: str,
-    backbone_repo: str,
-    reference_transcript: str,
-    accent: str,
-    tmp_dir: str,
-    request_id: str,
-) -> list[str]:
-    model = _get_or_load_neutts_model(backbone_repo)
-    ref_codes = model.encode_reference(speaker_wav)
-    model_language = _guess_reference_language(backbone_repo)
-
-    chunk_wavs: list[str] = []
-    for i, chunk in enumerate(chunks):
-        _raise_if_clone_cancelled(request_id)
-        spoken_chunk = (
-            _shape_english_pronunciation(chunk, accent=accent)
-            if model_language == "en"
-            else chunk
-        )
-        wav = model.infer(spoken_chunk, ref_codes, reference_transcript)
-        out_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}.wav")
-        _write_generated_wav(out_chunk, wav)
-        _raise_if_clone_cancelled(request_id)
-        chunk_wavs.append(out_chunk)
-    return chunk_wavs
-
-
-def _synthesise_chunks_with_espeak(
-    *,
-    chunks: list[str],
-    espeak_voice: str,
-    tmp_dir: str,
-    request_id: str,
-) -> list[str]:
-    voice = (espeak_voice or "").strip() or "en-gb"
-    espeak_command = shutil.which("espeak-ng") or shutil.which("espeak")
-    chunk_wavs: list[str] = []
-    for i, chunk in enumerate(chunks):
-        _raise_if_clone_cancelled(request_id)
-        raw_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak_raw.wav")
-        cmd = [espeak_command or "espeak-ng", "-v", voice, "-w", raw_chunk, chunk]
-        try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.PIPE, text=True)
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "eSpeak was not found. Install it:\n"
-                "  macOS: brew install espeak\n"
-                "  Ubuntu: sudo apt install espeak-ng"
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").strip()
-            raise RuntimeError(f"eSpeak synthesis failed: {detail or 'unknown error'}") from exc
-        normalized_chunk = os.path.join(tmp_dir, f"chunk_{i:03d}_espeak.wav")
-        _normalize_generated_wav(raw_chunk, normalized_chunk)
-        _raise_if_clone_cancelled(request_id)
-        chunk_wavs.append(normalized_chunk)
-    return chunk_wavs
-
-
 @app.post("/clone/cancel")
 async def cancel_clone(request_id: str = Form(...)) -> dict:
     trimmed = (request_id or "").strip()
@@ -985,6 +985,64 @@ async def cancel_clone(request_id: str = Form(...)) -> dict:
         raise HTTPException(400, "request_id is required.")
     was_active = _cancel_clone_request(trimmed)
     return {"status": "ok", "request_id": trimmed, "was_active": was_active}
+
+
+@app.post("/voicebox/profile/bootstrap")
+def bootstrap_voicebox_profile(
+    voice_sample: UploadFile = File(...),
+    profile_id: str = Form(""),
+    profile_name: str = Form(""),
+    language: str = Form(""),
+    reference_text: str = Form(""),
+    request_id: str = Form(""),
+) -> dict:
+    available, detail = _voicebox_health_snapshot(force=True)
+    if not available:
+        raise HTTPException(503, detail)
+
+    tmp_dir = tempfile.mkdtemp(prefix="mongobox_voicebox_profile_")
+    try:
+        suffix = Path(voice_sample.filename or "voice_sample").suffix or ".bin"
+        sample_path = os.path.join(tmp_dir, f"voice_sample{suffix}")
+        with open(sample_path, "wb") as handle:
+            shutil.copyfileobj(voice_sample.file, handle)
+
+        is_hindi = _is_hindi_family_language_hint(language)
+        voicebox_language = _coerce_voicebox_language(
+            language_hint=language,
+            tts_language_code="",
+            detected_lang="hi" if is_hindi else "en",
+            is_hindi=is_hindi,
+        )
+        profile = _ensure_voicebox_profile(
+            sample_path=sample_path,
+            preferred_profile_id=profile_id,
+            profile_name=profile_name,
+            language_code=voicebox_language,
+            reference_text=reference_text,
+            request_id=(request_id or "").strip(),
+        )
+        return {
+            "status": "ok",
+            "profile_id": profile["profile_id"],
+            "profile_name": profile["profile_name"],
+            "language": profile["language"],
+            "engine": profile["engine"],
+            "reference_text": profile["reference_text"],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("Voicebox profile bootstrap failed: %s", exc)
+        raise HTTPException(500, str(exc)) from exc
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        finally:
+            try:
+                voice_sample.file.close()
+            except Exception:
+                pass
 
 
 # ── Background music extraction ────────────────────────────────────────────────
@@ -1144,16 +1202,13 @@ def clone_voice(
     mood: str = Form(""),
     genre: str = Form(""),
     language: str = Form(""),
-    accent_hint: str = Form(""),
     tts_language_code: str = Form(""),
-    espeak_voice: str = Form(""),
-    coqui_model_hint: str = Form(""),
-    is_hindi: str = Form(""),
     reference_track_title: str = Form(""),
     reference_artist_name: str = Form(""),
     reference_lyric_snippet: str = Form(""),
     reference_transcript: str = Form(""),
     reference_video_id: str = Form(""),
+    voicebox_profile_id: str = Form(""),
 ) -> FileResponse:
     if not lyrics.strip():
         raise HTTPException(400, "Lyrics must not be empty.")
@@ -1164,30 +1219,27 @@ def clone_voice(
         mood=mood,
         genre=genre,
         language=language,
-        accent_hint=accent_hint,
         tts_language_code=tts_language_code,
-        espeak_voice=espeak_voice,
-        coqui_model_hint=coqui_model_hint,
-        is_hindi=is_hindi,
         reference_track_title=reference_track_title,
         reference_artist_name=reference_artist_name,
         reference_lyric_snippet=reference_lyric_snippet,
         reference_transcript=reference_transcript,
         reference_video_id=reference_video_id,
+        voicebox_profile_id=voicebox_profile_id,
     )
     _mark_clone_request_active(params.request_id)
 
     log.info(
-        "Clone request received: request_id=%s language=%s is_hindi=%s "
-        "mood=%s genre=%s reference=%s/%s video_id=%s",
+        "Clone request received: request_id=%s language=%s "
+        "mood=%s genre=%s reference=%s/%s video_id=%s voicebox_profile_id=%s",
         params.request_id or "(none)",
         params.language or "-",
-        params.is_hindi,
         params.mood or "-",
         params.genre or "-",
         params.reference_track_title or "-",
         params.reference_artist_name or "-",
         params.reference_video_id or "(none)",
+        params.voicebox_profile_id or "(none)",
     )
 
     tmp_dir = tempfile.mkdtemp(prefix="mongobox_")
@@ -1198,103 +1250,48 @@ def clone_voice(
         with open(src_path, "wb") as fh:
             shutil.copyfileobj(voice_sample.file, fh)
         log.info("Received voice sample: %s (%d bytes)", suffix, os.path.getsize(src_path))
-
-        # 2) Convert to normalised reference WAV
-        ref_wav = os.path.join(tmp_dir, "reference.wav")
-        _convert_to_ref_wav(src_path, ref_wav)
         _raise_if_clone_cancelled(params.request_id)
 
-        # 3) Transliterate Hinglish → Devanagari (before stripping tags)
-        working_lyrics = params.lyrics
-        if params.is_hindi:
-            log.info("is_hindi=True — transliterating Hinglish → Devanagari")
-            working_lyrics = _prepare_hindi_text(working_lyrics)
-
-        clean_lyrics = _strip_section_tags(working_lyrics)
+        clean_lyrics = _strip_section_tags(params.lyrics)
         chunks = _chunk_lyrics(clean_lyrics)
         if not chunks:
             raise HTTPException(400, "Lyrics are empty after stripping section tags.")
 
-        detected_lang = _resolve_language_code(
-            params.language,
-            clean_lyrics,
-            genre_hint=params.genre,
-            reference_track_title=params.reference_track_title,
-            reference_artist_name=params.reference_artist_name,
-            reference_lyric_snippet=params.reference_lyric_snippet,
-            tts_language_code=params.tts_language_code,
-            is_hindi=params.is_hindi,
-        )
-        if params.is_hindi and detected_lang != "hi":
-            log.warning(
-                "Language resolved to %s despite is_hindi=True — overriding to 'hi'",
-                detected_lang,
-            )
-            detected_lang = "hi"
-
-        accent = _resolve_accent_hint(
-            params.accent_hint, params.language, params.genre,
-            params.reference_track_title, params.reference_artist_name,
-            params.reference_lyric_snippet,
-            is_hindi=params.is_hindi,
-        )
-        log.info(
-            "Pipeline: chunks=%d lang=%s accent=%s",
-            len(chunks), detected_lang, accent,
-        )
-
-        # 4) Synthesis (NeuTTS → eSpeak fallback)
-        chunk_wavs: list[str]
-        synthesis_engine = "neutts"
-        backbone_repo = _resolve_neutts_backbone(
+        detected_lang = _detect_language_code(clean_lyrics)
+        hindi_hint = _is_hindi_family_language_hint(params.language)
+        voicebox_language = _coerce_voicebox_language(
             language_hint=params.language,
             tts_language_code=params.tts_language_code,
             detected_lang=detected_lang,
-            is_hindi=params.is_hindi,
+            is_hindi=hindi_hint,
         )
-        if backbone_repo is not None:
-            try:
-                reference_transcript_text = _resolve_reference_transcript(
-                    params=params,
-                    ref_wav=ref_wav,
-                    backbone_repo=backbone_repo,
-                )
-                chunk_wavs = _synthesise_chunks_with_neutts(
-                    chunks=[chunk.text for chunk in chunks],
-                    speaker_wav=ref_wav,
-                    backbone_repo=backbone_repo,
-                    reference_transcript=reference_transcript_text,
-                    accent=accent,
-                    tmp_dir=tmp_dir,
-                    request_id=params.request_id,
-                )
-                synthesis_engine = backbone_repo
-            except Exception as neutts_exc:
-                log.warning("NeuTTS failed (%s); falling back to eSpeak", neutts_exc)
-                espeak_fallback_voice = (params.espeak_voice or "").strip() or (
-                    "hi" if params.is_hindi else "en-gb"
-                )
-                chunk_wavs = _synthesise_chunks_with_espeak(
-                    chunks=[chunk.text for chunk in chunks],
-                    espeak_voice=espeak_fallback_voice,
-                    tmp_dir=tmp_dir,
-                    request_id=params.request_id,
-                )
-                synthesis_engine = f"espeak:{espeak_fallback_voice}"
-        else:
-            log.warning(
-                "No NeuTTS backbone for lang=%s, falling back to eSpeak", detected_lang
-            )
-            espeak_fallback_voice = (params.espeak_voice or "").strip() or (
-                "hi" if params.is_hindi else "en-gb"
-            )
-            chunk_wavs = _synthesise_chunks_with_espeak(
-                chunks=[chunk.text for chunk in chunks],
-                espeak_voice=espeak_fallback_voice,
+        log.info(
+            "Pipeline: chunks=%d voicebox_language=%s (detected_script=%s)",
+            len(chunks),
+            voicebox_language,
+            detected_lang,
+        )
+
+        try:
+            chunk_wavs, pause_ms_by_chunk, synthesis_engine, _ = _synthesise_with_voicebox(
+                chunks=chunks,
+                sample_path=src_path,
+                preferred_profile_id=params.voicebox_profile_id,
+                language_code=voicebox_language,
+                profile_name=f"{params.language or 'MongoBox'} Voice",
+                reference_text=params.reference_transcript,
                 tmp_dir=tmp_dir,
                 request_id=params.request_id,
             )
-            synthesis_engine = f"espeak:{espeak_fallback_voice}"
+        except RuntimeError as exc:
+            raise HTTPException(503, f"Voicebox unavailable: {exc}") from exc
+
+        log.info(
+            "Voicebox synthesis complete: engine=%s language=%s profile_hint=%s",
+            synthesis_engine,
+            voicebox_language,
+            params.voicebox_profile_id or "(create or reuse)",
+        )
 
         # 5) Merge chunks
         _raise_if_clone_cancelled(params.request_id)
@@ -1305,7 +1302,7 @@ def clone_voice(
             _merge_wav_chunks(
                 chunk_wavs,
                 final_wav,
-                pause_ms_by_chunk=[chunk.pause_ms for chunk in chunks],
+                pause_ms_by_chunk=pause_ms_by_chunk,
             )
         log.info(
             "Voice synthesis complete: engine=%s bytes=%d",
@@ -1444,16 +1441,12 @@ def get_bpm(video_id: str = "") -> dict:
 
 @app.get("/health")
 def health() -> dict:
+    voicebox_available, voicebox_detail = _voicebox_health_snapshot()
     return {
         "status": "ok",
-        "model_loaded": bool(_tts_models),
-        "device": _device,
-        "cuda": torch.cuda.is_available(),
-        "engine": "neutts",
-        "loaded_backbones": sorted(_tts_models.keys()),
-        "default_backbone": _PRIMARY_BACKBONE_REPO,
-        "reference_asr_model": _DEFAULT_REFERENCE_ASR_MODEL,
-        "hindi_transliteration": _indic_trans is not None,
+        "voicebox_api_url": _VOICEBOX_API_URL,
+        "voicebox_available": voicebox_available,
+        "voicebox_detail": voicebox_detail,
     }
 
 

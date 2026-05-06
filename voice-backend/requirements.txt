@@ -4,15 +4,14 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
-
-# ── Voice cloning (NeuTTS) ────────────────────────────────────────────────────
-neutts==1.2.1
+requests>=2.31.0
 
 # ── Audio utils ────────────────────────────────────────────────────────────────
 librosa==0.11.0
 soundfile==0.13.1
 
-# ── Option B: extract instrumental from reference song ─────────────────────────
+# ── Background music (Demucs needs PyTorch) ────────────────────────────────────
+torch>=2.1.0
 yt-dlp>=2024.1.0
 demucs>=4.0.0
 torchcodec>=0.8.0

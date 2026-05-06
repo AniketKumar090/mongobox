@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -58,6 +57,7 @@ class VoiceSongScreen extends StatefulWidget {
     required this.genre,
     this.referenceSong,
     required this.voiceSamplePath,
+    this.voiceboxProfileId,
     this.hinglishLyrics,
   });
 
@@ -70,6 +70,7 @@ class VoiceSongScreen extends StatefulWidget {
   final String genre;
   final SongReference? referenceSong;
   final String voiceSamplePath;
+  final String? voiceboxProfileId;
 
   @override
   State<VoiceSongScreen> createState() => _VoiceSongScreenState();
@@ -97,8 +98,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
   bool _isLeavingScreen = false;
   String? _activeCloneRequestId;
   String? _errorMessage;
-  String _statusTitle = 'Preparing local voice engine…';
-  String _statusSubtitle = 'Checking your on-device voice engine.';
+  String _statusTitle = 'Preparing voice backend…';
+  String _statusSubtitle = 'Checking connection to the Voicebox pipeline.';
   StreamSubscription<PlayerState>? _voiceStateSub;
 
   // ── Mix controls ─────────────────────────────────────────────────────────
@@ -146,15 +147,15 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
       _musicCandidates = const [];
       _errorMessage = null;
       _isPlaying = false;
-      _statusTitle = 'Preparing local voice engine…';
-      _statusSubtitle = 'Checking your on-device voice engine.';
+      _statusTitle = 'Preparing voice backend…';
+      _statusSubtitle = 'Checking connection to the Voicebox pipeline.';
     });
     final language = widget.dominantLanguage;
     try {
-      await _ensureLocalVoiceEngineReady(language);
+      await _ensureVoiceBackendReady(language);
       _setProgressStatus(
         title: 'Cloning in $language…',
-        subtitle: 'Applying your saved voice to the lyrics locally.',
+        subtitle: 'Synthesizing with Voicebox through your voice backend.',
       );
       final file = await _cloneService.cloneVoice(
         voiceSamplePath: widget.voiceSamplePath,
@@ -163,6 +164,7 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
         mood: widget.mood,
         genre: widget.genre,
         language: language,
+        voiceboxProfileId: widget.voiceboxProfileId,
         referenceSong: widget.referenceSong,
       );
       if (_activeCloneRequestId == requestId) {
@@ -182,30 +184,30 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     }
   }
 
-  Future<void> _ensureLocalVoiceEngineReady(String language) async {
+  Future<void> _ensureVoiceBackendReady(String language) async {
     _setProgressStatus(
-      title: 'Preparing local voice engine…',
-      subtitle: 'Checking your on-device voice model and runtime.',
+      title: 'Preparing voice backend…',
+      subtitle: 'Checking FastAPI and Voicebox reachability.',
     );
 
     final initial = await VoiceBackendBootstrapService.ensureBackendReady();
     if (initial.isHealthy) {
       _setProgressStatus(
-        title: 'Local voice engine ready',
-        subtitle: 'Generating your $language voice locally.',
+        title: 'Voice backend ready',
+        subtitle: 'Generating your $language vocal via Voicebox.',
       );
       return;
     }
 
     if (!initial.didStart) {
-      throw Exception(initial.message ?? 'Local voice engine is not ready.');
+      throw Exception(initial.message ?? 'Voice backend is not ready.');
     }
 
     _setProgressStatus(
-      title: 'Starting local voice engine…',
+      title: 'Starting voice backend…',
       subtitle:
           initial.message ??
-          'Launching the local model in the background. First run can take a minute.',
+          'Launching the Python server in the background.',
     );
 
     final ready = await VoiceBackendBootstrapService.waitForBackendReady(
@@ -214,13 +216,13 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     if (!ready.isHealthy) {
       throw Exception(
         ready.message ??
-            'Local voice engine did not become ready in time. Please try again.',
+            'Voice backend did not become ready in time. Ensure Voicebox is running.',
       );
     }
 
     _setProgressStatus(
-      title: 'Local voice engine ready',
-      subtitle: 'Generating your $language voice locally.',
+      title: 'Voice backend ready',
+      subtitle: 'Generating your $language vocal via Voicebox.',
     );
   }
 
@@ -245,7 +247,8 @@ class _VoiceSongScreenState extends State<VoiceSongScreen> {
     if (result.backgroundMusicUrl?.isNotEmpty == true) {
       musicCandidates.add((
         url: result.backgroundMusicUrl!,
-        label: result.backgroundMusicLabel ??
+        label:
+            result.backgroundMusicLabel ??
             'Original instrumental — adjust volume below',
         headers: null,
       ));
@@ -943,7 +946,10 @@ class _TopBar extends StatelessWidget {
           children: [
             Expanded(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: _P.chip,
                   borderRadius: BorderRadius.circular(10),
@@ -975,7 +981,10 @@ class _TopBar extends StatelessWidget {
             GestureDetector(
               onTap: onLibrary,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: _P.chip,
                   borderRadius: BorderRadius.circular(10),
@@ -984,7 +993,11 @@ class _TopBar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.library_music_rounded, size: 12, color: _P.grey2),
+                    Icon(
+                      Icons.library_music_rounded,
+                      size: 12,
+                      color: _P.grey2,
+                    ),
                     const SizedBox(width: 5),
                     Text(
                       'Saved',
@@ -1178,11 +1191,23 @@ class _StatusRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg =
-        isSuccess ? _P.greenSoft : isError ? _P.redSoft : _P.card;
+        isSuccess
+            ? _P.greenSoft
+            : isError
+            ? _P.redSoft
+            : _P.card;
     final border =
-        isSuccess ? _P.greenBorder : isError ? _P.redBorder : _P.border;
+        isSuccess
+            ? _P.greenBorder
+            : isError
+            ? _P.redBorder
+            : _P.border;
     final iconBg =
-        isSuccess ? AppColors.accentStrong : isError ? _P.red : _P.grey3;
+        isSuccess
+            ? AppColors.accentStrong
+            : isError
+            ? _P.red
+            : _P.grey3;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -1200,9 +1225,7 @@ class _StatusRow extends StatelessWidget {
                 isLoading
                     ? const Padding(
                       padding: EdgeInsets.all(6),
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                      ),
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
                     )
                     : Container(
                       decoration: BoxDecoration(

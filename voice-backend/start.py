@@ -7,9 +7,9 @@ Checks dependencies, installs anything missing, then starts uvicorn.
 
 Usage
 -----
-    python start.py                     # default: port 8000
+    python start.py                     # default: 0.0.0.0:8000 (phone + simulator)
     python start.py --port 9000         # custom port
-    python start.py --host 0.0.0.0      # expose on LAN (for physical device)
+    python start.py --host 127.0.0.1    # loopback only (stricter)
     python start.py --reload            # dev mode: auto-restart on code change
 """
 
@@ -35,7 +35,7 @@ def banner() -> None:
         f"""
 {BOLD}╔══════════════════════════════════════════╗
 ║   MongoBox  •  Voice Cloning Backend     ║
-║   NeuTTS  •  Free / Local                ║
+║   Voicebox API  •  Remote synthesis      ║
 ╚══════════════════════════════════════════╝{RESET}
 """
     )
@@ -66,33 +66,19 @@ def check_ffmpeg(auto_continue: bool = False) -> None:
         sys.exit(1)
 
 
-def check_espeak(auto_continue: bool = False) -> None:
-    if shutil.which("espeak-ng") or shutil.which("espeak"):
-        print(f"{GREEN}✓  eSpeak found{RESET}")
-        return
-
-    print(
-        f"{YELLOW}⚠  eSpeak not found — required by NeuTTS phonemization and fallback synthesis.{RESET}"
-    )
-    print("   macOS:   brew install espeak")
-    print("   Ubuntu:  sudo apt install espeak-ng")
-    print("   Windows: install eSpeak NG and add it to PATH")
-    if auto_continue:
-        print(f"{YELLOW}ℹ  Continuing because auto-boot mode is enabled.{RESET}")
-        return
-    answer = input("\n   Continue anyway? [y/N] ").strip().lower()
-    if answer != "y":
-        sys.exit(1)
+def _requirements_file() -> str:
+    return os.path.join(os.path.dirname(__file__), "requirements.txt")
 
 
 def install_requirements() -> None:
-    req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+    req_file = _requirements_file()
     if not os.path.exists(req_file):
-        print(f"{RED}✗  requirements.txt not found next to start.py{RESET}")
+        print(f"{RED}✗  Dependency file not found: {req_file}{RESET}")
         sys.exit(1)
 
     print(f"\n{BOLD}Checking Python packages …{RESET}")
-    result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"])
+    print(f"  Requirements: {GREEN}{os.path.basename(req_file)}{RESET}")
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file])
     if result.returncode != 0:
         print(f"{RED}✗  pip install failed — check the error above.{RESET}")
         sys.exit(1)
@@ -123,6 +109,34 @@ def check_background_mix_stack(auto_continue: bool = False) -> None:
         sys.exit(1)
 
 
+def _primary_lan_ipv4() -> str | None:
+    """Best-effort LAN address for Flutter `VOICE_BACKEND_DEVICE_URL` hints."""
+    import socket
+
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.254.254.254", 1))
+            ip = probe.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+        finally:
+            probe.close()
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                return ip
+    except OSError:
+        pass
+
+    return None
+
+
 def check_cuda() -> None:
     try:
         import torch
@@ -141,13 +155,26 @@ def start_server(host: str, port: int, reload: bool) -> None:
     # Disable numba JIT cache to avoid "no locator available" when disk is full
     # or cache dir is unwritable (e.g. read-only volume, sandbox).
     os.environ.setdefault("NUMBA_DISABLE_JIT_CACHE", "1")
+    os.environ.setdefault("MONGOBOX_TTS_ENGINE", "voicebox")
+    voicebox_url = (os.environ.get("VOICEBOX_API_URL", "http://127.0.0.1:17493") or "").strip()
 
+    lan_ip = _primary_lan_ipv4()
     print(f"\n{BOLD}Starting FastAPI server …{RESET}")
+    print(f"  Bind:   {GREEN}{host}:{port}{RESET}")
     print(f"  URL:    {GREEN}http://{host}:{port}{RESET}")
     print(f"  Health: {GREEN}http://{host}:{port}/health{RESET}")
-    print(f"\n  Flutter VOICE_BACKEND_URL = http://<your-machine-ip>:{port}")
-    print("  (For iOS Simulator use 127.0.0.1; for Android emulator use 10.0.2.2)")
-    print("\n  NeuTTS and optional local transcription models download on first run.\n")
+    print(f"  Voicebox API:      {GREEN}{voicebox_url}{RESET}")
+    if lan_ip:
+        print(
+            f"\n  {BOLD}Physical phone / tablet on Wi-Fi:{RESET} "
+            f"set {GREEN}VOICE_BACKEND_DEVICE_URL=http://{lan_ip}:{port}{RESET}"
+        )
+        print(f"  Quick check from phone browser: http://{lan_ip}:{port}/health")
+    print(
+        f"\n  iOS Simulator may keep {GREEN}VOICE_BACKEND_URL=http://127.0.0.1:{port}{RESET}"
+    )
+    print("  Android emulator uses http://10.0.2.2:$PORT for the host machine.")
+    print("\n  Demucs may download weights on first instrumental separation.\n")
 
     cmd = [
         sys.executable,
@@ -170,8 +197,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Start the MongoBox voice backend.")
     parser.add_argument(
         "--host",
-        default="127.0.0.1",
-        help="Bind host (default 127.0.0.1; use 0.0.0.0 for LAN)",
+        default="0.0.0.0",
+        help="Bind host (default 0.0.0.0 for LAN + localhost; use 127.0.0.1 for loopback only)",
     )
     parser.add_argument("--port", type=int, default=8000, help="Port number (default 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
@@ -186,13 +213,13 @@ def main() -> None:
     args = parser.parse_args()
 
     auto_boot = args.auto or os.environ.get("MONGOBOX_AUTO_BOOT") == "1"
+    os.environ.setdefault("MONGOBOX_TTS_ENGINE", "voicebox")
 
     banner()
     print(f"{BOLD}Pre-flight checks{RESET}")
     print("─" * 44)
     check_python()
     check_ffmpeg(auto_continue=auto_boot)
-    check_espeak(auto_continue=auto_boot)
 
     if not args.skip_install:
         install_requirements()

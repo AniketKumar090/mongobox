@@ -23,23 +23,10 @@ class VoiceCloneResult {
   final String? backgroundMusicLabel;
 }
 
-// ── Language metadata sent to the Python backend ──────────────────────────────
 class _LangMeta {
-  const _LangMeta({
-    required this.accentHint,
-    required this.ttsLanguageCode,
-    required this.espeak,
-    required this.coquiModel,
-    required this.isHindi,
-  });
-  final String accentHint;
-  final String ttsLanguageCode;
-  final String espeak;
-  final String coquiModel;
+  const _LangMeta({required this.ttsLanguageCode});
 
-  /// True for any South-Asian / Hindi-family language where the backend
-  /// should run the Hinglish → Devanagari transliteration pipeline.
-  final bool isHindi;
+  final String ttsLanguageCode;
 }
 
 class VoiceCloneService {
@@ -47,125 +34,27 @@ class VoiceCloneService {
 
   final http.Client _client;
 
-  // ── Language table ──────────────────────────────────────────────────────────
   static const _langTable = <String, _LangMeta>{
-    // ── South Asian (all flagged isHindi=true so backend transliterates) ──
-    'hindi': _LangMeta(
-      accentHint: 'hindi',
-      ttsLanguageCode: 'hi-IN',
-      espeak: 'hi',
-      coquiModel: 'tts_models/hi/cv/vits',
-      isHindi: true,
-    ),
-    'hinglish': _LangMeta(
-      accentHint: 'hindi',
-      ttsLanguageCode: 'hi-IN',
-      espeak: 'hi',
-      coquiModel: 'tts_models/hi/cv/vits',
-      isHindi: true, // ← was missing / ambiguous before
-    ),
-    'urdu': _LangMeta(
-      accentHint: 'urdu',
-      ttsLanguageCode: 'ur-PK',
-      espeak: 'ur',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'punjabi': _LangMeta(
-      accentHint: 'punjabi',
-      ttsLanguageCode: 'pa-IN',
-      espeak: 'pa',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'bengali': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'bn-IN',
-      espeak: 'bn',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'tamil': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'ta-IN',
-      espeak: 'ta',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'telugu': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'te-IN',
-      espeak: 'te',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'marathi': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'mr-IN',
-      espeak: 'mr',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'gujarati': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'gu-IN',
-      espeak: 'gu',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'kannada': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'kn-IN',
-      espeak: 'kn',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    'malayalam': _LangMeta(
-      accentHint: 'indian',
-      ttsLanguageCode: 'ml-IN',
-      espeak: 'ml',
-      coquiModel: 'tts_models/multilingual/multi-dataset/xtts_v2',
-      isHindi: true,
-    ),
-    // ── English variants ─────────────────────────────────────────────────
-    'british': _LangMeta(
-      accentHint: 'british',
-      ttsLanguageCode: 'en-GB',
-      espeak: 'en-gb',
-      coquiModel: 'tts_models/en/ljspeech/vits',
-      isHindi: false,
-    ),
-    'american': _LangMeta(
-      accentHint: 'american',
-      ttsLanguageCode: 'en-US',
-      espeak: 'en-us',
-      coquiModel: 'tts_models/en/ljspeech/vits',
-      isHindi: false,
-    ),
-    'english': _LangMeta(
-      accentHint: 'british',
-      ttsLanguageCode: 'en-GB',
-      espeak: 'en-gb',
-      coquiModel: 'tts_models/en/ljspeech/vits',
-      isHindi: false,
-    ),
+    'hindi': _LangMeta(ttsLanguageCode: 'hi-IN'),
+    'hinglish': _LangMeta(ttsLanguageCode: 'hi-IN'),
+    'urdu': _LangMeta(ttsLanguageCode: 'ur-PK'),
+    'punjabi': _LangMeta(ttsLanguageCode: 'pa-IN'),
+    'bengali': _LangMeta(ttsLanguageCode: 'bn-IN'),
+    'tamil': _LangMeta(ttsLanguageCode: 'ta-IN'),
+    'telugu': _LangMeta(ttsLanguageCode: 'te-IN'),
+    'marathi': _LangMeta(ttsLanguageCode: 'mr-IN'),
+    'gujarati': _LangMeta(ttsLanguageCode: 'gu-IN'),
+    'kannada': _LangMeta(ttsLanguageCode: 'kn-IN'),
+    'malayalam': _LangMeta(ttsLanguageCode: 'ml-IN'),
+    'british': _LangMeta(ttsLanguageCode: 'en-GB'),
+    'american': _LangMeta(ttsLanguageCode: 'en-US'),
+    'english': _LangMeta(ttsLanguageCode: 'en-GB'),
   };
 
-  static const _defaultMeta = _LangMeta(
-    accentHint: 'indian',
-    ttsLanguageCode: 'hi-IN',
-    espeak: 'hi',
-    coquiModel: 'tts_models/hi/cv/vits',
-    isHindi: true,
-  );
+  static const _defaultMeta = _LangMeta(ttsLanguageCode: 'hi-IN');
 
-  // ── Language resolution ──────────────────────────────────────────────────
-
-  /// Normalises free-form language strings like "Hindi dominant", "Hinglish",
-  /// "Hindi" etc. into a lookup key.
   static String _normalise(String language) {
     final lower = language.trim().toLowerCase();
-    // Strip common suffixes that come from GenerateSongScreen
     final cleaned =
         lower
             .replaceAll(RegExp(r'\s*dominant\s*'), '')
@@ -180,15 +69,12 @@ class VoiceCloneService {
   }) {
     final key = _normalise(language);
 
-    // Direct lookup
     if (_langTable.containsKey(key)) return _langTable[key]!;
 
-    // Partial-match (e.g. "hindi dominant" normalises to "hindi")
     for (final entry in _langTable.entries) {
       if (key.contains(entry.key)) return entry.value;
     }
 
-    // Sniff from artist for English-dominant tracks
     final artist = (referenceSong?.artistName ?? '').toLowerCase();
     if (artist.isNotEmpty) {
       const britishMarkers = [
@@ -241,8 +127,6 @@ class VoiceCloneService {
     return _defaultMeta;
   }
 
-  // ── Clone API call ────────────────────────────────────────────────────────
-
   Future<VoiceCloneResult> cloneVoice({
     required String voiceSamplePath,
     required String lyrics,
@@ -250,6 +134,7 @@ class VoiceCloneService {
     String mood = '',
     String genre = '',
     String language = '',
+    String? voiceboxProfileId,
     SongReference? referenceSong,
   }) async {
     final meta = _resolveLangMeta(
@@ -263,27 +148,19 @@ class VoiceCloneService {
       Uri.parse('$backendUrl/clone'),
     );
 
-    // ── Core fields ──────────────────────────────────────────────────────
     request.fields['request_id'] = requestId;
     request.fields['lyrics'] = lyrics;
     request.fields['mood'] = mood;
     request.fields['genre'] = genre;
 
-    // ── Language / accent fields ─────────────────────────────────────────
-    // Send the NORMALISED key (e.g. "hindi", "english") not the raw string
-    // ("Hindi dominant") so the backend lookup is reliable.
     request.fields['language'] = _normalise(language);
-    request.fields['accent_hint'] = meta.accentHint;
     request.fields['tts_language_code'] = meta.ttsLanguageCode;
-    request.fields['espeak_voice'] = meta.espeak;
-    request.fields['coqui_model_hint'] = meta.coquiModel;
 
-    // This is the critical flag — if true, backend will transliterate
-    // Hinglish (Roman script) → Devanagari before synthesis so XTTS
-    // uses its Hindi phoneme tokenizer instead of the English one.
-    request.fields['is_hindi'] = meta.isHindi ? '1' : '0';
+    final trimmedVoiceboxProfileId = voiceboxProfileId?.trim() ?? '';
+    if (trimmedVoiceboxProfileId.isNotEmpty) {
+      request.fields['voicebox_profile_id'] = trimmedVoiceboxProfileId;
+    }
 
-    // ── Reference song fields ─────────────────────────────────────────────
     if (referenceSong != null) {
       request.fields['reference_track_title'] = referenceSong.trackName;
       request.fields['reference_artist_name'] = referenceSong.artistName;
@@ -346,8 +223,7 @@ class VoiceCloneService {
       mixLabel: mixLabel?.isNotEmpty == true ? mixLabel : null,
       backgroundMusicUrl:
           resolvedMusicUrl?.isNotEmpty == true ? resolvedMusicUrl : null,
-      backgroundMusicLabel:
-          musicLabel?.isNotEmpty == true ? musicLabel : null,
+      backgroundMusicLabel: musicLabel?.isNotEmpty == true ? musicLabel : null,
     );
   }
 

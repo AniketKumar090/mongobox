@@ -9,6 +9,7 @@ import '../models/song_reference.dart';
 import '../constants/colors.dart';
 import '../services/bpm_service.dart';
 import '../services/lyrics_service.dart';
+import '../services/voice_profile_bootstrap_service.dart';
 import '../theme/song_creation_palette.dart';
 import '../widgets/song_flow_timeline.dart';
 import 'voice_song_screen.dart';
@@ -67,6 +68,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
   final _player = AudioPlayer();
   final _bpmService = BpmService();
   final _lyricsService = LyricsService();
+  final _voiceProfileBootstrapService = VoiceProfileBootstrapService();
   late ScrollController _scrollController;
 
   String? _recordedPath;
@@ -171,6 +173,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     _karaokeTicker?.cancel();
     _recorder.dispose();
     _player.dispose();
+    _voiceProfileBootstrapService.dispose();
     _waveController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -378,6 +381,18 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
     final recordedPath = _recordedPath;
     if (recordedPath == null) return;
     await HapticFeedback.mediumImpact();
+
+    String? voiceboxProfileId;
+    try {
+      final profile = await _voiceProfileBootstrapService.bootstrapProfile(
+        voiceSamplePath: recordedPath,
+        language: _cloneLanguage,
+      );
+      voiceboxProfileId = profile.profileId;
+    } catch (e) {
+      debugPrint('Voice profile bootstrap skipped: $e');
+    }
+
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -392,6 +407,7 @@ class _VoiceSampleScreenState extends State<VoiceSampleScreen>
               genre: widget.genre,
               referenceSong: widget.referenceSong,
               voiceSamplePath: recordedPath,
+              voiceboxProfileId: voiceboxProfileId,
             ),
       ),
     );
